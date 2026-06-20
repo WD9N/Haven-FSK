@@ -8,16 +8,16 @@ Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~62 bps**
 ## What is HAVEN-FSK?
 
 HAVEN-FSK is an HF digital mode for free-text conversational communication.
-It is designed to fill the gap between PSK31 (fast but fragile) and FT8 
-(robust but rigid) — delivering real conversation at ~40 WPM with LDPC 
-forward error correction.
+It delivers ~63 bps net throughput in 500 Hz bandwidth with LDPC forward
+error correction — 50% faster than Olivia 16/500 and twice as fast as
+PSK31, while matching Olivia's occupied bandwidth exactly.
 
-| Mode          | Speed    | Weak Signal | Free Text | FEC |
-|---------------|----------|-------------|-----------|-----|
-| PSK31         | ~50 WPM  | Poor        | Yes       | No  |
-| Olivia 16/500 | ~45 WPM  | Good        | Yes       | Yes |
-| FT8           | ~10 WPM  | Excellent   | No        | Yes |
-| **HAVEN-FSK** | **~40 WPM** | **Good** | **Yes** | **Yes** |
+| Mode          | Net bps  | ~WPM     | Weak Signal | Free Text | FEC |
+|---------------|----------|----------|-------------|-----------|-----|
+| FT8           | ~10 bps  | ~15 WPM  | Excellent   | No        | Yes |
+| PSK31         | ~31 bps  | ~47 WPM  | Poor        | Yes       | No  |
+| Olivia 16/500 | ~42 bps  | ~63 WPM  | Good        | Yes       | Yes |
+| **HAVEN-FSK** | **~63 bps** | **~94 WPM** | **Good** | **Yes** | **Yes** |
 
 ---
 
