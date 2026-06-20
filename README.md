@@ -1,7 +1,7 @@
 # HAVEN-FSK
 
 **16-tone MFSK HF Digital Mode for Amateur Radio**  
-Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~63 bps**
+Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~62 bps**
 
 ---
 
@@ -65,17 +65,23 @@ PSK31, while matching Olivia's occupied bandwidth exactly.
 
 ## Suggested Operating Frequencies (USB dial)
 
-| Band | Frequency  |
-|------|-----------|
-| 80m  | 3.590 MHz |
-| 40m  | 7.090 MHz |
-| 30m  | 10.142 MHz|
-| 20m  | 14.090 MHz|
-| 17m  | 18.104 MHz|
-| 15m  | 21.090 MHz|
-| 10m  | 28.120 MHz|
+| Band | Frequency   | Notes                                        |
+|------|-------------|----------------------------------------------|
+| 80m  | 3.585 MHz   | Near Olivia calling — MFSK neighborhood      |
+| 40m  | 7.065 MHz   | Gap between JS8Call and PSK31 upper cluster  |
+| 30m  | 10.142 MHz  | Digital-only band, clear gap                 |
+| 20m  | 14.090 MHz  | Primary recommended frequency — clear gap    |
+| 17m  | 18.108 MHz  | Above JS8Call, avoids FT8 at 18.104          |
+| 15m  | 21.090 MHz  | Clear gap between RTTY and WSPR              |
+| 10m  | 28.130 MHz  | Above WSPR/JS8Call cluster, wide sub-band    |
+| 6m   | 50.323 MHz  | Above JS8Call, Es openings only              |
 
-Signal appears 500–1000 Hz above the dial frequency.
+Signal appears 500–968 Hz above the dial frequency.
+
+> **⚠️ Monitor before transmitting.** Always listen on the frequency
+> before transmitting. 3.590 MHz (80m) and 7.040 MHz (40m) are
+> established RTTY DX calling frequencies — never use these.
+> See [BAND_PLAN.md](BAND_PLAN.md) for full frequency guidance.
 
 ---
 

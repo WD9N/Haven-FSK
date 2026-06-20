@@ -45,19 +45,22 @@ https://github.com/WD9N/Haven-FSK
 
 **Recommended operating frequencies (USB dial):**
 
-| Band | Suggested Frequency | Notes                    |
-|------|-------------------|--------------------------|
-| 80m  | 3.590 MHz         | Digital sub-band         |
-| 40m  | 7.090 MHz         | Digital sub-band         |
-| 30m  | 10.142 MHz        | Digital sub-band         |
-| 20m  | 14.090 MHz        | Digital sub-band         |
-| 17m  | 18.104 MHz        | Digital sub-band         |
-| 15m  | 21.090 MHz        | Digital sub-band         |
-| 10m  | 28.120 MHz        | Digital sub-band         |
+| Band | Suggested Frequency | Notes                                        |
+|------|---------------------|----------------------------------------------|
+| 80m  | 3.585 MHz           | Near Olivia calling — MFSK neighborhood      |
+| 40m  | 7.065 MHz           | Gap between JS8Call and PSK31 upper cluster  |
+| 30m  | 10.142 MHz          | Digital-only band, clear gap                 |
+| 20m  | 14.090 MHz          | Primary recommended frequency — clear gap    |
+| 17m  | 18.108 MHz          | Above JS8Call, avoids FT8 at 18.104          |
+| 15m  | 21.090 MHz          | Clear gap between RTTY and WSPR              |
+| 10m  | 28.130 MHz          | Above WSPR/JS8Call cluster, wide sub-band    |
+| 6m   | 50.323 MHz          | Above JS8Call, Es openings only              |
 
-*These are suggested starting points. Operators should check for activity 
-before transmitting and follow normal band etiquette. HAVEN-FSK occupies 
-500 Hz of bandwidth centered approximately 750 Hz above the dial frequency.*
+*These are suggested starting points. Operators should always listen before
+transmitting and follow normal band etiquette. 3.590 MHz (80m) and
+7.040 MHz (40m) are established RTTY DX calling frequencies — avoid them.
+HAVEN-FSK occupies 500 Hz of bandwidth, with tones from 500–968 Hz above
+the dial frequency.*
 
 ---
 
