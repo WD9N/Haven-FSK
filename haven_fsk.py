@@ -1414,7 +1414,7 @@ class App(tk.Tk):
             self._setstatus("Last QSO deleted")
 
     def _on_log_right_click(self, event):
-        """Right-click on treeview row — show context menu."""
+        """Right-click on treeview row — open edit dialog immediately."""
         item = self._log_tree.identify_row(event.y)
         if not item:
             return
@@ -1423,15 +1423,7 @@ class App(tk.Tk):
             real_idx = int(item)
         except ValueError:
             return
-        menu = tk.Menu(self, tearoff=0,
-                       bg=BG2, fg=TEXT_FG,
-                       activebackground=ACCENT,
-                       activeforeground=GREEN)
-        entry = self._log_manager.entries[real_idx]
-        menu.add_command(
-            label=f"Edit QSO — {entry.call}  {entry.time_on}Z  {entry.band}",
-            command=lambda: self._edit_log_entry(real_idx))
-        menu.post(event.x_root, event.y_root)
+        self._edit_log_entry(real_idx)
 
     def _edit_log_entry(self, entry_idx: int):
         """Open an edit dialog for an existing log entry."""
