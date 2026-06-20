@@ -1,6 +1,6 @@
 # HAVEN-FSK Mode Specification
 
-**Version:** 0.1.0  
+**Version:** 0.1.0-alpha  
 **Date:** June 2026  
 **Author:** WD9N  
 **Status:** Development — Pre-release  
@@ -418,7 +418,7 @@ No proprietary hardware or software is required.
 
 | Version | Date     | Changes                            |
 |---------|----------|------------------------------------|
-| 0.1.0   | Jun 2026 | Initial specification, pre-release |
+| 0.1.0-alpha | Jun 2026 | Initial specification, pre-release alpha |
 
 ---
 

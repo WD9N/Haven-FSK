@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HAVEN-FSK v0.1.0 — Digital HF Chat Mode
+HAVEN-FSK v0.1.0-alpha — Digital HF Chat Mode
 ==========================================
 16-tone MFSK with LDPC(192,96) FEC, CRC-16, frame sync, DCD collision avoidance.
 
@@ -210,7 +210,7 @@ def decode_frame(audio):
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 APP_NAME    = "HAVEN-FSK"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.0-alpha"
 AUDIO_CHUNK = 2048
 DCD_THRESH  = 12.0
 TX_DELAY_MIN = 300

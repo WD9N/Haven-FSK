@@ -128,7 +128,7 @@ implement a compatible encoder or decoder.
 
 ## Status
 
-**Version 0.1.0 — Pre-release development**
+**Version 0.1.0-alpha — Pre-release development**
 
 This mode is under active development. It has not yet been tested 
 on the air. The specification and software are published to satisfy 
