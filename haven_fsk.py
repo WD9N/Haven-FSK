@@ -245,6 +245,7 @@ class AudioEngine:
         self._tx_lock    = threading.Lock()
         self._rx_hw_rate = SAMPLE_RATE
         self._tx_hw_rate = SAMPLE_RATE
+        self.output_gain = 1.0
 
     def start(self):
         if not AUDIO_AVAILABLE:
@@ -421,6 +422,7 @@ class AudioEngine:
                 out[:len(self._tx_buf)] = self._tx_buf
                 outdata[:, 0] = out
                 self._tx_buf  = np.array([], dtype=np.float32)
+        outdata[:, 0] *= self.output_gain
 
     def transmit(self, audio: np.ndarray):
         """Queue audio for transmission. Resamples to TX hardware rate."""
@@ -1062,6 +1064,7 @@ class App(tk.Tk):
         """TX gain fader moved. 0-200 maps to 0.0-2.0x gain."""
         pct = float(val) / 100.0
         self._tx_gain = pct
+        self._audio.output_gain = pct
 
     # ── Meter update (called from _tick) ──────────────────────────────────────
 
@@ -1651,10 +1654,6 @@ class App(tk.Tk):
         self._transmitting = True
         audio = self._mod.modulate_frame(msg)
 
-        # Apply TX gain
-        if self._tx_gain != 1.0:
-            audio = audio * self._tx_gain
-
         # Assert PTT before sending audio
         ptt_ok = self._ptt_on()
         if not ptt_ok and self._tci_connected:
@@ -1682,7 +1681,7 @@ class App(tk.Tk):
                     if time.monotonic() > deadline_tx + 3.0:
                         self._sys("TX timeout — forcing PTT release", 'warn')
                         break
-                    self._update_tx_meter(audio[:min(2048, len(audio))])
+                    self._update_tx_meter(audio[:min(2048, len(audio))] * self._audio.output_gain)
                     time.sleep(0.05)
             else:
                 fname = os.path.join(HERE, f"rmfsk_{int(time.time())}.wav")
@@ -2158,6 +2157,7 @@ class App(tk.Tk):
         tx_gain = self._config.get('tx_gain', 0.8)
         self._rx_gain = rx_gain
         self._tx_gain = tx_gain
+        self._audio.output_gain = tx_gain
         if hasattr(self, '_rx_slider'):
             self._rx_slider.set(int(rx_gain * 100))
         if hasattr(self, '_tx_slider'):
