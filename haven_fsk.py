@@ -899,13 +899,13 @@ class App(tk.Tk):
 
     def _build_ui(self):
         self._make_menubar()
-        self._make_toolbar()     # row 1: LEDs + freq; row 2: devices (no Call)
-        self._make_station_bar() # row 3: Call, Park, Summit, FD
-        self._make_log_panel()   # row 4: recent QSOs
-        self._make_waterfall()
-        self._make_chat()
-        self._make_macro_bar()   # between chat and message input
-        self._make_input()
+        self._make_toolbar()     # LEDs + freq + device row
+        self._make_station_bar() # Call, Park, Summit, FD
+        self._make_waterfall()   # waterfall just below station bar
+        self._make_chat()        # received messages
+        self._make_log_panel()   # contact logging under received window
+        self._make_macro_bar()   # quick-send macros
+        self._make_input()       # message entry + Send
         self._make_levels()
         self._make_statusbar()
 
