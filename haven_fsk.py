@@ -924,17 +924,26 @@ class App(tk.Tk):
         self._chat.tag_config('ts',   foreground='#444466')
 
     def _make_macros(self):
-        """Row of quick-send macro buttons. Right-click any button to edit."""
+        """Clear button on left; macro buttons grouped on the right."""
         frame = tk.Frame(self, bg=BG2, pady=3)
         frame.pack(fill=tk.X, padx=6, pady=(2, 0))
 
-        tk.Label(frame, text="Macros:", bg=BG2, fg=TEXT_FG,
+        # Clear button — far left
+        tk.Button(frame, text="Clear Log", command=self._clear_chat,
+                  bg=ACCENT, fg=AMBER, font=FONT_UI,
+                  relief=tk.FLAT, padx=10, pady=2).pack(side=tk.LEFT, padx=(0, 4))
+
+        # Macros group — packed as a unit to the right edge
+        macro_grp = tk.Frame(frame, bg=BG2)
+        macro_grp.pack(side=tk.RIGHT)
+
+        tk.Label(macro_grp, text="Macros:", bg=BG2, fg=TEXT_FG,
                  font=FONT_UI).pack(side=tk.LEFT, padx=(0, 6))
 
         self._macro_buttons = []
         for i, (label, text) in enumerate(self._macros):
             btn = tk.Button(
-                frame,
+                macro_grp,
                 text=label,
                 bg=ACCENT, fg=GREEN, font=FONT_UI,
                 relief=tk.FLAT, padx=10, pady=2,
@@ -944,7 +953,7 @@ class App(tk.Tk):
             btn.bind('<Button-3>', lambda e, idx=i: self._edit_macro(idx))
             self._macro_buttons.append(btn)
 
-        tk.Label(frame, text="(right-click to edit)",
+        tk.Label(macro_grp, text="(right-click to edit)",
                  bg=BG2, fg='#444466', font=("Helvetica", 8)).pack(
                  side=tk.LEFT, padx=(8, 0))
 
