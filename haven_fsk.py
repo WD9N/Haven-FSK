@@ -732,7 +732,7 @@ class App(tk.Tk):
         # TCI radio control
         self._tci = None
         self._ptt = None
-        self._tci_freq      = tk.StringVar(value='---')
+        self._tci_frequency_hz = 0
         self._tci_mode      = tk.StringVar(value='---')
         self._tci_connected = False
         self._led_tci       = None  # created in _make_toolbar
@@ -835,13 +835,39 @@ class App(tk.Tk):
                  bg=BG2, fg=AMBER, font=("Courier", 9),
                  relief=tk.FLAT).pack(side=tk.LEFT, padx=4)
 
-        # TCI frequency and mode display
-        tk.Label(bar, textvariable=self._tci_freq,
-                 bg=BG2, fg='#00ccff', font=("Courier", 10),
-                 width=9, anchor=tk.E).pack(side=tk.LEFT, padx=(8,0))
-        tk.Label(bar, text="MHz",
-                 bg=BG2, fg='#00ccff',
-                 font=("Courier", 9)).pack(side=tk.LEFT, padx=(2,4))
+        # TCI frequency display — digit-by-digit with mousewheel tuning
+        freq_frame = tk.Frame(bar, bg=BG2)
+        freq_frame.pack(side=tk.LEFT, padx=(8, 4))
+        self._freq_digit_vars   = []
+        self._freq_digit_labels = []
+        # Format: MM.KKK.HHH  (2 MHz digits, 3 kHz digits, 3 Hz digits)
+        # Steps per digit left-to-right: 10M 1M . 100k 10k 1k . 100 10 1
+        _steps = [10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1]
+        _digit = 0
+        for _pos in range(10):            # 10 chars: 8 digits + 2 dots
+            if _pos in (2, 6):            # dot separators
+                tk.Label(freq_frame, text='.', bg=BG2, fg='#00ccff',
+                         font=("Courier", 11, 'bold')).pack(side=tk.LEFT)
+            else:
+                _var = tk.StringVar(value='-')
+                _lbl = tk.Label(freq_frame, textvariable=_var,
+                                bg=BG2, fg='#00ccff',
+                                font=("Courier", 11, 'bold'),
+                                width=1, cursor='sb_v_double_arrow')
+                _lbl.pack(side=tk.LEFT)
+                _step = _steps[_digit]
+                _lbl.bind('<MouseWheel>',
+                          lambda e, s=_step: self._freq_scroll(e.delta, s))
+                _lbl.bind('<Enter>',
+                          lambda e, l=_lbl: l.configure(bg='#1a3a5a'))
+                _lbl.bind('<Leave>',
+                          lambda e, l=_lbl: l.configure(bg=BG2))
+                self._freq_digit_vars.append(_var)
+                self._freq_digit_labels.append(_lbl)
+                _digit += 1
+        tk.Label(freq_frame, text=' MHz', bg=BG2, fg='#00ccff',
+                 font=("Courier", 9)).pack(side=tk.LEFT)
+
         tk.Label(bar, textvariable=self._tci_mode,
                  bg=BG2, fg='#00ccff', font=("Courier", 10),
                  width=5).pack(side=tk.LEFT, padx=(0,6))
@@ -2288,6 +2314,31 @@ class App(tk.Tk):
                 self._tci.connect(timeout=3.0)
             time.sleep(10)
 
+    def _update_freq_display(self):
+        """Refresh the digit labels from self._tci_frequency_hz."""
+        hz = self._tci_frequency_hz
+        if hz <= 0:
+            for v in self._freq_digit_vars:
+                v.set('-')
+            return
+        mhz_part = hz // 1_000_000
+        khz_part = (hz % 1_000_000) // 1_000
+        hz_part  = hz % 1_000
+        digits = f"{mhz_part:02d}{khz_part:03d}{hz_part:03d}"
+        for var, ch in zip(self._freq_digit_vars, digits):
+            var.set(ch)
+
+    def _freq_scroll(self, delta, step):
+        """Mousewheel handler — tune frequency by step Hz per notch."""
+        if not self._tci_connected or self._tci is None:
+            return
+        direction = 1 if delta > 0 else -1
+        new_hz = self._tci_frequency_hz + direction * step
+        new_hz = max(1_800_000, min(450_000_000, new_hz))
+        self._tci_frequency_hz = new_hz
+        self._update_freq_display()
+        self._tci.set_frequency(new_hz)
+
     def _tci_on_connect(self):
         self._tci_connected = True
         from tci import PTTManager
@@ -2301,17 +2352,17 @@ class App(tk.Tk):
     def _tci_on_disconnect(self):
         self._tci_connected = False
         self._ptt = None
-        # Update LED and clear frequency display — no chat spam
+        self._tci_frequency_hz = 0
         self.after(0, lambda: self._led_tci.set('idle'))
-        self.after(0, lambda: self._tci_freq.set('---'))
+        self.after(0, self._update_freq_display)
         self.after(0, lambda: self._tci_mode.set('---'))
         self.after(0, lambda: self._setstatus("TCI disconnected"))
 
     def _tci_on_status(self, status: dict):
         """Update frequency and mode display from TCI status."""
         if status.get('frequency', 0) > 0:
-            mhz = status['frequency'] / 1e6
-            self.after(0, lambda: self._tci_freq.set(f"{mhz:.3f}"))
+            self._tci_frequency_hz = status['frequency']
+            self.after(0, self._update_freq_display)
         if status.get('mode'):
             self.after(0, lambda: self._tci_mode.set(status['mode']))
         # Auto-fill callsign if radio has one set and ours is NOCALL
