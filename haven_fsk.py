@@ -614,10 +614,11 @@ class FrameModulator:
 
 class Waterfall:
     def __init__(self, parent):
-        self._data     = np.full((WATERFALL_ROWS, 512), -60.0, dtype=np.float32)
-        self._hz_max   = WATERFALL_HZ   # current upper frequency limit
-        self._freq     = np.linspace(0, self._hz_max, 512)
-        self._built    = False
+        self._data      = np.full((WATERFALL_ROWS, 512), -60.0, dtype=np.float32)
+        self._hz_max    = WATERFALL_HZ
+        self._freq      = np.linspace(0, self._hz_max, 512)
+        self._built     = False
+        self._last_draw = 0.0   # monotonic timestamp of last canvas render
         self._build(parent)
 
     def _build(self, parent):
@@ -720,6 +721,11 @@ class Waterfall:
     def push(self, chunk: np.ndarray):
         if not self._built:
             return
+        # Hard rate-limit: never render faster than 10 fps
+        now = time.monotonic()
+        if now - self._last_draw < 0.1:
+            return
+        self._last_draw = now
         n       = min(len(chunk), 8192)
         spec    = np.abs(np.fft.rfft(chunk[:n] * np.hanning(n)))
         freqs   = np.fft.rfftfreq(n, 1.0/SAMPLE_RATE)
@@ -758,7 +764,7 @@ class App(tk.Tk):
         self.minsize(700, 600)
 
         self._callsign     = tk.StringVar(value="NOCALL")
-        self._callsign.trace_add('write', lambda *a: self._on_callsign_changed())
+        # No trace_add — saves only on FocusOut/Return via _callsign_entry bindings
         self._dcd_active   = False
         self._transmitting = False
         self._running      = True
@@ -872,7 +878,7 @@ class App(tk.Tk):
                 self._log_manager._udp_session = self._session
         self._start_audio()
         self._start_workers()
-        self._tick()
+        self._master_tick()   # single combined 100ms loop
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
         self.bind('<Control-q>', lambda e: self._quit())
@@ -1071,7 +1077,6 @@ class App(tk.Tk):
         # (so the window is visible first)
         self.after(200, self._populate_device_combos)
         self.after(800, self._apply_saved_config)
-        self.after(1000, self._sync_combo_to_engine)
 
     def _make_station_bar(self):
         """Inline station-info row: Call, Park(s), Summit, FD class/section."""
@@ -1437,7 +1442,7 @@ class App(tk.Tk):
         win.title(f"Edit QSO — {e.call}")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)   # stays on top without grabbing events
 
         def field(label, value, width=14):
             row = tk.Frame(win, bg=BG)
@@ -1490,7 +1495,7 @@ class App(tk.Tk):
                     "Delete QSO",
                     f"Permanently delete the QSO with {call}?\n\n"
                     "This cannot be undone.",
-                    icon='warning', parent=win):
+                    icon='warning', parent=self):
                 self._log_manager.delete_entry(entry_idx)
                 self._refresh_log_panel()
                 self._setstatus(f"QSO with {call} deleted")
@@ -1508,37 +1513,43 @@ class App(tk.Tk):
                   bg='#3a0000', fg=RED, font=FONT_UI,
                   relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=4)
 
+    def _get_entry_info(self, entry, mgr) -> str:
+        """Build the Info column value for a log entry."""
+        if mgr.is_field_day:
+            info = entry.comment or '—'
+            if self._log_manager.is_dupe(entry.call, entry.band):
+                info += '  ⚠ dupe'
+        elif entry.is_s2s and entry.is_p2p:
+            info = ', '.join(entry.their_parks) + f' | {entry.sota_ref}'
+        elif entry.is_p2p:
+            info = ', '.join(entry.their_parks) + ' (P2P)'
+        elif entry.is_s2s:
+            info = f'{entry.sota_ref} (S2S)'
+        else:
+            info = entry.comment or '—'
+        return info
+
     def _refresh_log_panel(self):
-        """Rebuild the recent QSO treeview from the current session entries."""
+        """Update the recent QSO treeview incrementally — no full rebuild."""
         if self._log_tree is None or not self._log_manager:
             return
-
-        for row in self._log_tree.get_children():
-            self._log_tree.delete(row)
-
-        mgr   = self._activity_mgr
+        mgr = self._activity_mgr
         if mgr is None:
             return
 
-        # Build (real_index, entry) pairs so right-click can find the entry
-        confirmed = [(i, e) for i, e in enumerate(self._log_manager.entries)
-                     if e.confirmed]
-        entries = list(reversed(confirmed[-8:]))
-
-        # Update header and info column heading
+        # ── Header and column label (cheap StringVar writes) ──────────────────
         if mgr.is_pota_activating and mgr.is_sota_activating:
             parks = ', '.join(self._session.my_parks)
             n     = self._log_manager.count()
             self._log_header_var.set(
-                f"POTA {parks} + SOTA {self._session.my_summit} — QSOs: {n}/10"
-                + (" ✓" if n >= 10 else ""))
+                f"POTA {parks} + SOTA {self._session.my_summit}"
+                f" — QSOs: {n}/10" + (" ✓" if n >= 10 else ""))
             self._log_tree.heading('info', text='P2P / S2S')
         elif mgr.is_pota_activating:
             parks = ', '.join(self._session.my_parks)
             n     = self._log_manager.count()
             self._log_header_var.set(
-                f"POTA {parks} — QSOs: {n}/10"
-                + (" ✓" if n >= 10 else ""))
+                f"POTA {parks} — QSOs: {n}/10" + (" ✓" if n >= 10 else ""))
             self._log_tree.heading('info', text='P2P Park')
         elif mgr.is_sota_activating:
             self._log_header_var.set(f"SOTA {self._session.my_summit}")
@@ -1551,24 +1562,30 @@ class App(tk.Tk):
             self._log_header_var.set("Recent QSOs")
             self._log_tree.heading('info', text='Info')
 
-        for real_idx, entry in entries:
-            if mgr.is_field_day:
-                info = entry.comment or '—'
-                if self._log_manager.is_dupe(entry.call, entry.band):
-                    info += '  ⚠ dupe'
-            elif entry.is_s2s and entry.is_p2p:
-                info = ', '.join(entry.their_parks) + f' | {entry.sota_ref}'
-            elif entry.is_p2p:
-                info = ', '.join(entry.their_parks) + ' (P2P)'
-            elif entry.is_s2s:
-                info = f'{entry.sota_ref} (S2S)'
-            else:
-                info = entry.comment or '—'
+        # ── Incremental treeview update — diff not rebuild ─────────────────────
+        confirmed = [(i, e) for i, e in enumerate(self._log_manager.entries)
+                     if e.confirmed]
+        to_show   = list(reversed(confirmed[-8:]))   # most-recent first
+        needed    = {str(i): (i, e) for i, e in to_show}
+        current   = set(self._log_tree.get_children())
 
-            # Use the real index as iid so right-click can retrieve it
-            self._log_tree.insert('', tk.END, iid=str(real_idx), values=(
-                entry.time_on, entry.call, entry.band,
-                entry.rst_rcvd or '599', info))
+        # Remove rows no longer in the display window
+        for iid in current - set(needed.keys()):
+            self._log_tree.delete(iid)
+
+        # Insert or update each needed row
+        for iid, (real_idx, entry) in needed.items():
+            values = (entry.time_on, entry.call, entry.band,
+                      entry.rst_rcvd or '599',
+                      self._get_entry_info(entry, mgr))
+            if iid in current:
+                self._log_tree.item(iid, values=values)
+            else:
+                self._log_tree.insert('', 0, iid=iid, values=values)
+
+        # Fix display order (most-recent at top)
+        for pos, (real_idx, _) in enumerate(to_show):
+            self._log_tree.move(str(real_idx), '', pos)
 
     def _make_waterfall(self):
         frame = tk.LabelFrame(self, text=" Waterfall ",
@@ -1646,7 +1663,7 @@ class App(tk.Tk):
         win.title("New Macro" if is_new else "Edit Macro")
         win.configure(bg=BG)
         win.resizable(True, True)
-        win.grab_set()
+        win.transient(self)
 
         tk.Label(win, text="Button label:", bg=BG, fg=TEXT_FG,
                  font=FONT_UI).pack(anchor=tk.W, padx=12, pady=(12, 2))
@@ -2029,8 +2046,7 @@ class App(tk.Tk):
         if not ok:
             self._sys(f"Audio error: {msg}", 'warn')
             self._sys("Use the RX/TX dropdowns to select your audio interface", 'sys')
-        # Sync after populate runs at 200ms
-        self.after(400, self._sync_combo_to_engine)
+        # Device display updated by _master_tick at 1000ms intervals
 
     def _populate_device_combos(self):
         """Build device lists for the picker dialogs."""
@@ -2120,8 +2136,7 @@ class App(tk.Tk):
     def _sync_combo_to_engine(self):
         """Poll device display — called periodically to keep display current."""
         self._show_devices_in_combos()
-        if self._running:
-            self.after(1000, self._sync_combo_to_engine)
+        # reschedule handled by _master_tick
 
     def _pick_rx_device(self):
         """Show RX device picker dialog."""
@@ -2170,7 +2185,7 @@ class App(tk.Tk):
         tk.Button(win, text="Select", command=select,
                   bg=ACCENT, fg=GREEN, font=FONT_UI,
                   relief=tk.FLAT, padx=10).pack(pady=8)
-        win.grab_set()
+        win.transient(self)
 
     def _rx_device_selected(self, dev):
         """RX device chosen from picker."""
@@ -2212,23 +2227,25 @@ class App(tk.Tk):
         threading.Thread(target=self._wf_loop, daemon=True).start()
 
     def _wf_loop(self):
-        """Dedicated thread drains wf_queue into waterfall — never blocks RX."""
+        """Drain wf_queue; rate-limit UI updates to ≤10 fps to keep event queue clear."""
+        _last_ui = 0.0   # last time we scheduled a UI update
         while self._running:
             try:
                 chunk = self._audio.wf_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 
-            # Suppress waterfall and RX meter during TX
-            # prevents VAC echo from showing on waterfall
             if self._transmitting:
                 continue
 
-            # Apply RX gain before waterfall and meter
             if self._rx_gain != 1.0:
                 chunk = chunk * self._rx_gain
-            self.after(0, lambda c=chunk: self._wf.push(c))
-            self._update_rx_meter(chunk)
+
+            now = time.monotonic()
+            if now - _last_ui >= 0.1:   # 100 ms → max 10 fps
+                _last_ui = now
+                self.after(0, lambda c=chunk: self._wf.push(c))
+                self._update_rx_meter(chunk)
 
     def _rx_loop(self):
         """
@@ -2611,11 +2628,14 @@ class App(tk.Tk):
                   if self._tci and self._tci.connected else ""
         self._setstatus(f"TX done — {len(msg)} chars in {dur:.1f}s{tci_str}")
 
-    # ── Tick ──────────────────────────────────────────────────────────────────
+    # ── Master periodic tick ──────────────────────────────────────────────────
 
-    def _tick(self):
+    def _master_tick(self):
+        """Single 100ms poll loop — replaces separate _tick and _sync_combo_to_engine."""
         if not self._running:
             return
+
+        # LED updates every tick (100ms)
         if self._transmitting:
             self._led_dcd.set('tx')
             self._led_tx.set('tx')
@@ -2625,7 +2645,21 @@ class App(tk.Tk):
         else:
             self._led_dcd.set('clear')
             self._led_tx.set('idle')
-        self.after(100, self._tick)
+
+        # Device display every 10 ticks (1000ms) — no file I/O
+        self._master_tick_n = getattr(self, '_master_tick_n', 0) + 1
+        if self._master_tick_n % 10 == 0:
+            self._show_devices_in_combos()
+
+        self.after(100, self._master_tick)
+
+    # kept for compat — now a no-op reschedule; merged into _master_tick
+    def _tick(self):
+        pass
+
+    def _sync_combo_to_engine(self):
+        """Merged into _master_tick — kept for compatibility."""
+        self._show_devices_in_combos()
 
     # ── Chat helpers ──────────────────────────────────────────────────────────
 
@@ -2675,7 +2709,7 @@ class App(tk.Tk):
         win.title("Play WAV")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         tk.Label(win, text=f"File:  {os.path.basename(path)}",
                  bg=BG, fg=TEXT_FG, font=FONT_MONO).pack(padx=20, pady=(16,4))
@@ -3246,7 +3280,7 @@ class App(tk.Tk):
         win.title("Log QSO")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         fields = {}
         for label, key, default, w in [
@@ -3356,7 +3390,7 @@ class App(tk.Tk):
         win.title("Edit QSO" if edit_last else "Log POTA Contact")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         fields = {}
         for label, key, default, w in [
@@ -3462,7 +3496,7 @@ class App(tk.Tk):
         win.title("Log Contact")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         fields = {}
         for label, key, default, w in [
@@ -3687,7 +3721,7 @@ class App(tk.Tk):
         win.title("Station Information")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         si = self._station_info
         v  = {}   # all StringVars keyed by field name
@@ -3875,7 +3909,7 @@ class App(tk.Tk):
         win.title("Sample Rate Settings")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         tk.Label(win, text="Audio Sample Rate",
                  bg=BG, fg=AMBER,
@@ -3953,7 +3987,7 @@ class App(tk.Tk):
         win.title("External Logger")
         win.configure(bg=BG)
         win.resizable(False, False)
-        win.grab_set()
+        win.transient(self)
 
         tk.Label(win, text="UDP Broadcast to External Logger",
                  bg=BG, fg=AMBER,
@@ -4237,8 +4271,8 @@ class App(tk.Tk):
         # Now we know what devices are set — display them
         self._show_devices_in_combos()
 
-    def _on_callsign_changed(self):
-        """Called whenever the callsign field changes. Saves immediately."""
+    def _on_callsign_changed(self, event=None):
+        """Called on FocusOut or Return — saves config once per edit, not per keystroke."""
         cs = self._callsign.get().strip().upper()
         if cs and cs != 'NOCALL':
             self._save_config()
