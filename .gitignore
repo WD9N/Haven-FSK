@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+venv/
+
+# Auto-generated cache files
+ldpc_matrix_cache.npz
+
+# Personal config — contains local device indices and callsign
+haven_fsk_config.json
+
+# Test/scratch WAV files
+*.wav
+
+# Miscellaneous archives
+*.zip
+
+# OS artifacts
+Thumbs.db
+.DS_Store
