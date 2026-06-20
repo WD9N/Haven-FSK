@@ -807,9 +807,6 @@ class App(tk.Tk):
                                 activebackground=ACCENT,
                                 activeforeground=GREEN)
         menubar.add_cascade(label="Settings", menu=settings_menu)
-        settings_menu.add_command(label="Station Info...",
-                                  command=self._show_station_info_dialog)
-        settings_menu.add_separator()
         settings_menu.add_command(label="Audio Devices...",
                                   command=self._show_devices)
         settings_menu.add_command(label="Sample Rate...",
@@ -817,6 +814,15 @@ class App(tk.Tk):
         settings_menu.add_separator()
         settings_menu.add_command(label="About HAVEN-FSK",
                                   command=self._show_about)
+
+        # ── Station menu ──────────────────────────────────────────────────────
+        station_menu = tk.Menu(menubar, tearoff=0,
+                               bg=BG2, fg=TEXT_FG,
+                               activebackground=ACCENT,
+                               activeforeground=GREEN)
+        menubar.add_cascade(label="Station", menu=station_menu)
+        station_menu.add_command(label="Station Info...",
+                                 command=self._show_station_info_dialog)
 
     def _make_toolbar(self):
         bar = tk.Frame(self, bg=ACCENT, pady=5)
