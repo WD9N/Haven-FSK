@@ -1220,10 +1220,9 @@ class App(tk.Tk):
                   command=self._export_adif_dialog,
                   bg=BG2, fg=AMBER, font=("Helvetica", 8),
                   relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
-        tk.Button(hdr, text="Del Last",
-                  command=self._log_delete_last,
-                  bg=BG2, fg=RED, font=("Helvetica", 8),
-                  relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
+        tk.Label(hdr, text="Right-click a QSO to edit",
+                 bg=BG, fg='#444466',
+                 font=("Helvetica", 7)).pack(side=tk.RIGHT, padx=8)
 
         # ── Recent QSO treeview ───────────────────────────────────────────────
         style = ttk.Style()
@@ -1253,6 +1252,7 @@ class App(tk.Tk):
             self._log_tree.column(col, width=width, stretch=stretch, anchor=tk.W)
         self._log_tree.pack(fill=tk.X, padx=4, pady=(0, 2))
         self._log_tree.bind('<<TreeviewSelect>>', self._on_log_entry_clicked)
+        self._log_tree.bind('<Button-3>',         self._on_log_right_click)
 
         # ── Inline contact entry ──────────────────────────────────────────────
         sep = tk.Frame(outer, bg=ACCENT, height=1)
@@ -1406,13 +1406,115 @@ class App(tk.Tk):
             self._detected_park = ''
 
     def _log_contact_from_panel(self):
-        """Fallback — dispatches to inline logger."""
         self._log_contact_inline()
 
     def _log_delete_last(self):
         if self._log_manager and self._log_manager.delete_last():
             self._refresh_log_panel()
             self._setstatus("Last QSO deleted")
+
+    def _on_log_right_click(self, event):
+        """Right-click on treeview row — show context menu."""
+        item = self._log_tree.identify_row(event.y)
+        if not item:
+            return
+        self._log_tree.selection_set(item)
+        try:
+            real_idx = int(item)
+        except ValueError:
+            return
+        menu = tk.Menu(self, tearoff=0,
+                       bg=BG2, fg=TEXT_FG,
+                       activebackground=ACCENT,
+                       activeforeground=GREEN)
+        entry = self._log_manager.entries[real_idx]
+        menu.add_command(
+            label=f"Edit QSO — {entry.call}  {entry.time_on}Z  {entry.band}",
+            command=lambda: self._edit_log_entry(real_idx))
+        menu.post(event.x_root, event.y_root)
+
+    def _edit_log_entry(self, entry_idx: int):
+        """Open an edit dialog for an existing log entry."""
+        if not self._log_manager:
+            return
+        if entry_idx < 0 or entry_idx >= len(self._log_manager.entries):
+            return
+        e = self._log_manager.entries[entry_idx]
+
+        win = tk.Toplevel(self)
+        win.title(f"Edit QSO — {e.call}")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        def field(label, value, width=14):
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=16, pady=3)
+            tk.Label(row, text=f"{label}:", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=12, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=value)
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=width).pack(side=tk.LEFT)
+            return var
+
+        # UTC shown read-only — time cannot be changed after the fact
+        row0 = tk.Frame(win, bg=BG)
+        row0.pack(fill=tk.X, padx=16, pady=(12, 3))
+        tk.Label(row0, text="UTC:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI, width=12, anchor=tk.W).pack(side=tk.LEFT)
+        tk.Label(row0, text=f"{e.qso_date}  {e.time_on}Z",
+                 bg=BG, fg='#666688', font=FONT_MONO).pack(side=tk.LEFT)
+
+        v_call    = field("Call",        e.call,      12)
+        v_band    = field("Band",        e.band,       6)
+        v_rst_s   = field("RST Sent",    e.rst_sent,   5)
+        v_rst_r   = field("RST Rcvd",    e.rst_rcvd,   5)
+        v_p2p     = field("P2P Park(s)", e.sig_info,  22)
+        v_summit  = field("S2S Summit",  e.sota_ref,  14)
+        v_notes   = field("Notes",       e.comment,   32)
+
+        def save():
+            if not self._log_manager:
+                return
+            self._log_manager.update_entry(
+                entry_idx,
+                call     = v_call.get().strip().upper(),
+                band     = v_band.get().strip().upper(),
+                rst_sent = v_rst_s.get().strip() or '599',
+                rst_rcvd = v_rst_r.get().strip() or '599',
+                sig      = 'POTA' if v_p2p.get().strip() else '',
+                sig_info = v_p2p.get().strip().upper(),
+                sota_ref = v_summit.get().strip().upper(),
+                comment  = v_notes.get().strip(),
+            )
+            self._refresh_log_panel()
+            self._setstatus(f"QSO updated — {v_call.get().strip().upper()}")
+            win.destroy()
+
+        def delete():
+            call = self._log_manager.entries[entry_idx].call
+            if messagebox.askyesno(
+                    "Delete QSO",
+                    f"Permanently delete the QSO with {call}?\n\n"
+                    "This cannot be undone.",
+                    icon='warning', parent=win):
+                self._log_manager.delete_entry(entry_idx)
+                self._refresh_log_panel()
+                self._setstatus(f"QSO with {call} deleted")
+                win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=12)
+        tk.Button(bf, text="Save",   command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="Delete", command=delete,
+                  bg='#3a0000', fg=RED, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=4)
 
     def _refresh_log_panel(self):
         """Rebuild the recent QSO treeview from the current session entries."""
@@ -1426,8 +1528,10 @@ class App(tk.Tk):
         if mgr is None:
             return
 
-        entries = list(reversed(
-            [e for e in self._log_manager.entries if e.confirmed][-8:]))
+        # Build (real_index, entry) pairs so right-click can find the entry
+        confirmed = [(i, e) for i, e in enumerate(self._log_manager.entries)
+                     if e.confirmed]
+        entries = list(reversed(confirmed[-8:]))
 
         # Update header and info column heading
         if mgr.is_pota_activating and mgr.is_sota_activating:
@@ -1455,7 +1559,7 @@ class App(tk.Tk):
             self._log_header_var.set("Recent QSOs")
             self._log_tree.heading('info', text='Info')
 
-        for entry in entries:
+        for real_idx, entry in entries:
             if mgr.is_field_day:
                 info = entry.comment or '—'
                 if self._log_manager.is_dupe(entry.call, entry.band):
@@ -1469,7 +1573,8 @@ class App(tk.Tk):
             else:
                 info = entry.comment or '—'
 
-            self._log_tree.insert('', tk.END, values=(
+            # Use the real index as iid so right-click can retrieve it
+            self._log_tree.insert('', tk.END, iid=str(real_idx), values=(
                 entry.time_on, entry.call, entry.band,
                 entry.rst_rcvd or '599', info))
 

@@ -657,6 +657,24 @@ class LogManager:
         self.save_session()
         return True
 
+    def delete_entry(self, index: int) -> bool:
+        """Delete a specific entry by its index in the entries list."""
+        if index < 0 or index >= len(self.entries):
+            return False
+        self.entries.pop(index)
+        self.save_session()
+        return True
+
+    def update_entry(self, index: int, **kwargs) -> bool:
+        """Update fields on a specific entry by index."""
+        if index < 0 or index >= len(self.entries):
+            return False
+        for k, v in kwargs.items():
+            if hasattr(self.entries[index], k):
+                setattr(self.entries[index], k, v)
+        self.save_session()
+        return True
+
     def edit_last(self, **kwargs) -> bool:
         if not self.entries:
             return False
