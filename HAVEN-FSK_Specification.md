@@ -12,7 +12,7 @@
 
 HAVEN-FSK is an HF digital mode designed for free-text conversational
 communication. It is the fastest conversational HF digital mode in common
-use, delivering ~63 bps net throughput in 500 Hz bandwidth — 50% faster
+use, delivering ~62 bps net throughput in 500 Hz bandwidth — 50% faster
 than Olivia 16/500 and twice as fast as PSK31 — while retaining LDPC
 forward error correction.
 
@@ -23,7 +23,7 @@ The mode fills a gap in the current amateur digital landscape:
 | FT8           | ~10 bps  | ~15 WPM  | Excellent   | No        | Yes |
 | PSK31         | ~31 bps  | ~47 WPM  | Poor        | Yes       | No  |
 | Olivia 16/500 | ~42 bps  | ~63 WPM  | Good        | Yes       | Yes |
-| **HAVEN-FSK** | **~63 bps** | **~94 WPM** | **Good** | **Yes** | **Yes** |
+| **HAVEN-FSK** | **~62 bps** | **~94 WPM** | **Good** | **Yes** | **Yes** |
 
 HAVEN-FSK uses 16-tone MFSK modulation with LDPC forward error correction,
 CRC-16 integrity checking, preamble-based frame synchronization, and
