@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HAVEN-FSK v0.1.0-alpha — Digital HF Chat Mode
+HAVEN-FSK v0.1.1-alpha — Digital HF Chat Mode
 ==========================================
 16-tone MFSK with LDPC(192,96) FEC, CRC-16, frame sync, DCD collision avoidance.
 
@@ -69,6 +69,18 @@ try:
 except Exception as _fec_err:
     FEC_AVAILABLE = False
     print(f"FEC not available: {_fec_err}")
+
+try:
+    from log import (LogManager, LogEntry, Session, ActivityManager,
+                     BAND_LIST, freq_to_band,
+                     validate_park_list, is_complete_park_ref,
+                     validate_station_info,
+                     export_adif_pota_multi, export_all,
+                     build_adif_record, write_adif_file)
+    LOG_AVAILABLE = True
+except Exception as _log_err:
+    LOG_AVAILABLE = False
+    print(f"Log not available: {_log_err}")
 
 try:
     import sounddevice as sd
@@ -210,7 +222,7 @@ def decode_frame(audio):
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 APP_NAME    = "HAVEN-FSK"
-APP_VERSION = "0.1.0-alpha"
+APP_VERSION = "0.1.1-alpha"
 AUDIO_CHUNK = 2048
 DCD_THRESH  = 12.0
 TX_DELAY_MIN = 300
@@ -219,13 +231,49 @@ WATERFALL_HZ = 4000   # Nyquist limit at 8000Hz sample rate
 WATERFALL_ROWS = 80
 
 DEFAULT_MACROS = [
-    ["CQ",   "CQ CQ CQ DE <CALL> <CALL> HAVEN-FSK PSE K"],
-    ["QRZ?", "QRZ? DE <CALL>"],
-    ["73",   "73 DE <CALL> SK"],
-    ["MSG4", ""],
-    ["MSG5", ""],
-    ["MSG6", ""],
+    {'label': 'CQ',      'text': 'CQ CQ DE <CALL> <CALL> K'},
+    {'label': 'CQ POTA', 'text': 'CQ POTA DE <CALL> AT <PARK> K'},
+    {'label': 'CQ SOTA', 'text': 'CQ SOTA DE <CALL> ON <SUMMIT> K'},
+    {'label': 'CQ FD',   'text': 'CQ FD DE <CALL> <FDEXCHANGE> K'},
+    {'label': '73',      'text': 'TU <THEIRCALL> 73 DE <CALL> K'},
+    {'label': 'QRZ?',   'text': 'QRZ? DE <CALL> K'},
+    {'label': 'Info',    'text': 'DE <CALL> <PARK> <GRID> <POWER> HAVEN-FSK K'},
 ]
+
+from datetime import datetime as _dt, timezone as _tz
+
+MACRO_TAGS = {
+    '<CALL>':       ('Station', 'Your callsign',          lambda s: getattr(s, 'station_callsign', '')),
+    '<PARK>':       ('Station', 'First park reference',   lambda s: s.my_parks[0] if getattr(s,'my_parks',[]) else ''),
+    '<PARKS>':      ('Station', 'All parks (comma sep)',  lambda s: ', '.join(getattr(s,'my_parks',[]))),
+    '<SUMMIT>':     ('Station', 'SOTA summit reference',  lambda s: getattr(s, 'my_summit', '')),
+    '<GRID>':       ('Station', 'Grid square',            lambda s: getattr(s, 'my_gridsquare', '')),
+    '<STATE>':      ('Station', 'State/province',         lambda s: getattr(s, 'my_state', '')),
+    '<FDCLASS>':    ('Station', 'Field Day class',        lambda s: getattr(s, 'fd_class', '')),
+    '<FDSECTION>':  ('Station', 'Field Day section',      lambda s: getattr(s, 'fd_section', '')),
+    '<FDEXCHANGE>': ('Station', 'Full FD exchange',       lambda s: f"{getattr(s,'fd_class','')} {getattr(s,'fd_section','')}".strip()),
+    '<POWER>':      ('Station', 'TX power',               lambda s: f"{getattr(s,'tx_power','')}W" if getattr(s,'tx_power','') else ''),
+    '<THEIRCALL>':  ('QSO',     'Contact callsign',       lambda s: getattr(s, 'current_call', '')),
+    '<THEIRPARK>':  ('QSO',     'Their park (P2P)',        lambda s: getattr(s, 'current_their_park', '')),
+    '<THEIRSUMMIT>':('QSO',     'Their summit (S2S)',      lambda s: getattr(s, 'current_their_summit', '')),
+    '<BAND>':       ('QSO',     'Current band',           lambda s: getattr(s, 'current_band', '')),
+    '<FREQ>':       ('QSO',     'Current frequency (MHz)',lambda s: f"{getattr(s,'current_freq',0):.3f}" if getattr(s,'current_freq',0) else ''),
+    '<DATE>':       ('General', 'UTC date (YYYYMMDD)',    lambda s: _dt.now(_tz.utc).strftime('%Y%m%d')),
+    '<TIME>':       ('General', 'UTC time (HHMM)',        lambda s: _dt.now(_tz.utc).strftime('%H%M')),
+}
+
+
+def expand_macro(text: str, session) -> str:
+    """Expand all <TAG> tokens using current session values. Unknown tags left as-is."""
+    result = text
+    for tag, (category, description, getter) in MACRO_TAGS.items():
+        try:
+            value = getter(session)
+            if value:
+                result = result.replace(tag, str(value))
+        except Exception:
+            pass
+    return result
 
 BG        = "#1a1a2e"
 BG2       = "#16213e"
@@ -738,18 +786,75 @@ class App(tk.Tk):
         self._led_tci       = None  # created in _make_toolbar
         self._init_tci()
 
-        # Station information — used for macro variable substitution
-        self._station_info = self._config.get('station_info', {
-            'qth':    '',
-            'grid':   '',
-            'pwr':    '',
-            'county': '',
-            'park':   '',
-        })
+        # Logs folder — all session JSON and exported ADIF files go here
+        self._logs_dir = os.path.join(HERE, 'Logs')
+        os.makedirs(self._logs_dir, exist_ok=True)
 
-        # Macro buttons — loaded from config, fall back to defaults
-        self._macros = [list(m) for m in
-                        self._config.get('macros', DEFAULT_MACROS)]
+        # Logging
+        self._activity      = 'general'
+        self._log_manager   = LogManager(self._logs_dir) if LOG_AVAILABLE else None
+        self._log_call_var  = None   # tk.StringVar set by active panel
+        self._log_band_var  = None
+        self._pota_park_var = None
+        self._pota_state_var= None
+        self._pota_tree     = None
+        self._pota_qso_var  = None
+        self._detected_call = ''
+        self._detected_park = ''
+        self._activity_status_var = None  # created in _build_ui
+
+        # UDP broadcast settings
+        self._udp_enabled = self._config.get('udp_broadcast', False)
+        self._udp_host    = self._config.get('udp_host', '127.0.0.1')
+        self._udp_port    = self._config.get('udp_port', 2333)
+        self._udp_format  = self._config.get('udp_format', 'wsjtx')
+        if self._log_manager:
+            self._log_manager.udp_enabled = self._udp_enabled
+            self._log_manager.udp_host    = self._udp_host
+            self._log_manager.udp_port    = self._udp_port
+            self._log_manager.udp_format  = self._udp_format
+
+        # Station information
+        raw_si = self._config.get('station_info', {})
+        # Migrate old single-park 'park' key to 'my_parks' list
+        if 'park' in raw_si and 'my_parks' not in raw_si:
+            old_park = raw_si.pop('park', '')
+            raw_si['my_parks'] = [old_park] if old_park else []
+        # Apply defaults for any missing keys
+        si_defaults = {
+            'qth': '', 'gridsquare': '', 'my_state': '', 'tx_power': '',
+            'county': '', 'my_parks': [], 'my_summit': '',
+            'fd_class': '', 'fd_section': '', 'fd_power': 'LOW',
+        }
+        si_defaults.update(raw_si)
+        self._station_info = si_defaults
+
+        # Macro buttons — dict format {'label':..., 'text':...}
+        raw_macros = self._config.get('macros', DEFAULT_MACROS)
+        self._macros = []
+        for m in raw_macros:
+            if isinstance(m, dict) and 'label' in m:
+                self._macros.append({'label': m['label'], 'text': m.get('text','')})
+            elif isinstance(m, (list, tuple)) and len(m) >= 1:
+                self._macros.append({'label': m[0], 'text': m[1] if len(m)>1 else ''})
+        if not self._macros:
+            self._macros = list(DEFAULT_MACROS)
+
+        # Persistent session and activity manager (updated on station info change)
+        self._session       = None  # created after _build_ui
+        self._activity_mgr  = None  # created after _build_ui
+
+        # Station bar StringVars — created before _build_ui, widgets created there
+        si = self._station_info
+        parks_str = ', '.join(si.get('my_parks', []))
+        self._park_var      = tk.StringVar(value=parks_str)
+        self._summit_var    = tk.StringVar(value=si.get('my_summit', ''))
+        self._fd_class_var  = tk.StringVar(value=si.get('fd_class', ''))
+        self._fd_section_var= tk.StringVar(value=si.get('fd_section', ''))
+
+        # Log panel
+        self._log_tree       = None  # created in _make_log_panel
+        self._log_header_var = None
 
         # Level meter state
         self._rx_gain      = 1.0     # RX input gain multiplier
@@ -759,12 +864,20 @@ class App(tk.Tk):
         self._tx_peak_hold = 0.0     # time of last TX peak
 
         self._build_ui()
+        if LOG_AVAILABLE:
+            self._session      = self._make_session()
+            self._activity_mgr = self._make_activity_manager()
+            self._update_activity_status()
+            if self._log_manager:
+                self._log_manager._udp_session = self._session
         self._start_audio()
         self._start_workers()
         self._tick()
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
         self.bind('<Control-q>', lambda e: self._quit())
+        if self._log_manager:
+            self.after(1000, self._check_resume_session)
 
         bw  = int(NUM_TONES * SYMBOL_RATE)
         bps = int(125 * 0.5)
@@ -786,10 +899,12 @@ class App(tk.Tk):
 
     def _build_ui(self):
         self._make_menubar()
-        self._make_toolbar()
+        self._make_toolbar()    # row 1: LEDs + freq; row 2: devices (no Call)
+        self._make_station_bar()# row 3: Call, Park, Summit, FD
+        self._make_macro_bar()  # row 4: macro buttons
+        self._make_log_panel()  # row 5: recent QSOs
         self._make_waterfall()
         self._make_chat()
-        self._make_macros()
         self._make_input()
         self._make_levels()
         self._make_statusbar()
@@ -811,18 +926,37 @@ class App(tk.Tk):
                                   command=self._show_devices)
         settings_menu.add_command(label="Sample Rate...",
                                   command=self._show_sample_rate_dialog)
+        settings_menu.add_command(label="External Logger...",
+                                  command=self._show_external_logger_dialog)
         settings_menu.add_separator()
         settings_menu.add_command(label="About HAVEN-FSK",
                                   command=self._show_about)
 
-        # ── Station menu ──────────────────────────────────────────────────────
-        station_menu = tk.Menu(menubar, tearoff=0,
-                               bg=BG2, fg=TEXT_FG,
-                               activebackground=ACCENT,
-                               activeforeground=GREEN)
-        menubar.add_cascade(label="Station", menu=station_menu)
-        station_menu.add_command(label="Station Info...",
-                                 command=self._show_station_info_dialog)
+        # ── Activity menu ─────────────────────────────────────────────────────
+        self._activity_var = tk.StringVar(value='general')
+        activity_menu = tk.Menu(menubar, tearoff=0,
+                                bg=BG2, fg=TEXT_FG,
+                                activebackground=ACCENT,
+                                activeforeground=GREEN)
+        menubar.add_cascade(label="Activity", menu=activity_menu)
+        for key, label in [
+            ('general',          'General Chat'),
+            ('pota',             'POTA'),
+            ('sota',             'SOTA'),
+            ('field_day',        'Field Day'),
+            ('general_contest',  'General Contest'),
+        ]:
+            activity_menu.add_radiobutton(
+                label=label,
+                variable=self._activity_var,
+                value=key,
+                command=lambda k=key: self._set_activity(k),
+                selectcolor=GREEN,
+                foreground=TEXT_FG,
+                background=BG2,
+                activebackground=ACCENT,
+                activeforeground=GREEN,
+            )
 
     def _make_toolbar(self):
         bar = tk.Frame(self, bg=ACCENT, pady=5)
@@ -832,10 +966,6 @@ class App(tk.Tk):
             tk.Label(bar, text=t, bg=ACCENT,
                      fg=TEXT_FG, font=FONT_UI).pack(side=tk.LEFT, padx=(6,2))
 
-        lbl("Call:")
-        tk.Entry(bar, textvariable=self._callsign, width=9,
-                 font=FONT_MONO, bg=TEXT_BG, fg=GREEN,
-                 insertbackground=GREEN).pack(side=tk.LEFT, padx=(0,10))
         lbl("DCD:")
         self._led_dcd = LED(bar)
         self._led_dcd.pack(side=tk.LEFT, padx=(2,10))
@@ -943,6 +1073,273 @@ class App(tk.Tk):
         self.after(800, self._apply_saved_config)
         self.after(1000, self._sync_combo_to_engine)
 
+    def _make_station_bar(self):
+        """Inline station-info row: Call, Park(s), Summit, FD class/section."""
+        bar = tk.Frame(self, bg=BG2, pady=3)
+        bar.pack(fill=tk.X)
+
+        def lbl(t):
+            tk.Label(bar, text=t, bg=BG2, fg=TEXT_FG,
+                     font=FONT_UI).pack(side=tk.LEFT, padx=(6, 2))
+
+        def hint(t):
+            tk.Label(bar, text=t, bg=BG2, fg='#444466',
+                     font=("Helvetica", 7)).pack(side=tk.LEFT, padx=(0, 8))
+
+        # ── Callsign ──────────────────────────────────────────────────────────
+        lbl("Call:")
+        self._callsign_entry = tk.Entry(
+            bar, textvariable=self._callsign,
+            width=8, font=FONT_MONO,
+            bg=TEXT_BG, fg=GREEN, insertbackground=GREEN)
+        self._callsign_entry.pack(side=tk.LEFT, padx=(0, 8))
+        self._callsign_entry.bind('<FocusOut>', self._on_callsign_changed)
+        self._callsign_entry.bind('<Return>',   self._on_callsign_changed)
+
+        # ── POTA park(s) ──────────────────────────────────────────────────────
+        lbl("Park:")
+        self._park_entry = tk.Entry(
+            bar, textvariable=self._park_var,
+            width=14, font=FONT_MONO,
+            bg=TEXT_BG, fg=AMBER, insertbackground=AMBER)
+        self._park_entry.pack(side=tk.LEFT, padx=(0, 2))
+        self._park_entry.bind('<FocusOut>', self._on_park_changed)
+        self._park_entry.bind('<Return>',   self._on_park_changed)
+        hint("(US-1234)")
+
+        # ── SOTA summit ───────────────────────────────────────────────────────
+        lbl("Summit:")
+        self._summit_entry = tk.Entry(
+            bar, textvariable=self._summit_var,
+            width=10, font=FONT_MONO,
+            bg=TEXT_BG, fg=AMBER, insertbackground=AMBER)
+        self._summit_entry.pack(side=tk.LEFT, padx=(0, 2))
+        self._summit_entry.bind('<FocusOut>', self._on_summit_changed)
+        self._summit_entry.bind('<Return>',   self._on_summit_changed)
+        hint("(W9/IN-001)")
+
+        # ── Field Day class + section ──────────────────────────────────────────
+        lbl("FD:")
+        fd_cls = tk.Entry(bar, textvariable=self._fd_class_var,
+                          width=3, font=FONT_MONO,
+                          bg=TEXT_BG, fg=AMBER, insertbackground=AMBER)
+        fd_cls.pack(side=tk.LEFT, padx=(0, 1))
+        fd_cls.bind('<FocusOut>', self._on_fd_changed)
+        fd_cls.bind('<Return>',   self._on_fd_changed)
+
+        fd_sec = tk.Entry(bar, textvariable=self._fd_section_var,
+                          width=3, font=FONT_MONO,
+                          bg=TEXT_BG, fg=AMBER, insertbackground=AMBER)
+        fd_sec.pack(side=tk.LEFT, padx=(0, 2))
+        fd_sec.bind('<FocusOut>', self._on_fd_changed)
+        fd_sec.bind('<Return>',   self._on_fd_changed)
+        hint("(1E IN)")
+
+        # ── Activity status (right-aligned) ───────────────────────────────────
+        self._activity_status_var = tk.StringVar(value='General Chat')
+        tk.Label(bar, textvariable=self._activity_status_var,
+                 bg=BG2, fg='#668866', font=("Helvetica", 9),
+                 anchor=tk.E).pack(side=tk.RIGHT, padx=8)
+
+    # ── Station bar field handlers ─────────────────────────────────────────────
+
+    def _on_park_changed(self, event=None):
+        raw    = self._park_var.get().strip().upper()
+        if not raw:
+            self._station_info['my_parks'] = []
+            self._park_entry.configure(bg=TEXT_BG)
+        else:
+            import re as _re
+            parks   = [p.strip() for p in raw.split(',') if p.strip()]
+            invalid = [p for p in parks
+                       if not _re.match(r'^[A-Z]{1,2}-\d{4,5}$', p)]
+            if invalid:
+                self._park_entry.configure(bg='#440000')
+                return
+            self._park_entry.configure(bg=TEXT_BG)
+            self._station_info['my_parks'] = parks
+        self._on_station_info_changed()
+
+    def _on_summit_changed(self, event=None):
+        raw = self._summit_var.get().strip().upper()
+        if not raw:
+            self._station_info['my_summit'] = ''
+            self._summit_entry.configure(bg=TEXT_BG)
+        else:
+            import re as _re
+            if not _re.match(r'^[A-Z0-9]+/[A-Z0-9]+-\d{3,4}$', raw):
+                self._summit_entry.configure(bg='#440000')
+                return
+            self._summit_entry.configure(bg=TEXT_BG)
+            self._station_info['my_summit'] = raw
+        self._on_station_info_changed()
+
+    def _on_fd_changed(self, event=None):
+        self._station_info['fd_class']   = self._fd_class_var.get().strip().upper()
+        self._station_info['fd_section'] = self._fd_section_var.get().strip().upper()
+        self._on_station_info_changed()
+
+    def _on_station_info_changed(self):
+        """Called when any station bar field changes — updates session and display."""
+        if LOG_AVAILABLE:
+            self._session      = self._make_session()
+            self._activity_mgr = self._make_activity_manager()
+            if self._log_manager:
+                self._log_manager._udp_session = self._session
+        self._update_activity_status()
+        self._refresh_log_panel()
+        self._save_config()
+
+    def _make_activity_status_bar(self):
+        """Thin bar showing effective activity below device row."""
+        bar = tk.Frame(self, bg=BG2, pady=1)
+        bar.pack(fill=tk.X)
+        tk.Label(bar, text="●", bg=BG2, fg='#446644',
+                 font=("Courier", 9)).pack(side=tk.LEFT, padx=(8, 2))
+        self._activity_status_var = tk.StringVar(value='General Chat')
+        tk.Label(bar, textvariable=self._activity_status_var,
+                 bg=BG2, fg='#668866', font=("Helvetica", 9),
+                 anchor=tk.W).pack(side=tk.LEFT)
+
+    def _make_log_panel(self):
+        """Compact recent QSO panel — adapts header and info column to activity."""
+        outer = tk.Frame(self, bg=BG2, bd=1, relief=tk.SUNKEN)
+        outer.pack(fill=tk.X, padx=4, pady=(2, 0))
+
+        hdr = tk.Frame(outer, bg=BG2)
+        hdr.pack(fill=tk.X, padx=4, pady=(2, 0))
+        self._log_header_var = tk.StringVar(value='Recent QSOs')
+        tk.Label(hdr, textvariable=self._log_header_var,
+                 bg=BG2, fg=AMBER,
+                 font=("Helvetica", 9, 'bold'),
+                 anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Log Contact + Delete Last buttons — compact, right-aligned
+        tk.Button(hdr, text="Log Contact",
+                  command=self._log_contact_from_panel,
+                  bg=ACCENT, fg=GREEN, font=("Helvetica", 8),
+                  relief=tk.FLAT, padx=6, pady=1).pack(side=tk.RIGHT, padx=2)
+        tk.Button(hdr, text="Del Last",
+                  command=self._log_delete_last,
+                  bg=BG2, fg=RED, font=("Helvetica", 8),
+                  relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
+        tk.Button(hdr, text="Export...",
+                  command=self._export_adif_dialog,
+                  bg=BG2, fg=AMBER, font=("Helvetica", 8),
+                  relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
+
+        cols = ('utc', 'call', 'band', 'rst', 'info')
+        self._log_tree = ttk.Treeview(
+            outer, columns=cols, show='headings',
+            height=4, selectmode='browse', style='Log.Treeview')
+
+        style = ttk.Style()
+        style.configure('Log.Treeview',
+                        background=TEXT_BG, foreground=TEXT_FG,
+                        fieldbackground=TEXT_BG, rowheight=18,
+                        font=("Courier", 9))
+        style.configure('Log.Treeview.Heading',
+                        background=BG2, foreground=AMBER,
+                        font=("Helvetica", 8, 'bold'))
+        style.map('Log.Treeview',
+                  background=[('selected', ACCENT)],
+                  foreground=[('selected', GREEN)])
+
+        for col, heading, width, stretch in [
+            ('utc',  'UTC',  45,  False),
+            ('call', 'Call', 90,  False),
+            ('band', 'Band', 40,  False),
+            ('rst',  'RST',  35,  False),
+            ('info', 'Info', 280, True),
+        ]:
+            self._log_tree.heading(col, text=heading)
+            self._log_tree.column(col, width=width, stretch=stretch, anchor=tk.W)
+
+        self._log_tree.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self._log_tree.bind('<<TreeviewSelect>>', self._on_log_entry_clicked)
+
+    def _on_log_entry_clicked(self, event=None):
+        sel = self._log_tree.selection()
+        if not sel:
+            return
+        call = self._log_tree.item(sel[0])['values'][1]
+        if call and self._log_call_var is not None:
+            self._log_call_var.set(str(call))
+
+    def _log_contact_from_panel(self):
+        """Dispatch to the correct log contact dialog for the active activity."""
+        if self._activity == 'pota':
+            self._log_contact_pota()
+        elif self._activity in ('sota', 'field_day'):
+            self._log_contact_unified()
+        else:
+            self._log_contact_general()
+
+    def _log_delete_last(self):
+        if self._log_manager and self._log_manager.delete_last():
+            self._refresh_log_panel()
+            self._pota_update_counter()
+            self._setstatus("Last QSO deleted")
+
+    def _refresh_log_panel(self):
+        """Rebuild the recent QSO treeview from the current session entries."""
+        if self._log_tree is None or not self._log_manager:
+            return
+
+        for row in self._log_tree.get_children():
+            self._log_tree.delete(row)
+
+        mgr   = self._activity_mgr
+        if mgr is None:
+            return
+
+        entries = list(reversed(
+            [e for e in self._log_manager.entries if e.confirmed][-8:]))
+
+        # Update header and info column heading
+        if mgr.is_pota_activating and mgr.is_sota_activating:
+            parks = ', '.join(self._session.my_parks)
+            n     = self._log_manager.count()
+            self._log_header_var.set(
+                f"POTA {parks} + SOTA {self._session.my_summit} — QSOs: {n}/10"
+                + (" ✓" if n >= 10 else ""))
+            self._log_tree.heading('info', text='P2P / S2S')
+        elif mgr.is_pota_activating:
+            parks = ', '.join(self._session.my_parks)
+            n     = self._log_manager.count()
+            self._log_header_var.set(
+                f"POTA {parks} — QSOs: {n}/10"
+                + (" ✓" if n >= 10 else ""))
+            self._log_tree.heading('info', text='P2P Park')
+        elif mgr.is_sota_activating:
+            self._log_header_var.set(f"SOTA {self._session.my_summit}")
+            self._log_tree.heading('info', text='S2S Summit')
+        elif mgr.is_field_day:
+            fd = f"{self._session.fd_class} {self._session.fd_section}".strip()
+            self._log_header_var.set(f"Field Day {fd}")
+            self._log_tree.heading('info', text='Their Exchange')
+        else:
+            self._log_header_var.set("Recent QSOs")
+            self._log_tree.heading('info', text='Info')
+
+        for entry in entries:
+            if mgr.is_field_day:
+                info = entry.comment or '—'
+                if self._log_manager.is_dupe(entry.call, entry.band):
+                    info += '  ⚠ dupe'
+            elif entry.is_s2s and entry.is_p2p:
+                info = ', '.join(entry.their_parks) + f' | {entry.sota_ref}'
+            elif entry.is_p2p:
+                info = ', '.join(entry.their_parks) + ' (P2P)'
+            elif entry.is_s2s:
+                info = f'{entry.sota_ref} (S2S)'
+            else:
+                info = entry.comment or '—'
+
+            self._log_tree.insert('', tk.END, values=(
+                entry.time_on, entry.call, entry.band,
+                entry.rst_rcvd or '599', info))
+
     def _make_waterfall(self):
         frame = tk.LabelFrame(self, text=" Waterfall ",
                               bg=BG2, fg=AMBER, font=FONT_UI,
@@ -967,80 +1364,190 @@ class App(tk.Tk):
         self._chat.tag_config('warn', foreground=RED)
         self._chat.tag_config('ts',   foreground='#444466')
 
-    def _make_macros(self):
-        """Clear button on left; macro buttons grouped on the right."""
-        frame = tk.Frame(self, bg=BG2, pady=3)
-        frame.pack(fill=tk.X, padx=6, pady=(2, 0))
+    def _make_macro_bar(self):
+        """Macro button bar with Clear Log on left, macros + Add on right."""
+        self._macro_bar_frame = tk.Frame(self, bg=BG2, pady=2)
+        self._macro_bar_frame.pack(fill=tk.X, padx=4, pady=(2, 0))
+        self._rebuild_macro_bar()
 
-        # Clear button — far left
-        tk.Button(frame, text="Clear Log", command=self._clear_chat,
-                  bg=ACCENT, fg=AMBER, font=FONT_UI,
-                  relief=tk.FLAT, padx=10, pady=2).pack(side=tk.LEFT, padx=(0, 4))
+    def _rebuild_macro_bar(self):
+        """Destroy and recreate the macro button contents."""
+        for w in self._macro_bar_frame.winfo_children():
+            w.destroy()
 
-        # Macros group — packed as a unit to the right edge
-        macro_grp = tk.Frame(frame, bg=BG2)
-        macro_grp.pack(side=tk.RIGHT)
+        # Clear button — left
+        tk.Button(self._macro_bar_frame, text="Clear Log",
+                  command=self._clear_chat,
+                  bg=ACCENT, fg=AMBER, font=("Helvetica", 9),
+                  relief=tk.FLAT, padx=8, pady=2).pack(side=tk.LEFT, padx=(0, 6))
 
-        tk.Label(macro_grp, text="Macros:", bg=BG2, fg=TEXT_FG,
-                 font=FONT_UI).pack(side=tk.LEFT, padx=(0, 6))
-
-        self._macro_buttons = []
-        for i, (label, text) in enumerate(self._macros):
+        # Macro buttons
+        for i, macro in enumerate(self._macros):
+            label = macro.get('label', '')
+            text  = macro.get('text', '')
             btn = tk.Button(
-                macro_grp,
+                self._macro_bar_frame,
                 text=label,
-                bg=ACCENT, fg=GREEN, font=FONT_UI,
-                relief=tk.FLAT, padx=10, pady=2,
                 command=lambda t=text: self._send_macro(t) if t else None,
+                bg=ACCENT, fg=GREEN,
+                font=("Helvetica", 9),
+                relief=tk.FLAT, padx=8, pady=2,
             )
             btn.pack(side=tk.LEFT, padx=2)
             btn.bind('<Button-3>', lambda e, idx=i: self._edit_macro(idx))
-            self._macro_buttons.append(btn)
 
-        tk.Label(macro_grp, text="(right-click to edit)",
-                 bg=BG2, fg='#444466', font=("Helvetica", 8)).pack(
-                 side=tk.LEFT, padx=(8, 0))
+        # Add button — right
+        tk.Button(self._macro_bar_frame, text='+ Add',
+                  command=self._add_macro,
+                  bg=BG2, fg=TEXT_FG,
+                  font=("Helvetica", 9),
+                  relief=tk.FLAT, padx=6
+                  ).pack(side=tk.LEFT, padx=(6, 0))
 
-    def _edit_macro(self, idx):
-        """Popup editor for a single macro button."""
-        label, text = self._macros[idx]
+    def _add_macro(self):
+        self._edit_macro(None)
+
+    def _edit_macro(self, index=None):
+        """Open macro editor. index=None creates a new macro."""
+        is_new = (index is None)
+        macro  = {'label': '', 'text': ''} if is_new else dict(self._macros[index])
+
         win = tk.Toplevel(self)
-        win.title(f"Edit Macro {idx + 1}")
+        win.title("New Macro" if is_new else "Edit Macro")
         win.configure(bg=BG)
-        win.resizable(False, False)
+        win.resizable(True, True)
         win.grab_set()
 
-        tk.Label(win, text="Button label:", bg=BG,
-                 fg=TEXT_FG, font=FONT_UI).pack(padx=16, pady=(12, 2), anchor=tk.W)
-        lbl_var = tk.StringVar(value=label)
-        tk.Entry(win, textvariable=lbl_var, bg=TEXT_BG, fg=GREEN,
-                 font=FONT_MONO, width=14).pack(padx=16, fill=tk.X)
+        tk.Label(win, text="Button label:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI).pack(anchor=tk.W, padx=12, pady=(12, 2))
+        label_var = tk.StringVar(value=macro['label'])
+        tk.Entry(win, textvariable=label_var,
+                 bg=TEXT_BG, fg=GREEN, font=FONT_MONO,
+                 width=20, insertbackground=GREEN).pack(anchor=tk.W, padx=12)
 
-        tk.Label(win, text="Message  (<CALL> = your callsign):",
-                 bg=BG, fg=TEXT_FG, font=FONT_UI).pack(padx=16, pady=(8, 2), anchor=tk.W)
-        txt_var = tk.StringVar(value=text)
-        tk.Entry(win, textvariable=txt_var, bg=TEXT_BG, fg=GREEN,
-                 font=FONT_MONO, width=52).pack(padx=16, fill=tk.X)
+        tk.Label(win, text="Macro text:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI).pack(anchor=tk.W, padx=12, pady=(10, 2))
+        text_box = tk.Text(win, bg=TEXT_BG, fg=GREEN,
+                           font=FONT_MONO, height=4, width=58,
+                           insertbackground=GREEN, wrap=tk.WORD)
+        text_box.insert('1.0', macro['text'])
+        text_box.pack(padx=12, fill=tk.X)
 
-        def save():
-            new_label = lbl_var.get().strip() or f"MSG{idx + 1}"
-            new_text  = txt_var.get().strip()
-            self._macros[idx] = [new_label, new_text]
-            self._macro_buttons[idx].configure(
-                text=new_label,
-                command=lambda t=new_text: self._send_macro(t) if t else None,
-            )
-            self._save_config()
-            win.destroy()
+        # Tag insertion buttons grouped by category
+        tk.Label(win, text="Click a tag to insert at cursor:",
+                 bg=BG, fg=TEXT_FG,
+                 font=("Helvetica", 9)).pack(anchor=tk.W, padx=12, pady=(10, 4))
+
+        def insert_tag(tag):
+            try:
+                pos = text_box.index(tk.INSERT)
+            except Exception:
+                pos = tk.END
+            text_box.insert(pos, tag)
+            text_box.focus_set()
+            update_preview()
+
+        categories = {}
+        for tag, (cat, desc, _) in MACRO_TAGS.items():
+            categories.setdefault(cat, []).append((tag, desc))
+
+        for cat, tags in categories.items():
+            cf = tk.Frame(win, bg=BG)
+            cf.pack(fill=tk.X, padx=12, pady=(0, 3))
+            tk.Label(cf, text=f"{cat}:", bg=BG, fg='#888888',
+                     font=("Helvetica", 8)).pack(side=tk.LEFT, padx=(0, 4))
+            for tag, desc in tags:
+                btn = tk.Button(cf, text=tag,
+                                command=lambda t=tag: insert_tag(t),
+                                bg=BG2, fg=AMBER, font=("Courier", 8),
+                                relief=tk.FLAT, padx=4, pady=1,
+                                cursor='hand2')
+                btn.pack(side=tk.LEFT, padx=2)
+                self._make_tooltip(btn, desc)
+
+        # Live preview
+        tk.Label(win, text="Preview (with current values):",
+                 bg=BG, fg=TEXT_FG,
+                 font=("Helvetica", 9)).pack(anchor=tk.W, padx=12, pady=(10, 2))
+        preview_var = tk.StringVar()
+        tk.Label(win, textvariable=preview_var,
+                 bg=BG2, fg=GREEN, font=FONT_MONO,
+                 anchor=tk.W, wraplength=520
+                 ).pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        def update_preview(*_):
+            raw = text_box.get('1.0', tk.END).strip()
+            sess = self._session if self._session else type(
+                'S', (), {'station_callsign': self._callsign.get(),
+                          'my_parks': [], 'my_summit': '',
+                          'my_gridsquare': '', 'my_state': '',
+                          'tx_power': '', 'fd_class': '',
+                          'fd_section': '',
+                          'current_call': '',
+                          'current_their_park': '',
+                          'current_their_summit': '',
+                          'current_band': '',
+                          'current_freq': 0.0})()
+            preview_var.set(expand_macro(raw, sess))
+
+        text_box.bind('<KeyRelease>', update_preview)
+        update_preview()
 
         bf = tk.Frame(win, bg=BG)
         bf.pack(pady=10)
+
+        def save():
+            new_label = label_var.get().strip()
+            new_text  = text_box.get('1.0', tk.END).strip()
+            if not new_label:
+                return
+            entry = {'label': new_label, 'text': new_text}
+            if is_new:
+                self._macros.append(entry)
+            else:
+                self._macros[index] = entry
+            self._save_config()
+            self._rebuild_macro_bar()
+            win.destroy()
+
+        def delete():
+            if not is_new and messagebox.askyesno(
+                    "Delete Macro",
+                    f"Delete macro '{macro['label']}'?",
+                    parent=win):
+                self._macros.pop(index)
+                self._save_config()
+                self._rebuild_macro_bar()
+                win.destroy()
+
         tk.Button(bf, text="Save", command=save,
                   bg=ACCENT, fg=GREEN, font=FONT_UI,
                   relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
         tk.Button(bf, text="Cancel", command=win.destroy,
                   bg=BG2, fg=TEXT_FG, font=FONT_UI,
                   relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
+        if not is_new:
+            tk.Button(bf, text="Delete", command=delete,
+                      bg='#440000', fg=RED, font=FONT_UI,
+                      relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
+
+    def _make_tooltip(self, widget, text):
+        """Show a small popup label when hovering over a widget."""
+        tip = [None]
+        def show(event):
+            t = tk.Toplevel(widget)
+            t.wm_overrideredirect(True)
+            t.wm_geometry(f'+{event.x_root+12}+{event.y_root+6}')
+            tk.Label(t, text=text, bg='#ffffcc', fg='#000000',
+                     font=("Helvetica", 8), relief=tk.SOLID,
+                     bd=1, padx=4, pady=2).pack()
+            tip[0] = t
+        def hide(event):
+            if tip[0]:
+                tip[0].destroy()
+                tip[0] = None
+        widget.bind('<Enter>', show)
+        widget.bind('<Leave>', hide)
 
     def _make_input(self):
         f = tk.Frame(self, bg=BG, pady=4)
@@ -1577,11 +2084,12 @@ class App(tk.Tk):
                 self.after(0, lambda t=text: self._log('rx', t))
                 self.after(0, lambda: self._setstatus(
                     f"RX decoded {len(text)} chars in {dur:.1f}s"))
+                self.after(0, lambda t=text: self._on_decoded_message(t))
             else:
-                # CRC failed — show text with warning marker
                 self.after(0, lambda t=text: self._log_crc_error(t))
                 self.after(0, lambda: self._setstatus(
                     f"RX {len(text)} chars in {dur:.1f}s — CRC error"))
+                self.after(0, lambda t=text: self._on_decoded_message(t))
 
     def _decode_with_fec(self, audio: np.ndarray):
         """Decode frame using FEC pipeline."""
@@ -1738,14 +2246,15 @@ class App(tk.Tk):
 
     def _expand_macro_vars(self, text: str, cs: str) -> str:
         """Replace all <VARIABLE> tokens with current station values."""
-        si = self._station_info
-        subs = {
+        si    = self._station_info
+        parks = si.get('my_parks', [])
+        subs  = {
             'CALL':   cs,
-            'QTH':    si.get('qth',    ''),
-            'GRID':   si.get('grid',   ''),
-            'PWR':    si.get('pwr',    ''),
-            'COUNTY': si.get('county', ''),
-            'PARK':   si.get('park',   ''),
+            'QTH':    si.get('qth',         ''),
+            'GRID':   si.get('gridsquare',   ''),
+            'PWR':    si.get('tx_power',     ''),
+            'COUNTY': si.get('county',       ''),
+            'PARK':   parks[0] if parks else '',
         }
         for key, val in subs.items():
             text = text.replace(f'<{key}>', val)
@@ -1765,7 +2274,20 @@ class App(tk.Tk):
         if cs is None:
             return
 
-        msg = self._expand_macro_vars(text, cs)
+        sess = self._session
+        if sess is None:
+            sess = type('S', (), {
+                'station_callsign': cs, 'my_parks': [],
+                'my_summit': '', 'my_gridsquare': '',
+                'my_state': '', 'tx_power': '',
+                'fd_class': '', 'fd_section': '',
+                'current_call': self._detected_call,
+                'current_their_park': self._detected_park,
+                'current_their_summit': '',
+                'current_band': self._get_current_band(),
+                'current_freq': self._get_current_freq(),
+            })()
+        msg = expand_macro(text, sess)
 
         self._log('tx', msg)
 
@@ -2042,55 +2564,1155 @@ class App(tk.Tk):
                 "No valid frame found — is this a HAVEN-FSK file?", 'warn'))
             self.after(0, lambda: self._setstatus("Decode: no frame found"))
 
+    # ── Activity ─────────────────────────────────────────────────────────────
+
+    def _set_activity(self, name: str):
+        self._activity = name
+        self._activity_var.set(name)
+        if LOG_AVAILABLE:
+            self._session      = self._make_session()
+            self._activity_mgr = self._make_activity_manager()
+        self._update_activity_status()
+        self._refresh_log_panel()
+
+    def _make_panel_general(self):
+        outer = tk.LabelFrame(self._activity_frame, text=" Log ",
+                              bg=BG, fg=AMBER, font=FONT_UI,
+                              bd=1, relief=tk.GROOVE)
+        outer.pack(fill=tk.X)
+
+        row = tk.Frame(outer, bg=BG, pady=4)
+        row.pack(fill=tk.X, padx=8)
+
+        tk.Label(row, text="Call:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI).pack(side=tk.LEFT, padx=(0, 4))
+
+        self._log_call_var = tk.StringVar()
+        tk.Entry(row, textvariable=self._log_call_var,
+                 bg=TEXT_BG, fg=GREEN, font=FONT_MONO,
+                 insertbackground=GREEN,
+                 width=12).pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(row, text="Band:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI).pack(side=tk.LEFT, padx=(0, 4))
+        self._log_band_var = tk.StringVar(
+            value=self._get_current_band() or '20M')
+        band_menu = tk.OptionMenu(row, self._log_band_var,
+                                  *BAND_LIST)
+        band_menu.configure(bg=ACCENT, fg=GREEN, font=FONT_UI,
+                            relief=tk.FLAT, padx=4,
+                            activebackground=ACCENT,
+                            activeforeground=GREEN,
+                            highlightthickness=0)
+        band_menu['menu'].configure(bg=BG2, fg=GREEN,
+                                    activebackground=ACCENT,
+                                    activeforeground=GREEN)
+        band_menu.pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Button(row, text="Log QSO",
+                  command=self._log_contact_general,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=10).pack(side=tk.LEFT, padx=2)
+
+        tk.Button(row, text="Quick Log",
+                  command=self._quick_log_general,
+                  bg=BG2, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=10).pack(side=tk.LEFT, padx=2)
+
+        tk.Button(row, text="Export ADIF...",
+                  command=self._export_adif_dialog,
+                  bg=BG2, fg=AMBER, font=FONT_UI,
+                  relief=tk.FLAT, padx=10).pack(side=tk.RIGHT, padx=2)
+
+        n = self._log_manager.count() if self._log_manager else 0
+        self._log_count_var = tk.StringVar(value=f"QSOs: {n}")
+        tk.Label(row, textvariable=self._log_count_var,
+                 bg=BG, fg='#668866', font=("Courier", 9)).pack(
+                 side=tk.RIGHT, padx=8)
+
+    def _make_panel_pota(self):
+        from tkinter import ttk
+        si      = self._station_info
+        parks   = si.get('my_parks', [])
+        activating = bool(parks)
+        title   = " POTA Activation " if activating else " POTA Hunting "
+
+        outer = tk.LabelFrame(self._activity_frame, text=title,
+                              bg=BG, fg=AMBER, font=FONT_UI,
+                              bd=1, relief=tk.GROOVE)
+        outer.pack(fill=tk.X)
+
+        # ── Top row: park display (read-only), counter, export ────────────────
+        top = tk.Frame(outer, bg=BG, pady=4)
+        top.pack(fill=tk.X, padx=8)
+
+        if activating:
+            park_str = ', '.join(parks)
+            tk.Label(top, text="Park(s):", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI).pack(side=tk.LEFT, padx=(0, 4))
+            tk.Label(top, text=park_str, bg=BG, fg=GREEN,
+                     font=FONT_MONO).pack(side=tk.LEFT, padx=(0, 8))
+            state = si.get('my_state', '')
+            if state:
+                tk.Label(top, text=state, bg=BG, fg=GREEN,
+                         font=FONT_MONO).pack(side=tk.LEFT, padx=(0, 12))
+        else:
+            tk.Label(top,
+                     text="Enter park(s) in Station Info to activate.",
+                     bg=BG, fg='#666688', font=("Helvetica", 9)).pack(
+                     side=tk.LEFT, padx=(0, 12))
+            tk.Button(top, text="Station Info...",
+                      command=self._show_station_info_dialog,
+                      bg=BG2, fg=AMBER, font=FONT_UI,
+                      relief=tk.FLAT, padx=6).pack(side=tk.LEFT)
+
+        n = self._log_manager.count() if self._log_manager else 0
+        self._pota_qso_var = tk.StringVar(
+            value=f"QSOs: {n}/{LogManager.POTA_MIN}")
+        self._pota_qso_label = tk.Label(
+            top, textvariable=self._pota_qso_var,
+            bg=BG,
+            fg=GREEN if n >= LogManager.POTA_MIN else AMBER,
+            font=("Courier", 10, 'bold'))
+        self._pota_qso_label.pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Button(top, text="Spot",
+                  command=self._pota_spot,
+                  bg=BG2, fg='#00ccff', font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.LEFT)
+
+        tk.Button(top, text="Export ADIF...",
+                  command=self._export_adif_dialog,
+                  bg=BG2, fg=AMBER, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.RIGHT)
+
+        # ── QSO Treeview ─────────────────────────────────────────────────────
+        tree_frame = tk.Frame(outer, bg=BG)
+        tree_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure('Log.Treeview',
+                        background=TEXT_BG, foreground=TEXT_FG,
+                        fieldbackground=TEXT_BG, rowheight=20,
+                        font=('Courier', 9))
+        style.configure('Log.Treeview.Heading',
+                        background=ACCENT, foreground=GREEN,
+                        font=('Helvetica', 9, 'bold'))
+        style.map('Log.Treeview',
+                  background=[('selected', ACCENT)],
+                  foreground=[('selected', GREEN)])
+
+        cols = ('call', 'utc', 'band', 'rst_s', 'rst_r', 'park', 'notes')
+        self._pota_tree = ttk.Treeview(
+            tree_frame, columns=cols, show='headings',
+            height=5, style='Log.Treeview')
+        for col, heading, width in [
+            ('call',  'Call',     80),
+            ('utc',   'UTC',      50),
+            ('band',  'Band',     45),
+            ('rst_s', 'RST↑',     45),
+            ('rst_r', 'RST↓',     45),
+            ('park',  'P2P Park', 75),
+            ('notes', 'Notes',   160),
+        ]:
+            self._pota_tree.heading(col, text=heading)
+            self._pota_tree.column(col, width=width, minwidth=width,
+                                   anchor=tk.W)
+
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
+                            command=self._pota_tree.yview)
+        self._pota_tree.configure(yscrollcommand=vsb.set)
+        self._pota_tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Populate from existing session entries
+        self._pota_refresh_tree()
+
+        # ── Bottom row: action buttons ────────────────────────────────────────
+        bot = tk.Frame(outer, bg=BG, pady=4)
+        bot.pack(fill=tk.X, padx=8)
+
+        tk.Button(bot, text="Log Contact",
+                  command=self._log_contact_pota,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=10).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(bot, text="Edit Last",
+                  command=lambda: self._log_contact_pota(edit_last=True),
+                  bg=BG2, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.LEFT, padx=2)
+        tk.Button(bot, text="Delete Last",
+                  command=self._pota_delete_last,
+                  bg=BG2, fg=RED, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.LEFT, padx=2)
+
+    def _make_panel_sota(self):
+        from tkinter import ttk
+        si      = self._station_info
+        summit  = si.get('my_summit', '')
+        title   = f" SOTA Activating {summit} " if summit else " SOTA Chasing "
+
+        outer = tk.LabelFrame(self._activity_frame, text=title,
+                              bg=BG, fg=AMBER, font=FONT_UI,
+                              bd=1, relief=tk.GROOVE)
+        outer.pack(fill=tk.X)
+
+        top = tk.Frame(outer, bg=BG, pady=4)
+        top.pack(fill=tk.X, padx=8)
+
+        if summit:
+            tk.Label(top, text="Summit:", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI).pack(side=tk.LEFT, padx=(0, 4))
+            tk.Label(top, text=summit, bg=BG, fg=GREEN,
+                     font=FONT_MONO).pack(side=tk.LEFT, padx=(0, 12))
+        else:
+            tk.Label(top,
+                     text="Enter summit reference in Station Info to activate.",
+                     bg=BG, fg='#666688', font=("Helvetica", 9)).pack(
+                     side=tk.LEFT, padx=(0, 8))
+            tk.Button(top, text="Station Info...",
+                      command=self._show_station_info_dialog,
+                      bg=BG2, fg=AMBER, font=FONT_UI,
+                      relief=tk.FLAT, padx=6).pack(side=tk.LEFT)
+
+        n = self._log_manager.count() if self._log_manager else 0
+        self._pota_qso_var = tk.StringVar(value=f"QSOs: {n}")
+        self._pota_qso_label = tk.Label(
+            top, textvariable=self._pota_qso_var,
+            bg=BG, fg=GREEN, font=("Courier", 10, 'bold'))
+        self._pota_qso_label.pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Button(top, text="Export ADIF...",
+                  command=self._export_adif_dialog,
+                  bg=BG2, fg=AMBER, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.RIGHT)
+
+        self._pota_tree = self._make_log_treeview(outer)
+        self._pota_refresh_tree()
+
+        bot = tk.Frame(outer, bg=BG, pady=4)
+        bot.pack(fill=tk.X, padx=8)
+        tk.Button(bot, text="Log Contact",
+                  command=self._log_contact_unified,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=10).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(bot, text="Delete Last",
+                  command=self._pota_delete_last,
+                  bg=BG2, fg=RED, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.LEFT, padx=2)
+
+    def _make_panel_field_day(self):
+        si = self._station_info
+        fd_class   = si.get('fd_class', '')
+        fd_section = si.get('fd_section', '')
+        fd_title   = f" Field Day {fd_class} {fd_section} ".strip()
+        if not fd_class:
+            fd_title = " Field Day "
+
+        outer = tk.LabelFrame(self._activity_frame, text=fd_title,
+                              bg=BG, fg=AMBER, font=FONT_UI,
+                              bd=1, relief=tk.GROOVE)
+        outer.pack(fill=tk.X)
+
+        top = tk.Frame(outer, bg=BG, pady=4)
+        top.pack(fill=tk.X, padx=8)
+
+        if fd_class:
+            tk.Label(top, text=f"Class: {fd_class}  Section: {fd_section}",
+                     bg=BG, fg=GREEN, font=FONT_MONO).pack(
+                     side=tk.LEFT, padx=(0, 16))
+        else:
+            tk.Label(top,
+                     text="Enter FD class/section in Station Info.",
+                     bg=BG, fg='#666688', font=("Helvetica", 9)).pack(
+                     side=tk.LEFT, padx=(0, 8))
+            tk.Button(top, text="Station Info...",
+                      command=self._show_station_info_dialog,
+                      bg=BG2, fg=AMBER, font=FONT_UI,
+                      relief=tk.FLAT, padx=6).pack(side=tk.LEFT)
+
+        n = self._log_manager.count() if self._log_manager else 0
+        self._pota_qso_var = tk.StringVar(value=f"QSOs: {n}")
+        self._pota_qso_label = tk.Label(
+            top, textvariable=self._pota_qso_var,
+            bg=BG, fg=GREEN, font=("Courier", 10, 'bold'))
+        self._pota_qso_label.pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Button(top, text="Export ADIF + Cabrillo...",
+                  command=self._export_adif_dialog,
+                  bg=BG2, fg=AMBER, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.RIGHT)
+
+        self._pota_tree = self._make_log_treeview(outer)
+        self._pota_refresh_tree()
+
+        bot = tk.Frame(outer, bg=BG, pady=4)
+        bot.pack(fill=tk.X, padx=8)
+        tk.Button(bot, text="Log Contact",
+                  command=self._log_contact_unified,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=10).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(bot, text="Delete Last",
+                  command=self._pota_delete_last,
+                  bg=BG2, fg=RED, font=FONT_UI,
+                  relief=tk.FLAT, padx=8).pack(side=tk.LEFT, padx=2)
+
+    def _make_log_treeview(self, parent):
+        """Shared treeview widget for POTA, SOTA, and Field Day panels."""
+        from tkinter import ttk
+        tree_frame = tk.Frame(parent, bg=BG)
+        tree_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        cols = ('call', 'utc', 'band', 'rst_s', 'rst_r', 'extra', 'notes')
+        tree = ttk.Treeview(tree_frame, columns=cols,
+                            show='headings', height=5,
+                            style='Log.Treeview')
+        for col, heading, width in [
+            ('call',  'Call',   80), ('utc',   'UTC',   50),
+            ('band',  'Band',   45), ('rst_s', 'RST↑',  45),
+            ('rst_r', 'RST↓',  45), ('extra', 'P2P/S2S', 80),
+            ('notes', 'Notes', 140),
+        ]:
+            tree.heading(col, text=heading)
+            tree.column(col, width=width, minwidth=width, anchor=tk.W)
+
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
+                            command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        return tree
+
+    def _make_panel_stub(self, label: str):
+        outer = tk.LabelFrame(self._activity_frame, text=f" {label} ",
+                              bg=BG, fg=AMBER, font=FONT_UI,
+                              bd=1, relief=tk.GROOVE)
+        outer.pack(fill=tk.X)
+        tk.Label(outer,
+                 text=f"{label} activity panel — coming in a future release.",
+                 bg=BG, fg='#444466', font=("Helvetica", 9)).pack(
+                 padx=12, pady=6)
+
+    # ── Activity helpers ──────────────────────────────────────────────────────
+
+    def _make_session(self) -> 'Session':
+        """Build a Session object from current station info and callsign."""
+        if not LOG_AVAILABLE:
+            return None
+        si     = self._station_info
+        parks  = si.get('my_parks', [])
+        parks  = [p.strip() for p in parks if p.strip()]
+        return Session(
+            station_callsign = self._callsign.get().strip().upper(),
+            my_parks         = parks,
+            my_state         = si.get('my_state', ''),
+            my_summit        = si.get('my_summit', ''),
+            my_gridsquare    = si.get('gridsquare', ''),
+            tx_power         = si.get('tx_power', ''),
+            fd_class         = si.get('fd_class', ''),
+            fd_section       = si.get('fd_section', ''),
+            fd_power         = si.get('fd_power', 'LOW'),
+            entries          = self._log_manager.entries if self._log_manager else [],
+        )
+
+    def _make_activity_manager(self) -> 'ActivityManager':
+        if not LOG_AVAILABLE:
+            return None
+        menu_labels = {
+            'general': 'General Chat', 'pota': 'POTA',
+            'sota': 'SOTA', 'field_day': 'Field Day',
+            'general_contest': 'General Contest',
+        }
+        return ActivityManager(self._make_session(),
+                               menu_labels.get(self._activity, 'General Chat'))
+
+    def _update_activity_status(self):
+        """Refresh the effective activity label in the station bar."""
+        if self._activity_status_var is None:
+            return
+        if not LOG_AVAILABLE:
+            self._activity_status_var.set('General Chat')
+            return
+        mgr = self._activity_mgr or self._make_activity_manager()
+        self._activity_status_var.set(mgr.effective_activity if mgr
+                                      else 'General Chat')
+        if self._log_manager:
+            self._log_manager._udp_session = self._make_session()
+
+    def _get_current_band(self) -> str:
+        if LOG_AVAILABLE and self._tci_frequency_hz > 0:
+            return freq_to_band(self._tci_frequency_hz / 1e6)
+        return ''
+
+    def _get_current_freq(self) -> float:
+        return self._tci_frequency_hz / 1e6 if self._tci_frequency_hz else 0.0
+
+    def _validate_park_ref(self, *_):
+        if not hasattr(self, '_pota_park_entry') or not LOG_AVAILABLE:
+            return
+        ok, _ = validate_park_list(self._pota_park_var.get())
+        color = ACCENT if ok else RED
+        self._pota_park_entry.configure(
+            highlightbackground=color, highlightthickness=1 if ok else 2)
+
+    def _on_decoded_message(self, text: str):
+        """Scan decoded text for callsigns and park refs; pre-fill log fields."""
+        if not LOG_AVAILABLE or not text:
+            return
+        own_cs = self._callsign.get().strip().upper()
+
+        calls = LogManager.detect_callsigns(text)
+        calls = [c for c in calls if c != own_cs]
+        if calls and self._log_call_var is not None:
+            self._log_call_var.set(calls[0])
+            self._detected_call = calls[0]
+
+        if self._activity in ('pota', 'sota'):
+            parks = LogManager.detect_parks(text)
+            if parks:
+                self._detected_park = parks[0]
+
+    def _pota_refresh_tree(self):
+        if self._pota_tree is None or not self._log_manager:
+            return
+        self._pota_tree.delete(*self._pota_tree.get_children())
+        for e in self._log_manager.entries:
+            if e.confirmed:
+                # Extra column: P2P park, S2S summit, or FD exchange
+                extra = e.sig_info or e.sota_ref or ''
+                self._pota_tree.insert('', tk.END, values=(
+                    e.call, e.time_on, e.band,
+                    e.rst_sent, e.rst_rcvd, extra, e.comment))
+        if self._pota_tree.get_children():
+            self._pota_tree.see(self._pota_tree.get_children()[-1])
+
+    def _pota_update_counter(self):
+        """Refresh the log panel header/counter after a QSO is logged."""
+        self._refresh_log_panel()
+
+    def _pota_delete_last(self):
+        if not self._log_manager:
+            return
+        if self._log_manager.delete_last():
+            self._pota_refresh_tree()
+            self._pota_update_counter()
+            self._setstatus("Last QSO deleted")
+
+    def _pota_spot(self):
+        self._setstatus("POTA spotting not yet implemented")
+
+    # ── Log contact dialogs ───────────────────────────────────────────────────
+
+    def _log_contact_general(self):
+        cs = self._validate_callsign()
+        if cs is None:
+            return
+        call = (self._log_call_var.get().strip().upper()
+                if self._log_call_var else '')
+        band = (self._log_band_var.get()
+                if self._log_band_var else self._get_current_band() or '20M')
+
+        win = tk.Toplevel(self)
+        win.title("Log QSO")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        fields = {}
+        for label, key, default, w in [
+            ('Call:',     'call',     call, 12),
+            ('Band:',     'band',     band,  6),
+            ('RST Sent:', 'rst_sent', '599', 5),
+            ('RST Rcvd:', 'rst_rcvd', '599', 5),
+            ('Name:',     'name',     '',   14),
+            ('Notes:',    'comment',  '',   30),
+        ]:
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=16, pady=3)
+            tk.Label(row, text=label, bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=10,
+                     anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=default)
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=w).pack(side=tk.LEFT)
+            fields[key] = var
+
+        def save():
+            call_val = fields['call'].get().strip().upper()
+            if not call_val:
+                return
+            date_str, time_str = LogManager.utc_now()
+            entry = LogEntry(
+                station_callsign = cs,
+                call             = call_val,
+                qso_date         = date_str,
+                time_on          = time_str,
+                band             = fields['band'].get().strip().upper(),
+                freq             = self._get_current_freq(),
+                rst_sent         = fields['rst_sent'].get().strip() or '599',
+                rst_rcvd         = fields['rst_rcvd'].get().strip() or '599',
+                name             = fields['name'].get().strip(),
+                comment          = fields['comment'].get().strip(),
+                my_gridsquare    = self._station_info.get('gridsquare', ''),
+                tx_pwr           = self._station_info.get('tx_power', ''),
+            )
+            self._log_manager.add_entry(entry)
+            self._pota_update_counter()
+            self._setstatus(f"Logged: {call_val}  {time_str}Z  "
+                            f"{entry.band}")
+            win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=10)
+        tk.Button(bf, text="Log", command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        win.bind('<Return>', lambda e: save())
+
+    def _quick_log_general(self):
+        """One-click log with current CALL, band, and default RSTs."""
+        cs = self._validate_callsign()
+        if cs is None:
+            return
+        call = (self._log_call_var.get().strip().upper()
+                if self._log_call_var else '')
+        if not call:
+            self._setstatus("Quick Log: enter a callsign first")
+            return
+        band     = (self._log_band_var.get()
+                    if self._log_band_var
+                    else self._get_current_band() or '20M')
+        date_str, time_str = LogManager.utc_now()
+        entry = LogEntry(
+            station_callsign = cs,
+            call             = call,
+            qso_date         = date_str,
+            time_on          = time_str,
+            band             = band,
+            freq             = self._get_current_freq(),
+            my_gridsquare    = self._station_info.get('gridsquare', ''),
+            tx_pwr           = self._station_info.get('tx_power', ''),
+        )
+        self._log_manager.add_entry(entry)
+        self._pota_update_counter()
+        if self._log_call_var:
+            self._log_call_var.set('')
+        self._setstatus(f"Quick Log: {call}  {time_str}Z  {band}")
+
+    def _log_contact_pota(self, edit_last: bool = False):
+        cs = self._validate_callsign()
+        if cs is None:
+            return
+
+        last   = (self._log_manager.entries[-1]
+                  if edit_last and self._log_manager.entries else None)
+        call   = (last.call      if last else
+                  self._detected_call or
+                  (self._log_call_var.get().strip().upper()
+                   if self._log_call_var else ''))
+        si     = self._station_info
+        parks  = si.get('my_parks', [])
+        park   = ', '.join(p.strip() for p in parks if p.strip())
+        state  = si.get('my_state', '')
+        grid   = si.get('gridsquare', '')
+        p2p    = last.sig_info if last else self._detected_park
+        band   = last.band if last else self._get_current_band() or '20M'
+
+        win = tk.Toplevel(self)
+        win.title("Edit QSO" if edit_last else "Log POTA Contact")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        fields = {}
+        for label, key, default, w in [
+            ('Call:',          'call',     call,  12),
+            ('Band:',          'band',     band,   6),
+            ('RST Sent:',      'rst_sent', getattr(last,'rst_sent','599'), 5),
+            ('RST Rcvd:',      'rst_rcvd', getattr(last,'rst_rcvd','599'), 5),
+            ('P2P Park(s):',   'sig_info', p2p,  22),
+            ('Notes:',         'comment',  getattr(last,'comment',''), 28),
+        ]:
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=16, pady=3)
+            tk.Label(row, text=label, bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=10, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=default)
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=w).pack(side=tk.LEFT)
+            fields[key] = var
+
+        def save():
+            call_val = fields['call'].get().strip().upper()
+            if not call_val:
+                return
+
+            # Validate MY park refs before logging
+            if not edit_last and LOG_AVAILABLE:
+                ok, complete = validate_park_list(park)
+                if not ok or not complete:
+                    messagebox.showwarning(
+                        "Invalid Park Reference",
+                        f"Park reference '{park}' is not valid.\n"
+                        "Format: XX-NNNNN  (e.g. US-1234 or K-12345)\n"
+                        "Multiple parks: US-1234, US-5678",
+                        parent=win)
+                    return
+
+            p2p_val = fields['sig_info'].get().strip().upper()
+
+            if edit_last and self._log_manager.entries:
+                self._log_manager.edit_last(
+                    call     = call_val,
+                    band     = fields['band'].get().strip().upper(),
+                    rst_sent = fields['rst_sent'].get().strip() or '599',
+                    rst_rcvd = fields['rst_rcvd'].get().strip() or '599',
+                    sig      = 'POTA' if p2p_val else '',
+                    sig_info = p2p_val,
+                    comment  = fields['comment'].get().strip(),
+                )
+            else:
+                date_str, time_str = LogManager.utc_now()
+                entry = LogEntry(
+                    station_callsign = cs,
+                    call             = call_val,
+                    qso_date         = date_str,
+                    time_on          = time_str,
+                    band             = fields['band'].get().strip().upper(),
+                    freq             = self._get_current_freq(),
+                    rst_sent         = fields['rst_sent'].get().strip() or '599',
+                    rst_rcvd         = fields['rst_rcvd'].get().strip() or '599',
+                    my_sig           = 'POTA',
+                    my_sig_info      = park,
+                    my_state         = state,
+                    sig              = 'POTA' if p2p_val else '',
+                    sig_info         = p2p_val,
+                    comment          = fields['comment'].get().strip(),
+                    my_gridsquare    = grid,
+                    tx_pwr           = self._station_info.get('tx_power', ''),
+                )
+                self._log_manager.add_entry(entry)
+
+            self._pota_refresh_tree()
+            self._pota_update_counter()
+            self._detected_call = ''
+            self._detected_park = ''
+            if self._log_call_var:
+                self._log_call_var.set('')
+            win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=10)
+        tk.Button(bf, text="Save" if edit_last else "Log",
+                  command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        win.bind('<Return>', lambda e: save())
+
+    def _log_contact_unified(self):
+        """Adaptive log dialog for SOTA, Field Day, and future activities."""
+        cs = self._validate_callsign()
+        if cs is None:
+            return
+        call = self._detected_call or (
+            self._log_call_var.get().strip().upper()
+            if self._log_call_var else '')
+        band = self._get_current_band() or '20M'
+        si   = self._station_info
+
+        win = tk.Toplevel(self)
+        win.title("Log Contact")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        fields = {}
+        for label, key, default, w in [
+            ('Call:',     'call',     call, 12),
+            ('Band:',     'band',     band,  6),
+            ('RST Sent:', 'rst_sent', '599', 5),
+            ('RST Rcvd:', 'rst_rcvd', '599', 5),
+        ]:
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=16, pady=3)
+            tk.Label(row, text=label, bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=11, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=default)
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=w).pack(side=tk.LEFT)
+            fields[key] = var
+
+        # POTA P2P section
+        if self._activity == 'pota':
+            tk.Label(win, text="── POTA ──", bg=BG, fg='#446688',
+                     font=("Helvetica", 8)).pack(padx=16, anchor=tk.W)
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=16, pady=3)
+            tk.Label(row, text="P2P Park(s):", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=11, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=self._detected_park)
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=22).pack(side=tk.LEFT)
+            fields['sig_info'] = var
+
+        # SOTA S2S section
+        if self._activity in ('sota', 'pota'):
+            if self._activity == 'sota' or si.get('my_summit'):
+                tk.Label(win, text="── SOTA ──", bg=BG, fg='#446688',
+                         font=("Helvetica", 8)).pack(padx=16, anchor=tk.W)
+                row = tk.Frame(win, bg=BG)
+                row.pack(fill=tk.X, padx=16, pady=3)
+                tk.Label(row, text="S2S Summit:", bg=BG, fg=TEXT_FG,
+                         font=FONT_UI, width=11, anchor=tk.W).pack(
+                         side=tk.LEFT)
+                var = tk.StringVar()
+                tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                         font=FONT_MONO, insertbackground=GREEN,
+                         width=14).pack(side=tk.LEFT)
+                fields['sota_ref'] = var
+
+        # Field Day section
+        if self._activity == 'field_day':
+            tk.Label(win, text="── Field Day Exchange ──",
+                     bg=BG, fg='#446688',
+                     font=("Helvetica", 8)).pack(padx=16, anchor=tk.W)
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=16, pady=3)
+            tk.Label(row, text="Their exch:", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=11, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar()
+            tk.Label(row, text="class+sect e.g. 2A OH",
+                     bg=BG, fg='#444466', font=("Helvetica", 8)).pack(
+                     side=tk.RIGHT)
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=10).pack(side=tk.LEFT)
+            fields['comment'] = var
+
+        # Notes
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill=tk.X, padx=16, pady=3)
+        tk.Label(row, text="Notes:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI, width=11, anchor=tk.W).pack(side=tk.LEFT)
+        note_var = tk.StringVar()
+        tk.Entry(row, textvariable=note_var, bg=TEXT_BG, fg=GREEN,
+                 font=FONT_MONO, insertbackground=GREEN,
+                 width=28).pack(side=tk.LEFT)
+        if 'comment' not in fields:
+            fields['comment'] = note_var
+
+        def save():
+            call_val = fields['call'].get().strip().upper()
+            if not call_val:
+                return
+            date_str, time_str = LogManager.utc_now()
+            parks    = si.get('my_parks', [])
+            park_str = ', '.join(p.strip() for p in parks if p.strip())
+            entry = LogEntry(
+                station_callsign = cs,
+                call             = call_val,
+                qso_date         = date_str,
+                time_on          = time_str,
+                band             = fields['band'].get().strip().upper(),
+                freq             = self._get_current_freq(),
+                rst_sent         = fields['rst_sent'].get().strip() or '599',
+                rst_rcvd         = fields['rst_rcvd'].get().strip() or '599',
+                my_sig           = 'POTA' if park_str else '',
+                my_sig_info      = park_str,
+                my_state         = si.get('my_state', ''),
+                my_sota_ref      = si.get('my_summit', ''),
+                sig              = 'POTA' if fields.get('sig_info',
+                                   tk.StringVar()).get().strip() else '',
+                sig_info         = fields.get('sig_info',
+                                   tk.StringVar()).get().strip().upper(),
+                sota_ref         = fields.get('sota_ref',
+                                   tk.StringVar()).get().strip().upper(),
+                comment          = fields.get('comment',
+                                   tk.StringVar()).get().strip(),
+                my_gridsquare    = si.get('gridsquare', ''),
+                tx_pwr           = si.get('tx_power', ''),
+                activity         = {
+                    'pota': 'POTA', 'sota': 'SOTA',
+                    'field_day': 'Field Day',
+                }.get(self._activity, 'General Chat'),
+            )
+            self._log_manager.add_entry(entry)
+            self._pota_refresh_tree()
+            self._pota_update_counter()
+            self._detected_call = ''
+            self._detected_park = ''
+            if self._log_call_var:
+                self._log_call_var.set('')
+            win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=10)
+        tk.Button(bf, text="Log", command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        win.bind('<Return>', lambda e: save())
+
+    # ── ADIF export dialog ────────────────────────────────────────────────────
+
+    def _export_adif_dialog(self):
+        if not self._log_manager or self._log_manager.count() == 0:
+            messagebox.showinfo("Export ADIF", "No logged QSOs to export.")
+            return
+        if not LOG_AVAILABLE:
+            return
+
+        session  = self._make_session()
+        activity = self._make_activity_manager()
+
+        # Preview what will be exported
+        from datetime import datetime, timezone
+        date_str   = datetime.now(timezone.utc).strftime('%Y%m%d')
+        is_complex = (activity.is_pota_activating or
+                      activity.is_sota_activating or
+                      activity.is_field_day)
+
+        if is_complex:
+            # Show preview dialog before asking for folder
+            win = tk.Toplevel(self)
+            win.title("Export Logs")
+            win.configure(bg=BG)
+            win.resizable(False, False)
+            win.grab_set()
+
+            tk.Label(win, text="Exporting logs...",
+                     bg=BG, fg=AMBER,
+                     font=("Helvetica", 11, 'bold')).pack(
+                     padx=20, pady=(14, 4))
+
+            effective = activity.effective_activity
+            tk.Label(win, text=effective,
+                     bg=BG, fg=GREEN,
+                     font=("Helvetica", 10)).pack(padx=20, pady=(0, 8))
+
+            # Build file preview
+            cs = session.station_callsign
+            preview_lines = []
+            for park in session.my_parks:
+                fname = f'{cs}@{park}-{date_str}'
+                if session.my_state:
+                    fname += f'-{session.my_state}'
+                preview_lines.append(f'  {fname}.adi  (POTA — upload to pota.app)')
+            if activity.is_sota_activating:
+                summit_safe = session.my_summit.replace('/', '-')
+                preview_lines.append(
+                    f'  {cs}-SOTA-{summit_safe}-{date_str}.adi  '
+                    '(SOTA — upload to sota database)')
+            if activity.is_field_day:
+                preview_lines.append(f'  {cs}_FieldDay_{date_str}.adi')
+                preview_lines.append(f'  {cs}.log  (Cabrillo)')
+
+            if activity.is_combo:
+                tk.Label(win,
+                         text="Both files contain your full log.\nUpload each to its respective database.",
+                         bg=BG, fg='#666688',
+                         font=("Helvetica", 9)).pack(padx=20, pady=(0, 6))
+
+            preview = '\n'.join(preview_lines)
+            tk.Label(win, text=f"Files to create:\n{preview}",
+                     bg=BG, fg=TEXT_FG, font=("Courier", 9),
+                     justify=tk.LEFT).pack(padx=20, pady=(0, 10))
+
+            chosen_dir = tk.StringVar()
+
+            def do_export():
+                d = filedialog.askdirectory(
+                    title="Choose export folder",
+                    initialdir=self._logs_dir)
+                if not d:
+                    return
+                chosen_dir.set(d)
+                session.entries = self._log_manager.entries
+                files = export_all(session, activity, d)
+                if not files:
+                    messagebox.showinfo("Export", "No entries to export.")
+                    win.destroy()
+                    return
+                summary = '\n'.join(f'  {os.path.basename(p)}'
+                                    for p in files.values())
+                total = len(files)
+                win.destroy()
+                result_win = tk.Toplevel(self)
+                result_win.title("Export Complete")
+                result_win.configure(bg=BG)
+                result_win.resizable(False, False)
+                result_win.grab_set()
+                tk.Label(result_win,
+                         text=f"✓ Exported {total} file(s) to:\n{d}",
+                         bg=BG, fg=GREEN,
+                         font=("Helvetica", 10)).pack(padx=20, pady=(14,6))
+                tk.Label(result_win, text=summary,
+                         bg=BG, fg=TEXT_FG, font=("Courier", 9),
+                         justify=tk.LEFT).pack(padx=20, pady=(0, 8))
+                bf2 = tk.Frame(result_win, bg=BG)
+                bf2.pack(pady=8)
+                tk.Button(bf2, text="Open Folder",
+                          command=lambda: os.startfile(d),
+                          bg=ACCENT, fg=GREEN, font=FONT_UI,
+                          relief=tk.FLAT, padx=10).pack(
+                          side=tk.LEFT, padx=4)
+                tk.Button(bf2, text="Close",
+                          command=result_win.destroy,
+                          bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                          relief=tk.FLAT, padx=10).pack(
+                          side=tk.LEFT, padx=4)
+                self._setstatus(f"Exported {total} file(s) → {d}")
+
+            bf = tk.Frame(win, bg=BG)
+            bf.pack(pady=10)
+            tk.Button(bf, text="Export All", command=do_export,
+                      bg=ACCENT, fg=GREEN, font=FONT_UI,
+                      relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+            tk.Button(bf, text="Cancel", command=win.destroy,
+                      bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                      relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        else:
+            # General / hunting — single file save dialog
+            cs           = session.station_callsign
+            default_name = f"HAVEN-FSK_{cs}_{date_str}.adi"
+            path = filedialog.asksaveasfilename(
+                title="Export ADIF Log",
+                initialdir=self._logs_dir,
+                initialfile=default_name,
+                defaultextension='.adi',
+                filetypes=[('ADIF files', '*.adi *.adif'),
+                           ('All files', '*.*')],
+            )
+            if not path:
+                return
+            session.entries = self._log_manager.entries
+            files = export_all(session, activity, os.path.dirname(path))
+            if files:
+                fpath = next(iter(files.values()))
+                # Rename to user-chosen path
+                if fpath != path:
+                    try:
+                        import shutil
+                        shutil.move(fpath, path)
+                    except Exception:
+                        pass
+            n = self._log_manager.count()
+            self._setstatus(f"Exported {n} QSOs → {os.path.basename(path)}")
+            messagebox.showinfo("Export Complete",
+                                f"Exported {n} QSOs to:\n{path}")
+
+    # ── Session resume ────────────────────────────────────────────────────────
+
+    def _check_resume_session(self):
+        existing = LogManager.find_today_session(self._logs_dir)
+        if not existing:
+            self._log_manager.new_session()
+            return
+        n = self._log_manager.load_session(existing)
+        if n > 0:
+            resume = messagebox.askyesno(
+                "Resume Session",
+                f"Found today's log with {n} QSO{'s' if n != 1 else ''}.\n"
+                "Resume this session?")
+            if resume:
+                self._pota_refresh_tree()
+                self._pota_update_counter()
+                self._setstatus(f"Session resumed — {n} QSOs loaded")
+            else:
+                self._log_manager.entries.clear()
+                self._log_manager.new_session()
+        else:
+            self._log_manager.new_session()
+
     # ── Station Info ──────────────────────────────────────────────────────────
 
     def _show_station_info_dialog(self):
-        """Settings dialog for station information used in macro substitution."""
+        """Extended station information dialog — station, POTA, SOTA, Field Day, UDP."""
         win = tk.Toplevel(self)
         win.title("Station Information")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.grab_set()
 
-        tk.Label(win, text="Station Information",
-                 bg=BG, fg=AMBER,
-                 font=("Helvetica", 11, 'bold')).pack(padx=20, pady=(14, 2))
+        si = self._station_info
+        v  = {}   # all StringVars keyed by field name
+
+        def section(text):
+            tk.Label(win, text=text, bg=BG2, fg=AMBER,
+                     font=("Helvetica", 9, 'bold'),
+                     anchor=tk.W).pack(fill=tk.X, padx=0, pady=(6, 0))
+
+        def row(label, key, default='', width=22, hint=''):
+            f = tk.Frame(win, bg=BG)
+            f.pack(fill=tk.X, padx=20, pady=2)
+            tk.Label(f, text=f"{label}:", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=13, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=default)
+            tk.Entry(f, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=width).pack(side=tk.LEFT, padx=(0, 6))
+            if hint:
+                tk.Label(f, text=hint, bg=BG, fg='#444466',
+                         font=("Helvetica", 8)).pack(side=tk.LEFT)
+            v[key] = var
+
+        def optrow(label, key, options, default=''):
+            f = tk.Frame(win, bg=BG)
+            f.pack(fill=tk.X, padx=20, pady=2)
+            tk.Label(f, text=f"{label}:", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=13, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=default or options[0])
+            m = tk.OptionMenu(f, var, *options)
+            m.configure(bg=ACCENT, fg=GREEN, font=FONT_UI, relief=tk.FLAT,
+                        activebackground=ACCENT, activeforeground=GREEN,
+                        highlightthickness=0)
+            m['menu'].configure(bg=BG2, fg=GREEN,
+                                activebackground=ACCENT, activeforeground=GREEN)
+            m.pack(side=tk.LEFT)
+            v[key] = var
+
+        # ── STATION ───────────────────────────────────────────────────────────
+        section("  STATION")
+        row('Callsign',   'callsign',    self._callsign.get(), 10,
+            '← required before TX  (<CALL>)')
+        row('Grid Square','gridsquare',  si.get('gridsquare',''), 8,
+            'Maidenhead 4 or 6 char  (<GRID>)')
+        row('State/Prov', 'my_state',    si.get('my_state',''),   4,
+            '2-char code  (IN, OH…)')
+        row('TX Power',   'tx_power',    si.get('tx_power',''),   6,
+            'watts  (<PWR>)')
+        row('QTH',        'qth',         si.get('qth',''),        22,
+            'City, State  (<QTH>)')
+        row('County',     'county',      si.get('county',''),     18,
+            '<COUNTY>')
+
+        # ── POTA ──────────────────────────────────────────────────────────────
+        section("  POTA  (fill to activate, leave blank if hunting)")
+        parks_str = ', '.join(si.get('my_parks', []))
+        row('My Park(s)',  'my_parks',   parks_str, 26,
+            'e.g. US-1234  comma-sep for multi  (<PARK>)')
+
+        # ── SOTA ──────────────────────────────────────────────────────────────
+        section("  SOTA  (fill to activate, leave blank if chasing)")
+        row('My Summit',  'my_summit',  si.get('my_summit',''),  16,
+            'format: W9/IN-001')
+
+        # ── FIELD DAY ─────────────────────────────────────────────────────────
+        section("  FIELD DAY")
+        row('FD Class',   'fd_class',   si.get('fd_class',''),    4,
+            '1E, 2A, 3A…')
+        row('FD Section', 'fd_section', si.get('fd_section',''),  4,
+            'ARRL section, e.g. IN')
+        optrow('FD Power', 'fd_power',
+               ['LOW', 'HIGH', 'QRP', 'NATURAL'],
+               si.get('fd_power', 'LOW'))
+
+        # ── UDP BROADCAST ─────────────────────────────────────────────────────
+        section("  EXTERNAL LOGGER (UDP BROADCAST)")
+        f_udp = tk.Frame(win, bg=BG)
+        f_udp.pack(fill=tk.X, padx=20, pady=2)
+        udp_en_var = tk.BooleanVar(value=self._udp_enabled)
+        tk.Checkbutton(f_udp, text="Broadcast QSOs to external logger",
+                       variable=udp_en_var,
+                       bg=BG, fg=TEXT_FG, selectcolor=BG2,
+                       activebackground=BG,
+                       font=FONT_UI).pack(side=tk.LEFT)
+        v['udp_enabled'] = udp_en_var
+
+        f_udp2 = tk.Frame(win, bg=BG)
+        f_udp2.pack(fill=tk.X, padx=20, pady=2)
+        tk.Label(f_udp2, text="Address:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI, width=13, anchor=tk.W).pack(side=tk.LEFT)
+        udp_host_var = tk.StringVar(value=self._udp_host)
+        tk.Entry(f_udp2, textvariable=udp_host_var, bg=TEXT_BG, fg=GREEN,
+                 font=FONT_MONO, insertbackground=GREEN,
+                 width=15).pack(side=tk.LEFT, padx=(0,6))
+        tk.Label(f_udp2, text="Port:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI).pack(side=tk.LEFT)
+        udp_port_var = tk.StringVar(value=str(self._udp_port))
+        tk.Entry(f_udp2, textvariable=udp_port_var, bg=TEXT_BG, fg=GREEN,
+                 font=FONT_MONO, insertbackground=GREEN,
+                 width=6).pack(side=tk.LEFT, padx=(4,6))
+        v['udp_host'] = udp_host_var
+        v['udp_port'] = udp_port_var
+
+        optrow('Format', 'udp_format',
+               ['wsjtx', 'adif'], self._udp_format)
+
         tk.Label(win,
-                 text="These values are substituted into macros when transmitted.",
-                 bg=BG, fg='#666688',
-                 font=("Helvetica", 9)).pack(padx=20, pady=(0, 10))
+                 text="Compatible with N1MM, Log4OM, Ham Radio Deluxe.",
+                 bg=BG, fg='#444466',
+                 font=("Helvetica", 8)).pack(padx=20, pady=(0, 6),
+                                             anchor=tk.W)
 
-        fields = [
-            ('qth',    'QTH',            '<QTH>',    'City, State / Location'),
-            ('grid',   'Grid Square',    '<GRID>',   'Maidenhead grid (e.g. EN61)'),
-            ('pwr',    'Power',          '<PWR>',    'e.g. 100W'),
-            ('county', 'County',         '<COUNTY>', 'County name for activations'),
-            ('park',   'Park Reference', '<PARK>',   'POTA reference (e.g. K-1234)'),
-        ]
-
-        entry_vars = {}
-        for key, label, token, hint in fields:
-            row = tk.Frame(win, bg=BG)
-            row.pack(fill=tk.X, padx=20, pady=3)
-
-            tk.Label(row, text=f"{label}:", bg=BG, fg=TEXT_FG,
-                     font=FONT_UI, width=14, anchor=tk.W).pack(side=tk.LEFT)
-
-            var = tk.StringVar(value=self._station_info.get(key, ''))
-            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
-                     font=FONT_MONO, width=28,
-                     insertbackground=GREEN).pack(side=tk.LEFT, padx=(0, 8))
-
-            tk.Label(row, text=f"{token}  —  {hint}",
-                     bg=BG, fg='#444466',
-                     font=("Helvetica", 8)).pack(side=tk.LEFT)
-
-            entry_vars[key] = var
-
+        # ── Buttons ───────────────────────────────────────────────────────────
         def save():
-            for key, var in entry_vars.items():
-                self._station_info[key] = var.get().strip()
+            # Validate
+            test_si = {
+                'gridsquare': v['gridsquare'].get().strip(),
+                'my_parks': [p.strip() for p in
+                             v['my_parks'].get().split(',') if p.strip()],
+                'my_summit': v['my_summit'].get().strip(),
+                'fd_class': v['fd_class'].get().strip(),
+            }
+            if LOG_AVAILABLE:
+                errs = validate_station_info(test_si)
+                if errs:
+                    messagebox.showwarning("Invalid Input",
+                                           '\n'.join(errs), parent=win)
+                    return
+
+            # Persist callsign
+            new_cs = v['callsign'].get().strip().upper()
+            if new_cs:
+                self._callsign.set(new_cs)
+
+            # Update station_info
+            self._station_info.update({
+                'qth':        v['qth'].get().strip(),
+                'gridsquare': v['gridsquare'].get().strip().upper(),
+                'my_state':   v['my_state'].get().strip().upper(),
+                'tx_power':   v['tx_power'].get().strip(),
+                'county':     v['county'].get().strip(),
+                'my_parks':   [p.strip() for p in
+                               v['my_parks'].get().split(',') if p.strip()],
+                'my_summit':  v['my_summit'].get().strip().upper(),
+                'fd_class':   v['fd_class'].get().strip().upper(),
+                'fd_section': v['fd_section'].get().strip().upper(),
+                'fd_power':   v['fd_power'].get().strip().upper(),
+            })
+
+            # UDP settings
+            self._udp_enabled = bool(v['udp_enabled'].get())
+            self._udp_host    = v['udp_host'].get().strip()
+            try:
+                self._udp_port = int(v['udp_port'].get().strip())
+            except ValueError:
+                pass
+            self._udp_format  = v['udp_format'].get().strip()
+            if self._log_manager:
+                self._log_manager.udp_enabled = self._udp_enabled
+                self._log_manager.udp_host    = self._udp_host
+                self._log_manager.udp_port    = self._udp_port
+                self._log_manager.udp_format  = self._udp_format
+                self._log_manager._udp_session = self._make_session()
+
             self._save_config()
+            self._update_activity_status()
+            # Refresh active panel to reflect new parks/summit
+            self._set_activity(self._activity)
             win.destroy()
 
         bf = tk.Frame(win, bg=BG)
@@ -2181,6 +3803,80 @@ class App(tk.Tk):
         tk.Button(btn_frame, text="Cancel", command=win.destroy,
                   bg=BG2, fg=TEXT_FG, font=FONT_UI,
                   relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=6)
+
+    def _show_external_logger_dialog(self):
+        """Settings → External Logger — UDP broadcast to N1MM, Log4OM, etc."""
+        win = tk.Toplevel(self)
+        win.title("External Logger")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        tk.Label(win, text="UDP Broadcast to External Logger",
+                 bg=BG, fg=AMBER,
+                 font=("Helvetica", 11, 'bold')).pack(padx=20, pady=(14, 4))
+        tk.Label(win,
+                 text="Compatible with N1MM Logger, Log4OM, Ham Radio Deluxe.",
+                 bg=BG, fg='#666688',
+                 font=("Helvetica", 9)).pack(padx=20, pady=(0, 10))
+
+        en_var   = tk.BooleanVar(value=self._udp_enabled)
+        host_var = tk.StringVar(value=self._udp_host)
+        port_var = tk.StringVar(value=str(self._udp_port))
+        fmt_var  = tk.StringVar(value=self._udp_format)
+
+        f1 = tk.Frame(win, bg=BG)
+        f1.pack(fill=tk.X, padx=20, pady=3)
+        tk.Checkbutton(f1, text="Enable UDP broadcast",
+                       variable=en_var, bg=BG, fg=TEXT_FG,
+                       selectcolor=BG2, activebackground=BG,
+                       font=FONT_UI).pack(side=tk.LEFT)
+
+        for lbl, var, w in [('Address:', host_var, 16), ('Port:', port_var, 6)]:
+            f = tk.Frame(win, bg=BG)
+            f.pack(fill=tk.X, padx=20, pady=3)
+            tk.Label(f, text=lbl, bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=10, anchor=tk.W).pack(side=tk.LEFT)
+            tk.Entry(f, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, insertbackground=GREEN,
+                     width=w).pack(side=tk.LEFT)
+
+        f2 = tk.Frame(win, bg=BG)
+        f2.pack(fill=tk.X, padx=20, pady=3)
+        tk.Label(f2, text="Format:", bg=BG, fg=TEXT_FG,
+                 font=FONT_UI, width=10, anchor=tk.W).pack(side=tk.LEFT)
+        m = tk.OptionMenu(f2, fmt_var, 'wsjtx', 'adif')
+        m.configure(bg=ACCENT, fg=GREEN, font=FONT_UI, relief=tk.FLAT,
+                    activebackground=ACCENT, activeforeground=GREEN,
+                    highlightthickness=0)
+        m['menu'].configure(bg=BG2, fg=GREEN,
+                            activebackground=ACCENT, activeforeground=GREEN)
+        m.pack(side=tk.LEFT)
+
+        def save():
+            self._udp_enabled = bool(en_var.get())
+            self._udp_host    = host_var.get().strip()
+            try:
+                self._udp_port = int(port_var.get().strip())
+            except ValueError:
+                pass
+            self._udp_format  = fmt_var.get().strip()
+            if self._log_manager:
+                self._log_manager.udp_enabled = self._udp_enabled
+                self._log_manager.udp_host    = self._udp_host
+                self._log_manager.udp_port    = self._udp_port
+                self._log_manager.udp_format  = self._udp_format
+            self._save_config()
+            win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=10)
+        tk.Button(bf, text="Save", command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
 
     def _show_about(self):
         """About dialog."""
@@ -2322,13 +4018,21 @@ class App(tk.Tk):
             'out_device':  None,
             'rx_gain':     1.0,
             'tx_gain':     0.8,
-            'dcd_thresh':   12.0,
-            'show_snr':     False,
-            'arq_auto':     False,
-            'sample_rate':  48000,
-            'macros':       [list(m) for m in DEFAULT_MACROS],
-            'station_info': {'qth': '', 'grid': '', 'pwr': '',
-                             'county': '', 'park': ''},
+            'dcd_thresh':    12.0,
+            'show_snr':      False,
+            'arq_auto':      False,
+            'sample_rate':   48000,
+            'macros':        [list(m) for m in DEFAULT_MACROS],
+            'station_info':  {
+                'qth': '', 'gridsquare': '', 'my_state': '',
+                'tx_power': '', 'county': '',
+                'my_parks': [], 'my_summit': '',
+                'fd_class': '', 'fd_section': '', 'fd_power': 'LOW',
+            },
+            'udp_broadcast': False,
+            'udp_host':      '127.0.0.1',
+            'udp_port':      2333,
+            'udp_format':    'wsjtx',
         }
         try:
             if os.path.exists(CONFIG_FILE):
@@ -2351,9 +4055,13 @@ class App(tk.Tk):
                 'dcd_thresh':  DCD_THRESH,
                 'show_snr':    False,
                 'arq_auto':    False,
-                'sample_rate':  SAMPLE_RATE,
-                'macros':       self._macros,
-                'station_info': self._station_info,
+                'sample_rate':   SAMPLE_RATE,
+                'macros':        self._macros,   # list of dicts
+                'station_info':  self._station_info,
+                'udp_broadcast': self._udp_enabled,
+                'udp_host':      self._udp_host,
+                'udp_port':      self._udp_port,
+                'udp_format':    self._udp_format,
             }
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(config, f, indent=2)

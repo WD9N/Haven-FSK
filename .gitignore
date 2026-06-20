@@ -18,6 +18,15 @@ haven_fsk_config.json
 # Miscellaneous archives
 *.zip
 
+# Session logs and exported ADIF (operator data, not source)
+Logs/
+haven_fsk_log_*.json
+haven_fsk_session_*.json
+
+# Development planning documents (not part of the release)
+CLAUDE_CODE_*.md
+
 # OS artifacts
 Thumbs.db
 .DS_Store
+.claude/
