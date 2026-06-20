@@ -146,11 +146,24 @@ Compatible with any logger that accepts WSJT-X UDP broadcasts:
 - **Ham Radio Deluxe** — DM780 UDP logging listener
 - **Any ADIF-UDP compatible logger**
 
+### Contact Logging
+
+The recent log panel (below the chat window) contains inline entry fields:
+
+- **Call** — auto-filled when a callsign is detected in a received message, or click any recent QSO row to copy it
+- **Band** — auto-populated from TCI frequency; stays set between contacts
+- **RST sent / RST rcvd** — defaults to 599/599
+- **P2P Park(s)** — for park-to-park contacts; comma-separated for multi-park activators
+- **S2S Summit** — for summit-to-summit contacts
+- **Notes** — free text; used as the Field Day exchange field in FD mode
+
+Click **Log QSO** or press Enter in the Call field to log. The Call, P2P, Summit, and Notes fields clear after each log; Band and RST stay set for rapid logging.
+
+**Editing a logged QSO:** right-click any row in the recent QSO list to open the edit dialog. All fields are editable. Delete requires an explicit confirmation before removing the entry.
+
 ### ADIF Export
 
-Click **Export...** in the recent log panel, or use **Activity → POTA/SOTA**
-context. The export dialog shows exactly which files will be created and
-where they will be saved before writing anything.
+Click **Export...** in the recent log panel header. For POTA/SOTA/Field Day activations, choose a folder and all required files are written automatically. For General Chat, choose a filename for a single ADIF file.
 
 | Activity        | File(s) created                              |
 |-----------------|----------------------------------------------|
@@ -162,10 +175,33 @@ where they will be saved before writing anything.
 
 ---
 
+## UI Layout
+
+From top to bottom:
+
+```
+1. Menu bar          — Settings | Activity
+2. Status toolbar    — DCD / TX / TCI LEDs, mode info, frequency (mousewheel to tune)
+3. Station bar       — Call, Park, Summit, FD class/section (inline editable)
+4. Device bar        — RX and TX audio device selection
+5. Waterfall         — scrolling spectrum display with bandwidth slider
+6. Chat log          — received messages
+7. Recent log panel  — last 8 QSOs + inline contact entry fields
+8. Macro buttons     — quick-send buttons with variable tags
+9. Message input     — free-text entry + Send
+10. Level meters     — RX and TX with gain faders
+11. Status bar
+```
+
+**LEDs:** DCD (green = signal present), TX (red = transmitting), TCI (green = Thetis connected).
+
+---
+
 ## Macros
 
-Quick-send macro buttons appear above the recent log panel. Click any button
-to transmit the macro immediately. Right-click to edit.
+Quick-send macro buttons appear between the recent log panel and the message
+input window. Click any button to transmit immediately. Right-click any button
+to open the editor.
 
 ### Available tags
 
@@ -248,16 +284,22 @@ progresses.
 
 ### Changelog
 
-**0.1.1-alpha**
-- Inline station info bar: Call, Park, Summit, FD class/section editable directly in toolbar
-- Activity-aware logging: POTA activation/hunting, SOTA activation/chasing, Field Day, General Chat auto-detected from station bar fields
-- ADIF export: per-park POTA files, SOTA file with MY\_SOTA\_REF, Field Day ADIF + Cabrillo
-- Multi-park activation support with per-park ADIF files
-- P2P and S2S contact logging with correct ADIF fields
-- Macro system with 17 variable tags, live preview, per-category tag insertion
-- Recent QSO panel with activity-adaptive display and dupe detection (Field Day)
-- UDP broadcast to external loggers (N1MM, Log4OM, Ham Radio Deluxe)
-- Mousewheel VFO tuning on frequency display (per-digit, 1 Hz resolution)
+**0.1.1-alpha** *(current)*
+- Inline station info bar: Call, Park, Summit, FD class/section editable directly in toolbar — no dialog to open
+- Activity auto-detection: POTA/SOTA/Field Day inferred from station bar fields
+- ADIF export: per-park POTA files (one per park), SOTA with MY\_SOTA\_REF, Field Day ADIF + Cabrillo
+- Multi-park activation (two-fer/three-fer): comma-separated park entry, one file per park exported
+- P2P and S2S contact logging with correct ADIF fields (SIG\_INFO, SOTA\_REF)
+- Inline contact entry fields in log panel — Call, Band, RST, P2P Park, S2S Summit, Notes, Log QSO button
+- Right-click any logged QSO to open edit dialog with all fields; Delete requires confirmation
+- Macro system: 17 variable tags, live preview in editor, per-category tag-insertion buttons
+- Recent QSO panel: adaptive header and Info column per activity; dupe detection for Field Day
+- UDP broadcast to external loggers via Settings → External Logger (WSJT-X format or plain ADIF)
+- Mousewheel VFO tuning on frequency display — per-digit, 1 Hz resolution
+- Session log saved to `Logs/` subfolder; resume session on restart
+- Performance: waterfall rate-limited to 10 fps; single master UI tick loop; treeview incremental update; all dialogs use transient() instead of grab_set() for responsive click handling
+- TX LED is red during transmission
+- Fixed: export dialog no longer freezes on Windows; launcher bat file uses relative paths; macros positioned between log panel and message input
 
 **0.1.0-alpha**
 - Initial release for FCC Part 97 disclosure

@@ -418,7 +418,7 @@ No proprietary hardware or software is required.
 
 | Version     | Date     | Changes                                         |
 |-------------|----------|-------------------------------------------------|
-| 0.1.1-alpha | Jun 2026 | Software: logging, POTA/SOTA/FD activity, macros, UDP broadcast |
+| 0.1.1-alpha | Jun 2026 | Software: inline station bar, POTA/SOTA/FD logging, ADIF export, macro tags, UDP broadcast, performance optimisations |
 | 0.1.0-alpha | Jun 2026 | Initial specification, pre-release alpha        |
 
 ---
