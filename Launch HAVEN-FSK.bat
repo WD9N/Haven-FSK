@@ -1,7 +1,7 @@
 @echo off
 title HAVEN-FSK
 cd /d "%~dp0"
-"C:\Users\wd9nr\Downloads\Haven-FSK\venv\Scripts\python.exe" robustmfsk.py
+"%~dp0venv\Scripts\python.exe" "%~dp0haven_fsk.py"
 if errorlevel 1 (
     echo.
     echo HAVEN-FSK exited with an error.

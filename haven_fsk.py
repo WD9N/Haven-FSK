@@ -899,12 +899,12 @@ class App(tk.Tk):
 
     def _build_ui(self):
         self._make_menubar()
-        self._make_toolbar()    # row 1: LEDs + freq; row 2: devices (no Call)
-        self._make_station_bar()# row 3: Call, Park, Summit, FD
-        self._make_macro_bar()  # row 4: macro buttons
-        self._make_log_panel()  # row 5: recent QSOs
+        self._make_toolbar()     # row 1: LEDs + freq; row 2: devices (no Call)
+        self._make_station_bar() # row 3: Call, Park, Summit, FD
+        self._make_log_panel()   # row 4: recent QSOs
         self._make_waterfall()
         self._make_chat()
+        self._make_macro_bar()   # between chat and message input
         self._make_input()
         self._make_levels()
         self._make_statusbar()
@@ -3374,118 +3374,38 @@ class App(tk.Tk):
         if not LOG_AVAILABLE:
             return
 
+        from datetime import datetime, timezone
         session  = self._make_session()
         activity = self._make_activity_manager()
+        session.entries = self._log_manager.entries
+        date_str = datetime.now(timezone.utc).strftime('%Y%m%d')
+        cs       = session.station_callsign
 
-        # Preview what will be exported
-        from datetime import datetime, timezone
-        date_str   = datetime.now(timezone.utc).strftime('%Y%m%d')
-        is_complex = (activity.is_pota_activating or
-                      activity.is_sota_activating or
-                      activity.is_field_day)
-
-        if is_complex:
-            # Show preview dialog before asking for folder
-            win = tk.Toplevel(self)
-            win.title("Export Logs")
-            win.configure(bg=BG)
-            win.resizable(False, False)
-            win.grab_set()
-
-            tk.Label(win, text="Exporting logs...",
-                     bg=BG, fg=AMBER,
-                     font=("Helvetica", 11, 'bold')).pack(
-                     padx=20, pady=(14, 4))
-
-            effective = activity.effective_activity
-            tk.Label(win, text=effective,
-                     bg=BG, fg=GREEN,
-                     font=("Helvetica", 10)).pack(padx=20, pady=(0, 8))
-
-            # Build file preview
-            cs = session.station_callsign
-            preview_lines = []
-            for park in session.my_parks:
-                fname = f'{cs}@{park}-{date_str}'
-                if session.my_state:
-                    fname += f'-{session.my_state}'
-                preview_lines.append(f'  {fname}.adi  (POTA — upload to pota.app)')
-            if activity.is_sota_activating:
-                summit_safe = session.my_summit.replace('/', '-')
-                preview_lines.append(
-                    f'  {cs}-SOTA-{summit_safe}-{date_str}.adi  '
-                    '(SOTA — upload to sota database)')
-            if activity.is_field_day:
-                preview_lines.append(f'  {cs}_FieldDay_{date_str}.adi')
-                preview_lines.append(f'  {cs}.log  (Cabrillo)')
-
-            if activity.is_combo:
-                tk.Label(win,
-                         text="Both files contain your full log.\nUpload each to its respective database.",
-                         bg=BG, fg='#666688',
-                         font=("Helvetica", 9)).pack(padx=20, pady=(0, 6))
-
-            preview = '\n'.join(preview_lines)
-            tk.Label(win, text=f"Files to create:\n{preview}",
-                     bg=BG, fg=TEXT_FG, font=("Courier", 9),
-                     justify=tk.LEFT).pack(padx=20, pady=(0, 10))
-
-            chosen_dir = tk.StringVar()
-
-            def do_export():
-                d = filedialog.askdirectory(
-                    title="Choose export folder",
-                    initialdir=self._logs_dir)
-                if not d:
-                    return
-                chosen_dir.set(d)
-                session.entries = self._log_manager.entries
-                files = export_all(session, activity, d)
-                if not files:
-                    messagebox.showinfo("Export", "No entries to export.")
-                    win.destroy()
-                    return
-                summary = '\n'.join(f'  {os.path.basename(p)}'
-                                    for p in files.values())
-                total = len(files)
-                win.destroy()
-                result_win = tk.Toplevel(self)
-                result_win.title("Export Complete")
-                result_win.configure(bg=BG)
-                result_win.resizable(False, False)
-                result_win.grab_set()
-                tk.Label(result_win,
-                         text=f"✓ Exported {total} file(s) to:\n{d}",
-                         bg=BG, fg=GREEN,
-                         font=("Helvetica", 10)).pack(padx=20, pady=(14,6))
-                tk.Label(result_win, text=summary,
-                         bg=BG, fg=TEXT_FG, font=("Courier", 9),
-                         justify=tk.LEFT).pack(padx=20, pady=(0, 8))
-                bf2 = tk.Frame(result_win, bg=BG)
-                bf2.pack(pady=8)
-                tk.Button(bf2, text="Open Folder",
-                          command=lambda: os.startfile(d),
-                          bg=ACCENT, fg=GREEN, font=FONT_UI,
-                          relief=tk.FLAT, padx=10).pack(
-                          side=tk.LEFT, padx=4)
-                tk.Button(bf2, text="Close",
-                          command=result_win.destroy,
-                          bg=BG2, fg=TEXT_FG, font=FONT_UI,
-                          relief=tk.FLAT, padx=10).pack(
-                          side=tk.LEFT, padx=4)
-                self._setstatus(f"Exported {total} file(s) → {d}")
-
-            bf = tk.Frame(win, bg=BG)
-            bf.pack(pady=10)
-            tk.Button(bf, text="Export All", command=do_export,
-                      bg=ACCENT, fg=GREEN, font=FONT_UI,
-                      relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
-            tk.Button(bf, text="Cancel", command=win.destroy,
-                      bg=BG2, fg=TEXT_FG, font=FONT_UI,
-                      relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        if activity.is_pota_activating or activity.is_sota_activating \
+                or activity.is_field_day:
+            # Multiple files — ask for a folder, write everything, report
+            export_dir = filedialog.askdirectory(
+                title="Choose folder for ADIF export",
+                initialdir=self._logs_dir)
+            if not export_dir:
+                return
+            try:
+                files = export_all(session, activity, export_dir)
+            except Exception as e:
+                messagebox.showerror("Export Failed", str(e))
+                return
+            if not files:
+                messagebox.showinfo("Export ADIF", "No entries to export.")
+                return
+            summary = '\n'.join(f'  {os.path.basename(p)}'
+                                for p in files.values())
+            total = sum(1 for _ in files)
+            self._setstatus(f"Exported {total} file(s) → {export_dir}")
+            messagebox.showinfo(
+                "Export Complete",
+                f"Exported {total} file(s) to:\n{export_dir}\n\n{summary}")
         else:
-            # General / hunting — single file save dialog
-            cs           = session.station_callsign
+            # General / hunting — single ADIF file
             default_name = f"HAVEN-FSK_{cs}_{date_str}.adi"
             path = filedialog.asksaveasfilename(
                 title="Export ADIF Log",
@@ -3497,18 +3417,11 @@ class App(tk.Tk):
             )
             if not path:
                 return
-            session.entries = self._log_manager.entries
-            files = export_all(session, activity, os.path.dirname(path))
-            if files:
-                fpath = next(iter(files.values()))
-                # Rename to user-chosen path
-                if fpath != path:
-                    try:
-                        import shutil
-                        shutil.move(fpath, path)
-                    except Exception:
-                        pass
-            n = self._log_manager.count()
+            try:
+                n = self._log_manager.export_adif(path)
+            except Exception as e:
+                messagebox.showerror("Export Failed", str(e))
+                return
             self._setstatus(f"Exported {n} QSOs → {os.path.basename(path)}")
             messagebox.showinfo("Export Complete",
                                 f"Exported {n} QSOs to:\n{path}")
