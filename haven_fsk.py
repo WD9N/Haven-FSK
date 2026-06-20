@@ -218,6 +218,15 @@ TX_DELAY_MAX = 1800
 WATERFALL_HZ = 4000   # Nyquist limit at 8000Hz sample rate
 WATERFALL_ROWS = 80
 
+DEFAULT_MACROS = [
+    ["CQ",   "CQ CQ CQ DE <CALL> <CALL> HAVEN-FSK PSE K"],
+    ["QRZ?", "QRZ? DE <CALL>"],
+    ["73",   "73 DE <CALL> SK"],
+    ["MSG4", ""],
+    ["MSG5", ""],
+    ["MSG6", ""],
+]
+
 BG        = "#1a1a2e"
 BG2       = "#16213e"
 ACCENT    = "#0f3460"
@@ -729,6 +738,10 @@ class App(tk.Tk):
         self._led_tci       = None  # created in _make_toolbar
         self._init_tci()
 
+        # Macro buttons — loaded from config, fall back to defaults
+        self._macros = [list(m) for m in
+                        self._config.get('macros', DEFAULT_MACROS)]
+
         # Level meter state
         self._rx_gain      = 1.0     # RX input gain multiplier
         self._tx_gain      = 0.8     # TX output gain multiplier
@@ -767,6 +780,7 @@ class App(tk.Tk):
         self._make_toolbar()
         self._make_waterfall()
         self._make_chat()
+        self._make_macros()
         self._make_input()
         self._make_levels()
         self._make_statusbar()
@@ -908,6 +922,72 @@ class App(tk.Tk):
         self._chat.tag_config('sys',  foreground='#666688')
         self._chat.tag_config('warn', foreground=RED)
         self._chat.tag_config('ts',   foreground='#444466')
+
+    def _make_macros(self):
+        """Row of quick-send macro buttons. Right-click any button to edit."""
+        frame = tk.Frame(self, bg=BG2, pady=3)
+        frame.pack(fill=tk.X, padx=6, pady=(2, 0))
+
+        tk.Label(frame, text="Macros:", bg=BG2, fg=TEXT_FG,
+                 font=FONT_UI).pack(side=tk.LEFT, padx=(0, 6))
+
+        self._macro_buttons = []
+        for i, (label, text) in enumerate(self._macros):
+            btn = tk.Button(
+                frame,
+                text=label,
+                bg=ACCENT, fg=GREEN, font=FONT_UI,
+                relief=tk.FLAT, padx=10, pady=2,
+                command=lambda t=text: self._send_macro(t) if t else None,
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+            btn.bind('<Button-3>', lambda e, idx=i: self._edit_macro(idx))
+            self._macro_buttons.append(btn)
+
+        tk.Label(frame, text="(right-click to edit)",
+                 bg=BG2, fg='#444466', font=("Helvetica", 8)).pack(
+                 side=tk.LEFT, padx=(8, 0))
+
+    def _edit_macro(self, idx):
+        """Popup editor for a single macro button."""
+        label, text = self._macros[idx]
+        win = tk.Toplevel(self)
+        win.title(f"Edit Macro {idx + 1}")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        tk.Label(win, text="Button label:", bg=BG,
+                 fg=TEXT_FG, font=FONT_UI).pack(padx=16, pady=(12, 2), anchor=tk.W)
+        lbl_var = tk.StringVar(value=label)
+        tk.Entry(win, textvariable=lbl_var, bg=TEXT_BG, fg=GREEN,
+                 font=FONT_MONO, width=14).pack(padx=16, fill=tk.X)
+
+        tk.Label(win, text="Message  (<CALL> = your callsign):",
+                 bg=BG, fg=TEXT_FG, font=FONT_UI).pack(padx=16, pady=(8, 2), anchor=tk.W)
+        txt_var = tk.StringVar(value=text)
+        tk.Entry(win, textvariable=txt_var, bg=TEXT_BG, fg=GREEN,
+                 font=FONT_MONO, width=52).pack(padx=16, fill=tk.X)
+
+        def save():
+            new_label = lbl_var.get().strip() or f"MSG{idx + 1}"
+            new_text  = txt_var.get().strip()
+            self._macros[idx] = [new_label, new_text]
+            self._macro_buttons[idx].configure(
+                text=new_label,
+                command=lambda t=new_text: self._send_macro(t) if t else None,
+            )
+            self._save_config()
+            win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=10)
+        tk.Button(bf, text="Save", command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=4)
 
     def _make_input(self):
         f = tk.Frame(self, bg=BG, pady=4)
@@ -2111,6 +2191,7 @@ class App(tk.Tk):
             'show_snr':    False,
             'arq_auto':    False,
             'sample_rate': 48000,
+            'macros':      [list(m) for m in DEFAULT_MACROS],
         }
         try:
             if os.path.exists(CONFIG_FILE):
@@ -2134,6 +2215,7 @@ class App(tk.Tk):
                 'show_snr':    False,
                 'arq_auto':    False,
                 'sample_rate': SAMPLE_RATE,
+                'macros':      self._macros,
             }
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(config, f, indent=2)
