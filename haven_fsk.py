@@ -742,7 +742,7 @@ class LED(tk.Canvas):
     COLOURS = {
         'clear': ('#00aa55', '#00ff88'),
         'busy':  ('#aa2200', '#ff4444'),
-        'tx':    ('#aa7700', '#ffaa00'),
+        'tx':    ('#aa0000', '#ff2222'),
         'idle':  ('#1a1a1a', '#333333'),
     }
     def __init__(self, parent, size=16):
