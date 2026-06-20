@@ -7,7 +7,7 @@ Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~62 bps**
 
 ## What is HAVEN-FSK?
 
-HAVEN-FSK is a new HF digital mode for free-text conversational communication.
+HAVEN-FSK is an HF digital mode for free-text conversational communication.
 It is designed to fill the gap between PSK31 (fast but fragile) and FT8 
 (robust but rigid) — delivering real conversation at ~40 WPM with LDPC 
 forward error correction.
