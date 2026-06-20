@@ -738,6 +738,15 @@ class App(tk.Tk):
         self._led_tci       = None  # created in _make_toolbar
         self._init_tci()
 
+        # Station information — used for macro variable substitution
+        self._station_info = self._config.get('station_info', {
+            'qth':    '',
+            'grid':   '',
+            'pwr':    '',
+            'county': '',
+            'park':   '',
+        })
+
         # Macro buttons — loaded from config, fall back to defaults
         self._macros = [list(m) for m in
                         self._config.get('macros', DEFAULT_MACROS)]
@@ -798,6 +807,9 @@ class App(tk.Tk):
                                 activebackground=ACCENT,
                                 activeforeground=GREEN)
         menubar.add_cascade(label="Settings", menu=settings_menu)
+        settings_menu.add_command(label="Station Info...",
+                                  command=self._show_station_info_dialog)
+        settings_menu.add_separator()
         settings_menu.add_command(label="Audio Devices...",
                                   command=self._show_devices)
         settings_menu.add_command(label="Sample Rate...",
@@ -1718,6 +1730,22 @@ class App(tk.Tk):
         threading.Thread(target=self._tx_worker,
                          args=(msg,), daemon=True).start()
 
+    def _expand_macro_vars(self, text: str, cs: str) -> str:
+        """Replace all <VARIABLE> tokens with current station values."""
+        si = self._station_info
+        subs = {
+            'CALL':   cs,
+            'QTH':    si.get('qth',    ''),
+            'GRID':   si.get('grid',   ''),
+            'PWR':    si.get('pwr',    ''),
+            'COUNTY': si.get('county', ''),
+            'PARK':   si.get('park',   ''),
+        }
+        for key, val in subs.items():
+            text = text.replace(f'<{key}>', val)
+            text = text.replace(f'<{key.lower()}>', val)
+        return text
+
     def _send_macro(self, text: str):
         """
         Send a macro message verbatim — no callsign modification.
@@ -1727,16 +1755,12 @@ class App(tk.Tk):
         if not text:
             return
 
-        # Still require callsign to be set — just don't modify the text
         cs = self._validate_callsign()
         if cs is None:
             return
 
-        # Substitute <CALL> variable if present in macro
-        msg = text.replace('<CALL>', cs)
-        msg = msg.replace('<call>', cs)
+        msg = self._expand_macro_vars(text, cs)
 
-        # Show in chat log
         self._log('tx', msg)
 
         threading.Thread(target=self._tx_worker,
@@ -2012,6 +2036,66 @@ class App(tk.Tk):
                 "No valid frame found — is this a HAVEN-FSK file?", 'warn'))
             self.after(0, lambda: self._setstatus("Decode: no frame found"))
 
+    # ── Station Info ──────────────────────────────────────────────────────────
+
+    def _show_station_info_dialog(self):
+        """Settings dialog for station information used in macro substitution."""
+        win = tk.Toplevel(self)
+        win.title("Station Information")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        tk.Label(win, text="Station Information",
+                 bg=BG, fg=AMBER,
+                 font=("Helvetica", 11, 'bold')).pack(padx=20, pady=(14, 2))
+        tk.Label(win,
+                 text="These values are substituted into macros when transmitted.",
+                 bg=BG, fg='#666688',
+                 font=("Helvetica", 9)).pack(padx=20, pady=(0, 10))
+
+        fields = [
+            ('qth',    'QTH',            '<QTH>',    'City, State / Location'),
+            ('grid',   'Grid Square',    '<GRID>',   'Maidenhead grid (e.g. EN61)'),
+            ('pwr',    'Power',          '<PWR>',    'e.g. 100W'),
+            ('county', 'County',         '<COUNTY>', 'County name for activations'),
+            ('park',   'Park Reference', '<PARK>',   'POTA reference (e.g. K-1234)'),
+        ]
+
+        entry_vars = {}
+        for key, label, token, hint in fields:
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill=tk.X, padx=20, pady=3)
+
+            tk.Label(row, text=f"{label}:", bg=BG, fg=TEXT_FG,
+                     font=FONT_UI, width=14, anchor=tk.W).pack(side=tk.LEFT)
+
+            var = tk.StringVar(value=self._station_info.get(key, ''))
+            tk.Entry(row, textvariable=var, bg=TEXT_BG, fg=GREEN,
+                     font=FONT_MONO, width=28,
+                     insertbackground=GREEN).pack(side=tk.LEFT, padx=(0, 8))
+
+            tk.Label(row, text=f"{token}  —  {hint}",
+                     bg=BG, fg='#444466',
+                     font=("Helvetica", 8)).pack(side=tk.LEFT)
+
+            entry_vars[key] = var
+
+        def save():
+            for key, var in entry_vars.items():
+                self._station_info[key] = var.get().strip()
+            self._save_config()
+            win.destroy()
+
+        bf = tk.Frame(win, bg=BG)
+        bf.pack(pady=12)
+        tk.Button(bf, text="Save", command=save,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+        tk.Button(bf, text="Cancel", command=win.destroy,
+                  bg=BG2, fg=TEXT_FG, font=FONT_UI,
+                  relief=tk.FLAT, padx=14).pack(side=tk.LEFT, padx=6)
+
     # ── Devices ───────────────────────────────────────────────────────────────
 
     def _show_sample_rate_dialog(self):
@@ -2232,11 +2316,13 @@ class App(tk.Tk):
             'out_device':  None,
             'rx_gain':     1.0,
             'tx_gain':     0.8,
-            'dcd_thresh':  12.0,
-            'show_snr':    False,
-            'arq_auto':    False,
-            'sample_rate': 48000,
-            'macros':      [list(m) for m in DEFAULT_MACROS],
+            'dcd_thresh':   12.0,
+            'show_snr':     False,
+            'arq_auto':     False,
+            'sample_rate':  48000,
+            'macros':       [list(m) for m in DEFAULT_MACROS],
+            'station_info': {'qth': '', 'grid': '', 'pwr': '',
+                             'county': '', 'park': ''},
         }
         try:
             if os.path.exists(CONFIG_FILE):
@@ -2259,8 +2345,9 @@ class App(tk.Tk):
                 'dcd_thresh':  DCD_THRESH,
                 'show_snr':    False,
                 'arq_auto':    False,
-                'sample_rate': SAMPLE_RATE,
-                'macros':      self._macros,
+                'sample_rate':  SAMPLE_RATE,
+                'macros':       self._macros,
+                'station_info': self._station_info,
             }
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(config, f, indent=2)
