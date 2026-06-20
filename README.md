@@ -1,7 +1,7 @@
 # HAVEN-FSK
 
 **16-tone MFSK HF Digital Mode for Amateur Radio**  
-Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~62 bps**
+Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~63 bps**
 
 ---
 
@@ -27,7 +27,7 @@ PSK31, while matching Olivia's occupied bandwidth exactly.
 - **LDPC(192,96) FEC** — rate 1/2 forward error correction
 - **CRC-16** — frame integrity verification
 - **Free text** — type anything, no rigid exchange format
-- **Conversational pace** — ~40 WPM, suitable for ragchew and nets
+- **Conversational pace** — ~94 WPM, suitable for ragchew and nets
 - **Preamble sync** — 512ms preamble for reliable frame detection
 - **DCD + backoff** — collision avoidance on busy channels
 - **TCI support** — direct integration with Thetis/HPSDR
@@ -49,7 +49,10 @@ PSK31, while matching Olivia's occupied bandwidth exactly.
 1. Download all files to a folder
 2. Double-click install_and_run.py
 3. Follow the prompts
-4. Use Launch HAVEN-FSK.bat to start
+4. Use the launcher for your OS:
+   - Windows: double-click `Launch HAVEN-FSK.bat`
+   - Linux: run `./launch_haven_fsk.sh`
+   - macOS: double-click `launch_haven_fsk.command`
 ```
 
 **First time setup:**
