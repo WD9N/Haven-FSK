@@ -1527,10 +1527,20 @@ class App(tk.Tk):
         Handles three outcomes:
           - Clean decode with CRC pass  → green text
           - Decode with CRC fail         → text + warning marker
-          - No valid frame found         → signal received notification
+          - HAVEN-FSK preamble found but payload unreadable → log warning
+          - No preamble (FT8, voice, RTTY, noise) → silent status update only
         """
         dur = len(audio) / SAMPLE_RATE
         self.after(0, lambda: self._setstatus("Decoding..."))
+
+        # Check for HAVEN-FSK preamble before attempting full decode.
+        # If no preamble is found the signal is something else entirely
+        # (FT8, voice, RTTY, noise) — update status bar only, no chat log entry.
+        pos, score = find_preamble(audio)
+        if pos < 0:
+            self.after(0, lambda: self._setstatus(
+                f"RX: {dur:.1f}s signal — no HAVEN-FSK preamble"))
+            return
 
         if FEC_AVAILABLE:
             result = self._decode_with_fec(audio)
@@ -1538,11 +1548,11 @@ class App(tk.Tk):
             result = self._decode_raw(audio)
 
         if result is None:
-            # Preamble found but nothing decodable
+            # Preamble confirmed but payload couldn't be recovered
             self.after(0, lambda: self._log(
-                'sys', '  Signal received — unreadable'))
+                'sys', '  HAVEN-FSK preamble detected — payload unreadable'))
             self.after(0, lambda: self._setstatus(
-                f"RX: signal received, could not decode ({dur:.1f}s)"))
+                f"RX: preamble found, could not decode ({dur:.1f}s)"))
         else:
             text, crc_ok = result
             if crc_ok:
