@@ -1202,37 +1202,30 @@ class App(tk.Tk):
                  anchor=tk.W).pack(side=tk.LEFT)
 
     def _make_log_panel(self):
-        """Compact recent QSO panel — adapts header and info column to activity."""
-        outer = tk.Frame(self, bg=BG2, bd=1, relief=tk.SUNKEN)
-        outer.pack(fill=tk.X, padx=4, pady=(2, 0))
+        """Recent QSO list + inline contact entry fields."""
+        outer = tk.LabelFrame(self, text=" Log ",
+                              bg=BG, fg=AMBER, font=FONT_UI,
+                              bd=1, relief=tk.GROOVE)
+        outer.pack(fill=tk.X, padx=6, pady=(2, 0))
 
-        hdr = tk.Frame(outer, bg=BG2)
+        # ── Header row ────────────────────────────────────────────────────────
+        hdr = tk.Frame(outer, bg=BG)
         hdr.pack(fill=tk.X, padx=4, pady=(2, 0))
         self._log_header_var = tk.StringVar(value='Recent QSOs')
         tk.Label(hdr, textvariable=self._log_header_var,
-                 bg=BG2, fg=AMBER,
+                 bg=BG, fg=AMBER,
                  font=("Helvetica", 9, 'bold'),
                  anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        # Log Contact + Delete Last buttons — compact, right-aligned
-        tk.Button(hdr, text="Log Contact",
-                  command=self._log_contact_from_panel,
-                  bg=ACCENT, fg=GREEN, font=("Helvetica", 8),
-                  relief=tk.FLAT, padx=6, pady=1).pack(side=tk.RIGHT, padx=2)
-        tk.Button(hdr, text="Del Last",
-                  command=self._log_delete_last,
-                  bg=BG2, fg=RED, font=("Helvetica", 8),
-                  relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
         tk.Button(hdr, text="Export...",
                   command=self._export_adif_dialog,
                   bg=BG2, fg=AMBER, font=("Helvetica", 8),
                   relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
+        tk.Button(hdr, text="Del Last",
+                  command=self._log_delete_last,
+                  bg=BG2, fg=RED, font=("Helvetica", 8),
+                  relief=tk.FLAT, padx=4, pady=1).pack(side=tk.RIGHT, padx=2)
 
-        cols = ('utc', 'call', 'band', 'rst', 'info')
-        self._log_tree = ttk.Treeview(
-            outer, columns=cols, show='headings',
-            height=4, selectmode='browse', style='Log.Treeview')
-
+        # ── Recent QSO treeview ───────────────────────────────────────────────
         style = ttk.Style()
         style.configure('Log.Treeview',
                         background=TEXT_BG, foreground=TEXT_FG,
@@ -1245,6 +1238,10 @@ class App(tk.Tk):
                   background=[('selected', ACCENT)],
                   foreground=[('selected', GREEN)])
 
+        cols = ('utc', 'call', 'band', 'rst', 'info')
+        self._log_tree = ttk.Treeview(
+            outer, columns=cols, show='headings',
+            height=4, selectmode='browse', style='Log.Treeview')
         for col, heading, width, stretch in [
             ('utc',  'UTC',  45,  False),
             ('call', 'Call', 90,  False),
@@ -1254,11 +1251,90 @@ class App(tk.Tk):
         ]:
             self._log_tree.heading(col, text=heading)
             self._log_tree.column(col, width=width, stretch=stretch, anchor=tk.W)
-
-        self._log_tree.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self._log_tree.pack(fill=tk.X, padx=4, pady=(0, 2))
         self._log_tree.bind('<<TreeviewSelect>>', self._on_log_entry_clicked)
 
+        # ── Inline contact entry ──────────────────────────────────────────────
+        sep = tk.Frame(outer, bg=ACCENT, height=1)
+        sep.pack(fill=tk.X, padx=4, pady=(2, 4))
+
+        def lbl(parent, text):
+            tk.Label(parent, text=text, bg=BG, fg=TEXT_FG,
+                     font=FONT_UI).pack(side=tk.LEFT, padx=(0, 2))
+
+        # Row 1: Call, Band, RST sent, RST rcvd
+        r1 = tk.Frame(outer, bg=BG)
+        r1.pack(fill=tk.X, padx=6, pady=(0, 3))
+
+        lbl(r1, "Call:")
+        self._log_call_var = tk.StringVar()
+        call_e = tk.Entry(r1, textvariable=self._log_call_var,
+                          width=10, font=FONT_MONO,
+                          bg=TEXT_BG, fg=GREEN, insertbackground=GREEN)
+        call_e.pack(side=tk.LEFT, padx=(0, 10))
+        call_e.bind('<Return>', lambda e: self._log_contact_inline())
+
+        lbl(r1, "Band:")
+        self._log_band_var = tk.StringVar(
+            value=self._get_current_band() or '20M')
+        band_opts = BAND_LIST if LOG_AVAILABLE else [
+            '160M','80M','60M','40M','30M','20M','17M','15M','12M','10M','6M']
+        bm = tk.OptionMenu(r1, self._log_band_var, *band_opts)
+        bm.configure(bg=ACCENT, fg=GREEN, font=FONT_UI, relief=tk.FLAT,
+                     activebackground=ACCENT, activeforeground=GREEN,
+                     highlightthickness=0)
+        bm['menu'].configure(bg=BG2, fg=GREEN,
+                             activebackground=ACCENT, activeforeground=GREEN)
+        bm.pack(side=tk.LEFT, padx=(0, 10))
+
+        lbl(r1, "RST↑:")
+        self._log_rst_s_var = tk.StringVar(value='599')
+        tk.Entry(r1, textvariable=self._log_rst_s_var,
+                 width=4, font=FONT_MONO,
+                 bg=TEXT_BG, fg=GREEN, insertbackground=GREEN
+                 ).pack(side=tk.LEFT, padx=(0, 6))
+
+        lbl(r1, "RST↓:")
+        self._log_rst_r_var = tk.StringVar(value='599')
+        tk.Entry(r1, textvariable=self._log_rst_r_var,
+                 width=4, font=FONT_MONO,
+                 bg=TEXT_BG, fg=GREEN, insertbackground=GREEN
+                 ).pack(side=tk.LEFT, padx=(0, 10))
+
+        # Row 2: P2P Park, S2S Summit, Notes
+        r2 = tk.Frame(outer, bg=BG)
+        r2.pack(fill=tk.X, padx=6, pady=(0, 3))
+
+        lbl(r2, "P2P Park:")
+        self._log_p2p_var = tk.StringVar()
+        tk.Entry(r2, textvariable=self._log_p2p_var,
+                 width=14, font=FONT_MONO,
+                 bg=TEXT_BG, fg=AMBER, insertbackground=AMBER
+                 ).pack(side=tk.LEFT, padx=(0, 10))
+
+        lbl(r2, "S2S Summit:")
+        self._log_s2s_var = tk.StringVar()
+        tk.Entry(r2, textvariable=self._log_s2s_var,
+                 width=12, font=FONT_MONO,
+                 bg=TEXT_BG, fg=AMBER, insertbackground=AMBER
+                 ).pack(side=tk.LEFT, padx=(0, 10))
+
+        lbl(r2, "Notes:")
+        self._log_notes_var = tk.StringVar()
+        tk.Entry(r2, textvariable=self._log_notes_var,
+                 font=FONT_MONO, bg=TEXT_BG, fg=GREEN,
+                 insertbackground=GREEN
+                 ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+        # Log QSO button — far right of row 1, spanning both rows visually
+        tk.Button(r1, text="  Log QSO  ",
+                  command=self._log_contact_inline,
+                  bg=ACCENT, fg=GREEN, font=FONT_UI,
+                  relief=tk.FLAT, padx=8, pady=3
+                  ).pack(side=tk.RIGHT, padx=(6, 0))
+
     def _on_log_entry_clicked(self, event=None):
+        """Clicking a recent QSO pre-fills the Call field."""
         sel = self._log_tree.selection()
         if not sel:
             return
@@ -1266,19 +1342,76 @@ class App(tk.Tk):
         if call and self._log_call_var is not None:
             self._log_call_var.set(str(call))
 
+    def _log_contact_inline(self):
+        """Log a contact from the inline entry fields — no dialog needed."""
+        cs = self._validate_callsign()
+        if cs is None:
+            return
+        call = self._log_call_var.get().strip().upper()
+        if not call:
+            self._setstatus("Enter a callsign before logging")
+            return
+
+        si     = self._station_info
+        parks  = si.get('my_parks', [])
+        park_str = ', '.join(p.strip() for p in parks if p.strip())
+        band   = self._log_band_var.get().strip().upper() or \
+                 self._get_current_band() or '20M'
+        p2p    = self._log_p2p_var.get().strip().upper()
+        s2s    = self._log_s2s_var.get().strip().upper()
+        notes  = self._log_notes_var.get().strip()
+
+        date_str, time_str = LogManager.utc_now() if LOG_AVAILABLE \
+            else (__import__('datetime').datetime.utcnow().strftime('%Y%m%d'),
+                  __import__('datetime').datetime.utcnow().strftime('%H%M'))
+
+        entry = LogEntry(
+            station_callsign = cs,
+            call             = call,
+            qso_date         = date_str,
+            time_on          = time_str,
+            band             = band,
+            freq             = self._get_current_freq(),
+            rst_sent         = self._log_rst_s_var.get().strip() or '599',
+            rst_rcvd         = self._log_rst_r_var.get().strip() or '599',
+            my_sig           = 'POTA' if park_str else '',
+            my_sig_info      = park_str,
+            my_state         = si.get('my_state', ''),
+            my_sota_ref      = si.get('my_summit', ''),
+            sig              = 'POTA' if p2p else '',
+            sig_info         = p2p,
+            sota_ref         = s2s,
+            comment          = notes,
+            my_gridsquare    = si.get('gridsquare', ''),
+            tx_pwr           = si.get('tx_power', ''),
+            activity         = {
+                'pota': 'POTA', 'sota': 'SOTA',
+                'field_day': 'Field Day',
+            }.get(self._activity, 'General Chat'),
+        ) if LOG_AVAILABLE else None
+
+        if entry and self._log_manager:
+            self._log_manager.add_entry(entry)
+            self._refresh_log_panel()
+            self._setstatus(
+                f"Logged: {call}  {time_str}Z  {band}"
+                + (f"  P2P {p2p}" if p2p else '')
+                + (f"  S2S {s2s}" if s2s else ''))
+            # Clear call and extra fields; keep RST and band for next QSO
+            self._log_call_var.set('')
+            self._log_p2p_var.set('')
+            self._log_s2s_var.set('')
+            self._log_notes_var.set('')
+            self._detected_call = ''
+            self._detected_park = ''
+
     def _log_contact_from_panel(self):
-        """Dispatch to the correct log contact dialog for the active activity."""
-        if self._activity == 'pota':
-            self._log_contact_pota()
-        elif self._activity in ('sota', 'field_day'):
-            self._log_contact_unified()
-        else:
-            self._log_contact_general()
+        """Fallback — dispatches to inline logger."""
+        self._log_contact_inline()
 
     def _log_delete_last(self):
         if self._log_manager and self._log_manager.delete_last():
             self._refresh_log_panel()
-            self._pota_update_counter()
             self._setstatus("Last QSO deleted")
 
     def _refresh_log_panel(self):
