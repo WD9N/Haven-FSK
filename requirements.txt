@@ -1,0 +1,6 @@
+numpy>=2.4
+scipy>=1.17
+sounddevice>=0.5
+matplotlib>=3.11
+ldpc>=2.4
+websocket-client>=1.9

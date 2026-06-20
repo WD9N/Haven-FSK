@@ -26,6 +26,11 @@ haven_fsk_session_*.json
 # Development planning documents (not part of the release)
 CLAUDE_CODE_*.md
 
+# Generated launcher — contains machine-specific paths
+Launch HAVEN-FSK.bat
+launch_haven_fsk.sh
+launch_haven_fsk.command
+
 # OS artifacts
 Thumbs.db
 .DS_Store
