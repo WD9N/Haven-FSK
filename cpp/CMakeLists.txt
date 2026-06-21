@@ -26,6 +26,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Multimedia
     MultimediaWidgets
     Charts
+    Sql
 )
 
 # Add cmake helpers
@@ -62,6 +63,8 @@ set(SOURCES
     src/ui/LogPanel.cpp
     src/ui/MacroPanel.cpp
     src/log/LogManager.cpp
+    src/log/AdifExporter.cpp
+    src/ui/ExportDialog.cpp
 )
 
 set(HEADERS
@@ -89,6 +92,8 @@ set(HEADERS
     src/ui/MacroPanel.h
     src/log/LogEntry.h
     src/log/LogManager.h
+    src/log/AdifExporter.h
+    src/ui/ExportDialog.h
 )
 
 # KissFFT — vendored, BSD-3-Clause license
@@ -116,6 +121,7 @@ target_link_libraries(HavenFSK PRIVATE
     Qt6::Multimedia
     Qt6::MultimediaWidgets
     Qt6::Charts
+    Qt6::Sql
     kissfft
 )
 

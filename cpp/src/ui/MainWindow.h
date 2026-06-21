@@ -23,6 +23,8 @@ class RadioInterface;
 class RxDisplay;
 class LogPanel;
 class MacroPanel;
+class LogManager;
+class ExportDialog;
 
 class MainWindow : public QMainWindow
 {
@@ -54,6 +56,7 @@ private slots:
     void onMacroTriggered(const QString& text, bool autoTx);
     void onContactLogged(const QVariantMap& fields);
     void onFieldDayToggled(bool enabled);
+    void onExport();
 
 private:
     void setupUi();
@@ -81,12 +84,14 @@ private:
 
     // ── Menu actions ──────────────────────────────────────────────────────
     QAction* m_settingsAction      {nullptr};
+    QAction* m_exportAction        {nullptr};
     QAction* m_connectRigAction    {nullptr};
     QAction* m_disconnectRigAction {nullptr};
     QAction* m_fdModeAction        {nullptr};
 
     // ── Backend objects ───────────────────────────────────────────────────
-    AudioEngine*           m_audio    {nullptr};
-    HavenFSK::DspPipeline* m_pipeline {nullptr};
-    RadioInterface*        m_radio    {nullptr};
+    AudioEngine*           m_audio      {nullptr};
+    HavenFSK::DspPipeline* m_pipeline  {nullptr};
+    RadioInterface*        m_radio      {nullptr};
+    LogManager*            m_logManager {nullptr};
 };

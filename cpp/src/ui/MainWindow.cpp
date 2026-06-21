@@ -4,6 +4,8 @@
 #include "RxDisplay.h"
 #include "LogPanel.h"
 #include "MacroPanel.h"
+#include "ExportDialog.h"
+#include "../log/LogManager.h"
 #include "../audio/AudioEngine.h"
 #include "../audio/AudioSettings.h"
 #include "../radio/RadioSettings.h"
@@ -34,8 +36,15 @@ MainWindow::MainWindow(QWidget* parent)
         .arg(HavenFSK::APP_VERSION));
     setMinimumSize(800, 620);
 
-    m_audio    = new AudioEngine(this);
-    m_pipeline = new HavenFSK::DspPipeline(this);
+    m_audio      = new AudioEngine(this);
+    m_pipeline   = new HavenFSK::DspPipeline(this);
+    m_logManager = new LogManager(this);
+    if (!m_logManager->open()) {
+        QMessageBox::warning(this, "Log Database",
+            "Could not open log database.\n"
+            "Contacts will not be saved this session.\n\n"
+            "Database path: " + m_logManager->databasePath());
+    }
 
     setupMenu();
     setupUi();
@@ -64,6 +73,9 @@ void MainWindow::setupMenu() {
     m_settingsAction = new QAction("&Settings...", this);
     m_settingsAction->setShortcut(Qt::CTRL | Qt::Key_Comma);
     fileMenu->addAction(m_settingsAction);
+    m_exportAction = new QAction("&Export Log...", this);
+    m_exportAction->setShortcut(Qt::CTRL | Qt::Key_E);
+    fileMenu->addAction(m_exportAction);
     fileMenu->addSeparator();
     auto* quitAction = new QAction("&Quit", this);
     quitAction->setShortcut(Qt::CTRL | Qt::Key_Q);
@@ -212,9 +224,11 @@ void MainWindow::setupUi() {
 }
 
 void MainWindow::setupConnections() {
-    // Settings
+    // Settings and export
     connect(m_settingsAction, &QAction::triggered,
             this, &MainWindow::onOpenSettings);
+    connect(m_exportAction, &QAction::triggered,
+            this, &MainWindow::onExport);
 
     // Radio menu
     connect(m_connectRigAction, &QAction::triggered,
@@ -495,9 +509,26 @@ void MainWindow::onMacroTriggered(const QString& text, bool autoTx) {
 }
 
 void MainWindow::onContactLogged(const QVariantMap& fields) {
-    qDebug() << "Contact logged:"
-             << fields["their_callsign"].toString()
-             << fields["time_utc"].toString();
+    if (m_logManager && m_logManager->isOpen()) {
+        if (!m_logManager->logContact(fields)) {
+            m_statusLabel->setText(
+                "Warning: contact may not have been saved");
+        } else {
+            m_statusLabel->setText(
+                QString("Logged: %1")
+                .arg(fields["their_callsign"].toString()));
+        }
+    }
+}
+
+void MainWindow::onExport() {
+    if (!m_logManager || !m_logManager->isOpen()) {
+        QMessageBox::warning(this, "Export",
+            "Log database is not available.");
+        return;
+    }
+    ExportDialog dlg(m_logManager, this);
+    dlg.exec();
 }
 
 void MainWindow::onFieldDayToggled(bool enabled) {

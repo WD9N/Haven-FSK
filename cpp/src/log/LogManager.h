@@ -1,22 +1,60 @@
 #pragma once
-#include "LogEntry.h"
 #include <QObject>
-#include <QVector>
+#include <QSqlDatabase>
+#include <QSqlRecord>
+#include <QVariantMap>
+#include <QList>
+#include <QString>
+#include <QDate>
+
+// LogManager — persistent QSO log using SQLite via Qt6::Sql.
+//
+// Database location:
+//   Windows: %APPDATA%\WD9N\HAVEN-FSK\haven_fsk_log.db
+//   Linux:   ~/.local/share/WD9N/HAVEN-FSK/haven_fsk_log.db
+//   macOS:   ~/Library/Application Support/WD9N/HAVEN-FSK/haven_fsk_log.db
+//
+// Schema: contacts table — one row per QSO, self-contained for export.
+// All station info fields are snapshotted at log time per ADR-046.
+//
+// Thread safety: main thread only.
+// Each QSO is written immediately when logContact() is called.
 
 class LogManager : public QObject
 {
     Q_OBJECT
 public:
-    explicit LogManager(QObject *parent = nullptr);
+    explicit LogManager(QObject* parent = nullptr);
+    ~LogManager() override;
 
-    void addEntry(const LogEntry& entry);
-    const QVector<LogEntry>& entries() const { return m_entries; }
-    bool saveToFile(const QString& path);
-    bool loadFromFile(const QString& path);
+    bool open();
+    void close();
+    bool isOpen() const;
+
+    bool logContact(const QVariantMap& fields);
+
+    QList<QVariantMap> contactsForDate(const QString& date) const;
+    QList<QVariantMap> contactsForDateAndPark(const QString& date,
+                                               const QString& myPotaRef) const;
+    QList<QVariantMap> contactsForDateAndSota(const QString& date,
+                                               const QString& mySotaRef) const;
+
+    QList<QString> datesWithContacts() const;
+    QStringList    potaRefsForDate(const QString& date) const;
+    QStringList    sotaRefsForDate(const QString& date) const;
+    int            contactCountForDate(const QString& date) const;
+
+    QString databasePath() const { return m_dbPath; }
 
 signals:
-    void entryAdded(const LogEntry& entry);
+    void contactSaved(const QVariantMap& fields);
+    void logError(const QString& message);
 
 private:
-    QVector<LogEntry> m_entries;
+    bool    createSchema();
+    QString buildDbPath() const;
+
+    QSqlDatabase m_db;
+    QString      m_dbPath;
+    bool         m_open {false};
 };
