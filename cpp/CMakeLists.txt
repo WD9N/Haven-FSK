@@ -67,6 +67,7 @@ set(HEADERS
     src/dsp/FEC.h
     src/dsp/Frame.h
     src/audio/AudioEngine.h
+    src/audio/AudioSettings.h
     src/radio/RadioInterface.h
     src/radio/TCIClient.h
     src/radio/HamlibClient.h

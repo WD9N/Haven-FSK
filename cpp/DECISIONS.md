@@ -274,3 +274,45 @@ risks designing it around assumptions that Phase 4 will invalidate.
 **Revisable:** A DspEngine class will likely be added in Phase 4 or Phase 5
 once the AudioEngine interface is fully implemented and the signal flow is
 clear.
+
+---
+
+## ADR-013 — Audio uses Int16 PCM internally, float32 at DSP boundary
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** QAudioSource and QAudioSink are configured for Int16 PCM.
+AudioEngine converts to/from float32 at the boundary before emitting
+rxDataReady and before writing TX samples.
+
+**Reasoning:** Qt6 Multimedia's platform backends (WASAPI on Windows,
+ALSA on Linux, CoreAudio on macOS) have the widest device compatibility
+with Int16 PCM. Some USB radio interfaces and virtual audio cables do
+not correctly negotiate Float32 format even when the Qt API accepts it.
+Int16 at 48000 Hz mono is universally supported. The conversion loss
+(~96 dB dynamic range from 16-bit) is far beyond what HF radio SNR
+requires. The DSP layer always sees float32 regardless.
+
+---
+
+## ADR-014 — Sample rate fixed at 48000 Hz, not user-configurable
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The sample rate is fixed at 48000 Hz and is not exposed
+as a user setting. AudioEngine always opens devices at 48000 Hz and
+reports an error if the device does not support it.
+
+**Reasoning:** The HAVEN-FSK symbol rate of 31.25 Hz requires that
+SAMPLE_RATE / SYMBOL_RATE be a whole number. Of the common audio rates,
+only 8000 Hz (256 SPS), 16000 Hz (512 SPS), and 48000 Hz (1536 SPS)
+satisfy this constraint. 8000 and 16000 Hz are not supported by HF radio
+USB interfaces and provide insufficient headroom above the tone range.
+48000 Hz is the universal standard for USB radio interfaces, virtual
+audio cables, and software-defined radio applications. Exposing a sample
+rate setting would offer options (e.g. 44100 Hz) that cannot work with
+this mode, causing operator confusion. Changing the sample rate would
+require publishing a new HAVEN-FSK specification with a new FCC emission
+designator — it is a protocol change, not a configuration change.
