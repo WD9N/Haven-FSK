@@ -31,6 +31,17 @@ Launch HAVEN-FSK.bat
 launch_haven_fsk.sh
 launch_haven_fsk.command
 
+# C++ build artifacts
+cpp/build/
+cpp/**/*.o
+cpp/**/*.obj
+*.exe
+*.dll
+*.pdb
+
+# Qt generated files
+cpp/**/*_autogen/
+
 # OS artifacts
 Thumbs.db
 .DS_Store
