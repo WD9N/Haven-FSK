@@ -50,6 +50,7 @@ set(SOURCES
     src/dsp/DCD.cpp
     src/dsp/FEC.cpp
     src/dsp/Frame.cpp
+    src/dsp/DspPipeline.cpp
     src/audio/AudioEngine.cpp
     src/radio/TCIClient.cpp
     src/radio/HamlibClient.cpp
@@ -66,6 +67,7 @@ set(HEADERS
     src/dsp/DCD.h
     src/dsp/FEC.h
     src/dsp/Frame.h
+    src/dsp/DspPipeline.h
     src/audio/AudioEngine.h
     src/audio/AudioSettings.h
     src/radio/RadioInterface.h
