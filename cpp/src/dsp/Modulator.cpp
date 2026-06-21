@@ -28,11 +28,11 @@ void Modulator::buildToneTable()
 
 void Modulator::buildRamps()
 {
-    for (int i = 0; i < RAMP_SAMPLES; ++i) {
-        m_rampUp[i]   = static_cast<float>(
-            std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
+    for (int i = 0; i < RAMP_SAMPLES; ++i)
+        m_rampUp[i] = static_cast<float>(std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
+    // m_rampUp must be fully populated before m_rampDown reads it
+    for (int i = 0; i < RAMP_SAMPLES; ++i)
         m_rampDown[i] = m_rampUp[RAMP_SAMPLES - 1 - i];
-    }
 }
 
 std::vector<int> Modulator::bytesToSymbols(const std::vector<uint8_t>& data) const

@@ -18,10 +18,11 @@ void Preamble::buildPreambleAudio()
     // Raised cosine ramps (same formula as Modulator)
     float rampUp[RAMP_SAMPLES];
     float rampDown[RAMP_SAMPLES];
-    for (int i = 0; i < RAMP_SAMPLES; ++i) {
-        rampUp[i]   = static_cast<float>(std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
+    for (int i = 0; i < RAMP_SAMPLES; ++i)
+        rampUp[i] = static_cast<float>(std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
+    // rampUp must be fully populated before rampDown reads it
+    for (int i = 0; i < RAMP_SAMPLES; ++i)
         rampDown[i] = rampUp[RAMP_SAMPLES - 1 - i];
-    }
 
     m_preambleAudio.reserve(PREAMBLE_LENGTH * SAMPLES_PER_SYMBOL);
 

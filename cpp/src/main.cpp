@@ -2,11 +2,15 @@
 #include <QMessageBox>
 #include "ui/MainWindow.h"
 #include "dsp/FecSelfTest.h"
+#include "dsp/FrameSelfTest.h"
 
 int main(int argc, char *argv[])
 {
 #ifdef QT_DEBUG
     if (!HavenFSK::runFecSelfTest()) {
+        return 1;
+    }
+    if (!HavenFSK::runFrameSelfTest()) {
         return 1;
     }
 #endif
