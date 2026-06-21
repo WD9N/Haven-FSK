@@ -316,3 +316,204 @@ rate setting would offer options (e.g. 44100 Hz) that cannot work with
 this mode, causing operator confusion. Changing the sample rate would
 require publishing a new HAVEN-FSK specification with a new FCC emission
 designator — it is a protocol change, not a configuration change.
+
+---
+
+## ADR-015 — Three-tier TX backoff replaces two-tier spec
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The TX backoff system uses three tiers based on operating
+context, replacing the two-tier CQ/other system in the original spec:
+
+- CQ transmissions (TX text contains "CQ", case-insensitive): 0ms — no hold.
+  The operator has already checked the frequency before calling CQ.
+- Activator mode (POTA or SOTA reference entered in Station Information):
+  0-50ms random. The activator is running the frequency and should respond
+  quickly. After all, it is their frequency.
+- All other transmissions: 50-300ms random. The 50ms floor is deliberate —
+  it guarantees a responding station always waits at least as long as an
+  activator's maximum delay, preventing responding stations from transmitting
+  simultaneously with the activator.
+
+**Reasoning:** The original spec's 1500ms maximum was too long for POTA/SOTA
+activator use. The randomized window prevents the synchronized-release problem
+where all stations hear DCD clear simultaneously and transmit at the same
+instant. The 50ms floor on standard transmissions ensures the activator always
+gets first access to the channel after a DCD holdoff.
+
+**DCD check always applies** regardless of tier. If the channel is busy,
+the software notifies the operator and does not transmit. The operator
+decides whether to retry.
+
+---
+
+## ADR-016 — Full RadioInterface defined now, partially implemented
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** RadioInterface is expanded to define the full rig control
+interface in Phase 5B, even though only PTT and frequency readback are
+implemented in Phase 5B. Frequency set, mode, and split are stubbed.
+
+**Full interface:** connect/disconnect/isConnected/rigName/setPTT/getFrequency/
+setFrequency/getMode/setMode/setSplit — all pure virtual.
+
+**Reasoning:** Operators should not need to switch between HAVEN-FSK and
+their SDR front end or logging software during a QSO. Full rig control
+from within HAVEN-FSK is a long-term goal. Defining the interface now
+prevents breaking changes to RadioInterface later when clients
+(RigctldClient, TCIClient, future HamlibClient) are already deployed.
+
+---
+
+## ADR-017 — RigctldClient uses rigctld TCP protocol
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** RigctldClient connects to a running rigctld instance over
+TCP. Default host:port is localhost:4532 (rigctld universal default).
+Host and port are user-configurable in Settings → Radio Control.
+
+**Reasoning:** rigctld covers essentially every radio made in the last
+30 years via the Hamlib library. Most operators running digital modes
+already have rigctld running since WSJT-X, fldigi, and JS8Call all
+support it. No Hamlib library dependency in the HAVEN-FSK build —
+rigctld handles the radio-specific protocol. This is the most universal
+radio control method available.
+
+**PTT:** `T 1\n` to key, `T 0\n` to unkey.
+**Frequency get:** `f\n` returns frequency in Hz as ASCII integer.
+**Frequency set:** `F {hz}\n`
+**Mode set:** `M {mode} {passband}\n`
+
+**HamlibClient** (direct Hamlib linking) is deferred to a future phase.
+
+---
+
+## ADR-018 — TCIClient uses TCI protocol 2.0 core commands
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** TCIClient connects via WebSocket to a TCI server (Thetis,
+ExpertSDR2/3, or any TCI-compatible SDR front end). Default host:port is
+localhost:50001 (standard Thetis default). Host and port are
+user-configurable in Settings → Radio Control.
+
+**Protocol version handling:** The server announces its version in the
+handshake. HAVEN-FSK parses and logs the version string for diagnostics
+but does not change behavior based on it. Core commands are identical
+across all TCI versions from 1.5 onwards.
+
+**Commands:** PTT on: `trx:0,true;` / PTT off: `trx:0,false;`
+Frequency readback: parse incoming `vfo:0,0,{hz};` messages.
+Handshake: wait for `ready;` before sending any commands.
+
+**Unknown server messages are silently ignored** per TCI specification.
+
+**Your Thetis HL2 setup uses port 40001** (non-default). Configure this
+in Settings → Radio Control → TCI Port.
+
+---
+
+## ADR-019 — Station Information displayed on main window
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** A non-editable Station Information display block appears
+permanently on the main window showing exactly what the macros will send.
+The operator edits values in Settings → Station Information.
+
+**Fields:** Callsign, grid square, active POTA references (up to 4),
+SOTA reference, Field Day class/section, operator name.
+
+**FCC compliance:** If callsign is empty, all TX is blocked with a clear
+warning. Transmitting without a callsign violates FCC Part 97.
+
+---
+
+## ADR-020 — Multiple POTA references supported (up to 4)
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Station Information supports up to four simultaneous POTA
+references for activators at park boundary overlaps. The `<myParks>` macro
+tag expands to all populated references space-separated.
+
+**Example:** K-1234 and K-5678 populated → `<myParks>` expands to `K-1234 K-5678`.
+
+**Reasoning:** Park overlaps are common in POTA, particularly where state
+parks, national forests, and county parks share boundaries. Four references
+covers all known real-world overlap scenarios.
+
+---
+
+## ADR-021 — Macro system with <TX> tag for auto-transmit
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Macros containing `<TX>` automatically transmit when clicked.
+Macros without `<TX>` expand into the TX input field for operator review.
+
+**Available macro tags (Phase 5C):** `<myCall>`, `<theirCall>`, `<myParks>`,
+`<mySOTA>`, `<myGrid>`, `<myName>`, `<myFD>`, `<TX>`.
+
+---
+
+## ADR-022 — Click-to-populate from RX window replaces auto-populate
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** `<theirCall>` and other log entry fields are populated by
+the operator clicking on structured data elements in the RX decoded message
+display. There is no automatic population from decoded messages.
+
+**Reasoning:** Auto-populating from the last decoded callsign creates a
+serious problem in pileup operation — an intruding station would
+automatically replace the callsign the operator is working.
+
+---
+
+## ADR-023 — RX display parsed for clickable structured data
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The RX decoded message display parses each message for
+structured data elements (callsigns, RST, POTA/SOTA refs, grid squares,
+Field Day exchange) and renders them as clickable items at display time.
+
+---
+
+## ADR-024 — PTT watchdog 120 seconds, operator notified on trip
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** PTTManager implements a 120-second TX watchdog timer
+(PTT_WATCHDOG_SEC from Constants.h). If TX remains active for 120 seconds
+continuously, the watchdog unkeys the radio and emits watchdogTripped().
+
+**Reasoning:** FCC Part 97 and good amateur practice require identifiable,
+non-continuous transmissions. 120 seconds covers any legitimate HAVEN-FSK
+frame (32-block maximum ≈ 50 seconds) while catching stuck-PTT conditions.
+
+---
+
+## ADR-025 — Logging RX side vs export side separated
+
+**Status:** Decided — details deferred
+**Date:** June 2026
+
+**Decision:** The RX-side logging design (click-to-populate, their parks,
+log entry fields) is designed and implemented independently of the log
+export format. Export format (ADIF, POTA CSV, SOTA CSV, Cabrillo) is
+discussed and implemented separately in the logging phase.

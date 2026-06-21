@@ -57,10 +57,15 @@ constexpr double DCD_FREQ_HIGH       = 1050.0;
 constexpr int    DCD_HOLDOFF_CHUNKS  = 4;
 
 // ── TX backoff ─────────────────────────────────────────────────
-constexpr int    BACKOFF_CQ_MIN_MS   = 50;
-constexpr int    BACKOFF_CQ_MAX_MS   = 100;
-constexpr int    BACKOFF_OTHER_MIN_MS = 200;
-constexpr int    BACKOFF_OTHER_MAX_MS = 1500;
+// Three-tier system — see DECISIONS.md ADR-015
+// CQ: no backoff — operator has checked frequency
+constexpr int BACKOFF_CQ_MS              = 0;
+// Activator (POTA/SOTA reference set): minimal backoff
+constexpr int BACKOFF_ACTIVATOR_MIN_MS   = 0;
+constexpr int BACKOFF_ACTIVATOR_MAX_MS   = 50;
+// Standard: floor prevents collision with activator
+constexpr int BACKOFF_STANDARD_MIN_MS    = 50;
+constexpr int BACKOFF_STANDARD_MAX_MS    = 300;
 
 // ── FFT parameters ─────────────────────────────────────────────
 // 8x zero-padding per spec §3.5

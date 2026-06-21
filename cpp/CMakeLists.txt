@@ -52,6 +52,7 @@ set(SOURCES
     src/dsp/Frame.cpp
     src/dsp/DspPipeline.cpp
     src/audio/AudioEngine.cpp
+    src/radio/RigctldClient.cpp
     src/radio/TCIClient.cpp
     src/radio/HamlibClient.cpp
     src/radio/PTTManager.cpp
@@ -71,9 +72,11 @@ set(HEADERS
     src/audio/AudioEngine.h
     src/audio/AudioSettings.h
     src/radio/RadioInterface.h
+    src/radio/RigctldClient.h
     src/radio/TCIClient.h
     src/radio/HamlibClient.h
     src/radio/PTTManager.h
+    src/radio/RadioSettings.h
     src/ui/MainWindow.h
     src/log/LogEntry.h
     src/log/LogManager.h
