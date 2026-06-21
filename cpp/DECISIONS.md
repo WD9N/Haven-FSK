@@ -517,3 +517,205 @@ frame (32-block maximum ≈ 50 seconds) while catching stuck-PTT conditions.
 log entry fields) is designed and implemented independently of the log
 export format. Export format (ADIF, POTA CSV, SOTA CSV, Cabrillo) is
 discussed and implemented separately in the logging phase.
+
+---
+
+## ADR-026 — Single export button, activity type auto-detected
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The log export UI presents a single Export button. The export
+engine examines station information and log entries to determine which
+export files to generate automatically.
+
+**Auto-detection logic:**
+- POTA refs in station info → one ADIF per park reference
+- SOTA ref in station info → one ADIF with MY_SOTA_REF
+- POTA + SOTA both present → POTA files each containing MY_SOTA_REF
+- No activity refs → general ADIF only
+- All cases → general ADIF always generated
+
+**Reasoning:** Operators should not need to decide which export format to
+use. The system knows what activity is in progress from the station info
+and generates exactly what is needed.
+
+---
+
+## ADR-027 — POTA export: one ADIF file per park reference
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** For POTA activations, the export engine generates one ADIF
+file per active park reference. Each file contains all QSOs with
+MY_SIG_INFO set to that park's reference.
+
+**Filename convention:** `{callsign}@{park-ref}-{YYYYMMDD}.adi`
+Example: `WD9N@K-1234-20260621.adi`
+
+**Required POTA ADIF fields per QSO:**
+- STATION_CALLSIGN, OPERATOR, CALL
+- QSO_DATE, TIME_ON, BAND, MODE, SUBMODE, FREQ
+- MY_SIG: POTA
+- MY_SIG_INFO: activator's park reference for this file
+- SIG: POTA (P2P contacts only)
+- SIG_INFO: their park reference(s) (P2P credit)
+
+**Reasoning:** POTA requires separate log files per park for multi-park
+activations. HAVEN-FSK eliminates the current manual edit-and-duplicate
+workflow by generating all files automatically.
+
+---
+
+## ADR-028 — SOTA export uses ADIF format, not CSV
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** SOTA log export uses ADIF format. SOTA's database accepts
+ADIF uploads. The SOTA CSV V2 format is not implemented.
+
+**SOTA ADIF fields:**
+- MY_SOTA_REF — activator's summit reference (e.g. W7W/SE-001)
+- SOTA_REF — contacted station's summit reference (S2S only)
+
+**Filename:** `{callsign}-{summit-ref-sanitized}-{YYYYMMDD}.adi`
+
+**Reasoning:** SOTA now accepts ADIF, making CSV unnecessary. Using ADIF
+for SOTA means the same export engine handles all activity types.
+
+---
+
+## ADR-029 — Combined POTA+SOTA handled in one export
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** When both POTA and SOTA references are present, the export
+engine generates POTA ADIF files each containing MY_SOTA_REF. No separate
+SOTA-only file is generated — the POTA files satisfy both programs when
+uploaded to both pota.app and sotadata.org.uk.
+
+---
+
+## ADR-030 — General ADIF always generated
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Every export operation generates a general ADIF file in
+addition to any activity-specific files. Contains all fields including
+activity-specific ones — programs that don't understand those fields
+ignore them.
+
+**Filename:** `{callsign}-{YYYYMMDD}.adi`
+
+**Purpose:** LoTW (via TQSL), QRZ logbook, eQSL, and any other logging
+service or application the operator uses.
+
+---
+
+## ADR-031 — LoTW upload handled by TQSL, not HAVEN-FSK
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** HAVEN-FSK generates a standard ADIF for LoTW use. The
+operator submits to LoTW by opening the ADIF in TQSL. HAVEN-FSK does
+not integrate with TQSL or the LoTW API.
+
+**Reasoning:** LoTW requires cryptographic signing using the operator's
+TQSL certificate. This is handled by the TQSL application, which every
+LoTW user already has installed. Integration would add significant
+complexity for no practical benefit.
+
+---
+
+## ADR-032 — Field Day export is general ADIF only, no Cabrillo
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** When Field Day class and section are present in station
+information, export generates a general ADIF only. No Cabrillo format
+is implemented.
+
+**Reasoning:** The ARRL has changed Field Day submission format
+requirements multiple times, breaking third-party software. Many Field
+Day operators already use dedicated contest logging software (N1MM+,
+N3FJP ACLog) that handles FD submission. HAVEN-FSK exports clean ADIF
+for import into FD logging software. FD class and section are captured
+in the log data model for completeness.
+
+---
+
+## ADR-033 — Log data model captures all fields for all export formats
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Every QSO record captures the complete set of fields needed
+for any export format.
+
+**QSO record fields:**
+
+Core: their_callsign, date_utc, time_utc, frequency_mhz, band, mode, submode
+
+Standard: rst_sent, rst_received, their_name, their_qth, their_grid, notes
+
+POTA: their_pota_refs (list, up to 4)
+SOTA: their_sota_ref
+Field Day: their_fd_class, their_fd_section
+
+Station info snapshot (copied at log time):
+my_callsign, my_grid, my_pota_refs, my_sota_ref, my_fd_class,
+my_fd_section, my_op_name
+
+---
+
+## ADR-034 — Click-to-populate their POTA parks adds all parks at once
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Clicking on a POTA park reference cluster in the RX display
+adds ALL references from that message to Their Parks simultaneously.
+
+**Reasoning:** FEC accuracy means decoded references can be trusted.
+Treating the park cluster as one clickable unit matches natural reading —
+"K-1234 K-5678" is one piece of information. Tag-based UI allows removal
+of individual incorrect references.
+
+---
+
+## ADR-035 — Station info snapshot copied to QSO at log time
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** When a QSO is logged, current station information is copied
+into the QSO record as a snapshot. The QSO does not reference station
+info dynamically.
+
+**Reasoning:** A rover activating multiple parks updates station info
+between parks. QSOs logged at K-1234 must export with MY_SIG_INFO:K-1234
+even after station info is updated to K-5678. The snapshot ensures each
+QSO accurately reflects the operating location at time of contact, which
+is a POTA requirement.
+
+---
+
+## ADR-036 — MODE field in ADIF export
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** ADIF exports use MODE:DIGITAL and SUBMODE:HAVEN-FSK.
+The mode string is a constant, not hard-coded in multiple places, so it
+can be updated easily when HAVEN-FSK is added to the ADIF specification
+as a recognized submode.
+
+**Reasoning:** HAVEN-FSK is a new mode not yet in the ADIF submode list.
+DIGITAL is the correct fallback. Once the mode gains adoption, a request
+to add it as a recognized ADIF submode is appropriate.
