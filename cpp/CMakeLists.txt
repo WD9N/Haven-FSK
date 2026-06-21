@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(HavenFSK
     VERSION 0.2.0
     DESCRIPTION "HAVEN-FSK — 16-tone MFSK HF Digital Mode"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # C++17 required
@@ -76,6 +76,9 @@ set(HEADERS
     src/log/LogManager.h
 )
 
+# KissFFT — vendored, BSD-3-Clause license
+add_subdirectory(src/third_party/kissfft)
+
 # Resources
 set(RESOURCES
     resources/haven_fsk.qrc
@@ -98,6 +101,7 @@ target_link_libraries(HavenFSK PRIVATE
     Qt6::Multimedia
     Qt6::MultimediaWidgets
     Qt6::Charts
+    kissfft
 )
 
 # Include directories

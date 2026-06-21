@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace HavenFSK {
 
@@ -59,6 +60,21 @@ constexpr int    BACKOFF_CQ_MIN_MS   = 50;
 constexpr int    BACKOFF_CQ_MAX_MS   = 100;
 constexpr int    BACKOFF_OTHER_MIN_MS = 200;
 constexpr int    BACKOFF_OTHER_MAX_MS = 1500;
+
+// ── FFT parameters ─────────────────────────────────────────────
+// 8x zero-padding per spec §3.5
+// FFT_SIZE = 1536 * 8 = 12288
+// Bin width = SAMPLE_RATE / FFT_SIZE = 48000 / 12288 ≈ 3.906 Hz/bin
+// Guard window ±3 bins = ±11.7 Hz — sufficient for HF drift tolerance
+constexpr int FFT_ZERO_PAD_FACTOR    = 8;
+constexpr int FFT_SIZE               = SAMPLES_PER_SYMBOL * FFT_ZERO_PAD_FACTOR;
+constexpr int FFT_GUARD_BINS         = 3;
+
+// ── Raised cosine shaping ──────────────────────────────────────
+// 10% of symbol duration, minimum 4 samples
+constexpr int RAMP_SAMPLES           = (SAMPLES_PER_SYMBOL / 10 < 4)
+                                       ? 4 : SAMPLES_PER_SYMBOL / 10;
+// = 153 at 48000 Hz
 
 // ── Audio ──────────────────────────────────────────────────────
 constexpr int    AUDIO_CHUNK_SAMPLES = 2048;
