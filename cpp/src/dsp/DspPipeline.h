@@ -1,6 +1,8 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <QMap>
+#include <QDateTime>
 #include <vector>
 #include <deque>
 #include <memory>
@@ -22,11 +24,22 @@ enum class RxState {
 
 // Result of a received message, emitted to the UI layer
 struct RxMessage {
-    QString text;       // decoded text
-    bool    crcOk;      // CRC verified
-    bool    converged;  // FEC converged
-    int     nBlocks;    // FEC blocks decoded
-    float   snr;        // estimated SNR in dB (from DCD)
+    QString text;            // decoded text
+    bool    crcOk;           // CRC verified
+    bool    converged;       // FEC converged
+    int     nBlocks;         // FEC blocks decoded
+    float   snr;             // estimated SNR in dB (from DCD)
+    int     fecIterations;   // actual BP iterations used
+    QString senderCallsign;  // callsign parsed from decoded text
+};
+
+// Per-station signal quality measurement stored in cache
+// after each successful decode. Used to generate RS reports.
+struct RxMeasurement {
+    float     snrDb;         // measured SNR from DCD band energy
+    int       fecIterations; // BP iterations — lower = cleaner signal
+    bool      converged;     // FEC converged within iteration limit
+    QDateTime timestamp;     // when this measurement was taken
 };
 
 class DspPipeline : public QObject
@@ -47,6 +60,23 @@ public:
     RxState rxState()       const { return m_rxState; }
     bool    dcdActive()     const { return m_dcdActive; }
     bool    isTransmitting() const { return m_transmitting; }
+
+    // ── RS measurement cache ──────────────────────────────────────────────
+    // Retrieve cached signal measurement for a specific callsign.
+    // Returns nullptr if no entry exists or entry has expired (>10 min).
+    const RxMeasurement* getRxMeasurement(const QString& callsign) const;
+
+    // Compute RS report string from a measurement.
+    // R: 1-5 from FEC convergence/iterations
+    // S: 1-9 from SNR dB
+    // Returns formatted string e.g. "57"
+    static QString computeRS(const RxMeasurement& m);
+
+    // Extract sender callsign from decoded message text.
+    // Looks for standard "THEIRCALL DE MYCALL" pattern.
+    // Returns empty string if not found.
+    static QString parseSenderCallsign(const QString& text,
+                                       const QString& myCallsign);
 
 public slots:
     // Connected to AudioEngine::rxDataReady
@@ -101,14 +131,18 @@ private:
     // Set to a safe maximum initially, refined after header decode
     int m_expectedSymbols = 0;
 
+    // ── RS measurement cache ──────────────────────────────────────────────
+    QMap<QString, RxMeasurement> m_rxCache;
+    static constexpr int RS_CACHE_MINUTES = 10;
+
+    void updateRxCache(const RxMessage& msg);
+    void expireRxCache();
+
     // ── Helpers ───────────────────────────────────────────────────────────
     void processSymbol(const std::vector<float>& softEnergies);
     void processFrame();
     void setRxState(RxState newState);
     void resetRx();
-
-    // Estimate SNR from DCD band energy measurements
-    float estimateSnr() const;
 
     // Maximum symbols to accumulate before giving up on a frame
     // = PREAMBLE_LENGTH + HEADER_SYMS + CRC_SYMS + MAX_BLOCKS * 48

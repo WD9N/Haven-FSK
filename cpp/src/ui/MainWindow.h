@@ -1,11 +1,12 @@
 #pragma once
 #include <QMainWindow>
-#include <QTextEdit>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QLabel>
 #include <QProgressBar>
 #include <QAction>
+#include <QSplitter>
+#include <QCloseEvent>
 #include <cstdint>
 
 class AudioEngine;
@@ -19,6 +20,9 @@ namespace HavenFSK {
 class SettingsDialog;
 class StationInfoWidget;
 class RadioInterface;
+class RxDisplay;
+class LogPanel;
+class MacroPanel;
 
 class MainWindow : public QMainWindow
 {
@@ -27,6 +31,9 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void onTransmit();
@@ -43,6 +50,10 @@ private slots:
     void onFrequencyChanged(uint64_t hz);
     void onWatchdogTripped();
     void onChannelBusy();
+    void onElementClicked(const QString& scheme, const QString& value);
+    void onMacroTriggered(const QString& text, bool autoTx);
+    void onContactLogged(const QVariantMap& fields);
+    void onFieldDayToggled(bool enabled);
 
 private:
     void setupUi();
@@ -55,7 +66,10 @@ private:
 
     // ── UI widgets ────────────────────────────────────────────────────────
     StationInfoWidget* m_stationInfo  {nullptr};
-    QTextEdit*         m_rxText       {nullptr};
+    RxDisplay*         m_rxDisplay    {nullptr};
+    LogPanel*          m_logPanel     {nullptr};
+    MacroPanel*        m_macroPanel   {nullptr};
+    QSplitter*         m_splitter     {nullptr};
     QLineEdit*         m_txInput      {nullptr};
     QPushButton*       m_txButton     {nullptr};
     QLabel*            m_dcdLabel     {nullptr};
@@ -69,6 +83,7 @@ private:
     QAction* m_settingsAction      {nullptr};
     QAction* m_connectRigAction    {nullptr};
     QAction* m_disconnectRigAction {nullptr};
+    QAction* m_fdModeAction        {nullptr};
 
     // ── Backend objects ───────────────────────────────────────────────────
     AudioEngine*           m_audio    {nullptr};

@@ -1,6 +1,9 @@
 #include "MainWindow.h"
 #include "SettingsDialog.h"
 #include "StationInfoWidget.h"
+#include "RxDisplay.h"
+#include "LogPanel.h"
+#include "MacroPanel.h"
 #include "../audio/AudioEngine.h"
 #include "../audio/AudioSettings.h"
 #include "../radio/RadioSettings.h"
@@ -12,12 +15,14 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
+#include <QFrame>
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
 #include <QDateTime>
 #include <QFont>
 #include <QSettings>
+#include <QVariantMap>
 #include <QDebug>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -27,7 +32,7 @@ MainWindow::MainWindow(QWidget* parent)
         QString("%1 v%2")
         .arg(HavenFSK::APP_NAME)
         .arg(HavenFSK::APP_VERSION));
-    setMinimumSize(760, 560);
+    setMinimumSize(800, 620);
 
     m_audio    = new AudioEngine(this);
     m_pipeline = new HavenFSK::DspPipeline(this);
@@ -47,6 +52,12 @@ MainWindow::~MainWindow() {
     stopRadio();
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QSettings s;
+    s.setValue("ui/splitterState", m_splitter->saveState());
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::setupMenu() {
     // File menu
     QMenu* fileMenu  = menuBar()->addMenu("&File");
@@ -60,12 +71,21 @@ void MainWindow::setupMenu() {
     fileMenu->addAction(quitAction);
 
     // Radio menu
-    QMenu* radioMenu       = menuBar()->addMenu("&Radio");
-    m_connectRigAction     = new QAction("&Connect Rig", this);
-    m_disconnectRigAction  = new QAction("&Disconnect Rig", this);
+    QMenu* radioMenu      = menuBar()->addMenu("&Radio");
+    m_connectRigAction    = new QAction("&Connect Rig", this);
+    m_disconnectRigAction = new QAction("&Disconnect Rig", this);
     m_disconnectRigAction->setEnabled(false);
     radioMenu->addAction(m_connectRigAction);
     radioMenu->addAction(m_disconnectRigAction);
+
+    // Operating menu
+    QMenu* opMenu   = menuBar()->addMenu("&Operating");
+    m_fdModeAction  = new QAction("&Field Day Mode", this);
+    m_fdModeAction->setCheckable(true);
+    m_fdModeAction->setChecked(false);
+    opMenu->addAction(m_fdModeAction);
+    connect(m_fdModeAction, &QAction::toggled,
+            this, &MainWindow::onFieldDayToggled);
 
     // Help menu
     QMenu* helpMenu   = menuBar()->addMenu("&Help");
@@ -89,23 +109,51 @@ void MainWindow::setupUi() {
     auto* central    = new QWidget(this);
     setCentralWidget(central);
     auto* mainLayout = new QVBoxLayout(central);
-    mainLayout->setSpacing(6);
+    mainLayout->setSpacing(4);
+    mainLayout->setContentsMargins(4, 4, 4, 4);
 
-    // Station information block — always visible at top
+    // Station info — fixed, always visible
     m_stationInfo = new StationInfoWidget(central);
     mainLayout->addWidget(m_stationInfo);
 
-    // RX text display
-    auto* rxGroup  = new QGroupBox("Received", central);
-    auto* rxLayout = new QVBoxLayout(rxGroup);
-    m_rxText = new QTextEdit(rxGroup);
-    m_rxText->setReadOnly(true);
-    m_rxText->setFont(QFont("Courier New", 10));
-    m_rxText->setMinimumHeight(180);
-    rxLayout->addWidget(m_rxText);
-    mainLayout->addWidget(rxGroup, 1);
+    // Splitter — waterfall placeholder / RX display / log panel
+    m_splitter = new QSplitter(Qt::Vertical, central);
 
-    // TX input
+    // Waterfall placeholder (Phase 7)
+    auto* waterfallPlaceholder = new QFrame;
+    waterfallPlaceholder->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    waterfallPlaceholder->setMinimumHeight(60);
+    auto* wfLabel = new QLabel("Waterfall — Phase 7", waterfallPlaceholder);
+    wfLabel->setAlignment(Qt::AlignCenter);
+    wfLabel->setStyleSheet("color: gray;");
+    auto* wfl = new QVBoxLayout(waterfallPlaceholder);
+    wfl->addWidget(wfLabel);
+    m_splitter->addWidget(waterfallPlaceholder);
+
+    // RX display
+    auto* rxGroup  = new QGroupBox("Received");
+    auto* rxLayout = new QVBoxLayout(rxGroup);
+    m_rxDisplay = new RxDisplay(rxGroup);
+    m_rxDisplay->setMinimumHeight(100);
+    rxLayout->addWidget(m_rxDisplay);
+    m_splitter->addWidget(rxGroup);
+
+    // Log panel
+    m_logPanel = new LogPanel;
+    m_logPanel->setMinimumHeight(120);
+    m_splitter->addWidget(m_logPanel);
+
+    m_splitter->setStretchFactor(0, 1);
+    m_splitter->setStretchFactor(1, 3);
+    m_splitter->setStretchFactor(2, 2);
+
+    mainLayout->addWidget(m_splitter, 1);
+
+    // Macro buttons — fixed
+    m_macroPanel = new MacroPanel(central);
+    mainLayout->addWidget(m_macroPanel);
+
+    // TX input — fixed
     auto* txGroup  = new QGroupBox("Transmit", central);
     auto* txLayout = new QHBoxLayout(txGroup);
     m_txInput = new QLineEdit(txGroup);
@@ -118,7 +166,7 @@ void MainWindow::setupUi() {
     txLayout->addWidget(m_txButton);
     mainLayout->addWidget(txGroup);
 
-    // Status bar
+    // Status bar — fixed
     auto* statusBar    = new QWidget(central);
     auto* statusLayout = new QHBoxLayout(statusBar);
     statusLayout->setContentsMargins(0, 0, 0, 0);
@@ -155,6 +203,12 @@ void MainWindow::setupUi() {
     statusLayout->addWidget(m_statusLabel);
 
     mainLayout->addWidget(statusBar);
+
+    // Restore splitter state
+    QSettings s;
+    QByteArray splitterState = s.value("ui/splitterState").toByteArray();
+    if (!splitterState.isEmpty())
+        m_splitter->restoreState(splitterState);
 }
 
 void MainWindow::setupConnections() {
@@ -199,6 +253,18 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onDcdChanged);
     connect(m_pipeline, &HavenFSK::DspPipeline::rxStateChanged,
             this, &MainWindow::onRxStateChanged);
+
+    // RxDisplay → MainWindow (element clicks)
+    connect(m_rxDisplay, &RxDisplay::elementClicked,
+            this, &MainWindow::onElementClicked);
+
+    // MacroPanel → TX pipeline
+    connect(m_macroPanel, &MacroPanel::macroTriggered,
+            this, &MainWindow::onMacroTriggered);
+
+    // LogPanel → session log
+    connect(m_logPanel, &LogPanel::contactLogged,
+            this, &MainWindow::onContactLogged);
 }
 
 void MainWindow::startAudio() {
@@ -237,6 +303,8 @@ void MainWindow::startRadio() {
             this, &MainWindow::onRadioDisconnected);
     connect(m_radio, &RadioInterface::frequencyChanged,
             this, &MainWindow::onFrequencyChanged);
+    connect(m_radio, &RadioInterface::frequencyChanged,
+            m_logPanel, &LogPanel::setFrequency);
     connect(m_radio, &RadioInterface::rigError,
             this, [this](const QString& msg) {
                 m_statusLabel->setText("Rig: " + msg);
@@ -269,6 +337,7 @@ void MainWindow::onOpenSettings() {
 
 void MainWindow::onSettingsChanged() {
     m_stationInfo->refresh();
+    m_logPanel->refresh();
 
     // FCC compliance guard — disable TX if no callsign
     HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
@@ -281,16 +350,12 @@ void MainWindow::onSettingsChanged() {
     else
         m_statusLabel->setText("Listening...");
 
-    // Restart audio with potentially new device
     m_audio->stop();
     startAudio();
-
-    // Restart radio with potentially new settings
     startRadio();
 }
 
 void MainWindow::onTransmit() {
-    // FCC Part 97 compliance guard
     HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
     if (info.callsign.isEmpty()) {
         QMessageBox::warning(this, "No Callsign",
@@ -331,11 +396,13 @@ void MainWindow::onTxComplete() {
 }
 
 void MainWindow::onMessageReceived(const HavenFSK::RxMessage& msg) {
-    QString ts   = QDateTime::currentDateTimeUtc().toString("hh:mm:ss");
-    QString line = QString("[%1] %2").arg(ts).arg(msg.text);
-    if (!msg.crcOk)     line += " [CRC FAIL]";
-    if (!msg.converged) line += " [FEC NC]";
-    m_rxText->append(line);
+    m_rxDisplay->appendMessage(
+        msg.text,
+        msg.senderCallsign,
+        QDateTime::currentDateTimeUtc(),
+        msg.crcOk,
+        msg.converged);
+
     m_statusLabel->setText(
         QString("RX — CRC: %1  FEC: %2")
         .arg(msg.crcOk ? "OK" : "FAIL")
@@ -403,4 +470,36 @@ void MainWindow::onWatchdogTripped() {
 void MainWindow::onChannelBusy() {
     m_statusLabel->setText(
         "Channel busy — waiting for clear frequency");
+}
+
+void MainWindow::onElementClicked(const QString& scheme,
+                                   const QString& value)
+{
+    m_logPanel->populateField(scheme, value);
+
+    if (scheme == "callsign") {
+        m_macroPanel->setTheirCall(value);
+        const HavenFSK::RxMeasurement* m =
+            m_pipeline->getRxMeasurement(value);
+        if (m) {
+            QString rs = HavenFSK::DspPipeline::computeRS(*m);
+            m_logPanel->setRsSent(rs);
+            m_macroPanel->setRsSent(rs);
+        }
+    }
+}
+
+void MainWindow::onMacroTriggered(const QString& text, bool autoTx) {
+    m_txInput->setText(text);
+    if (autoTx) onTransmit();
+}
+
+void MainWindow::onContactLogged(const QVariantMap& fields) {
+    qDebug() << "Contact logged:"
+             << fields["their_callsign"].toString()
+             << fields["time_utc"].toString();
+}
+
+void MainWindow::onFieldDayToggled(bool enabled) {
+    m_logPanel->setFieldDayMode(enabled);
 }

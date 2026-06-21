@@ -62,6 +62,7 @@ bool DCD::computeCarrierPresent(const std::vector<float>& chunk)
     if (noiseMean <= 0.0) return false;
 
     double dbAbove = 10.0 * std::log10(signalMean / noiseMean);
+    m_lastSnrDb = static_cast<float>(dbAbove);
     return dbAbove >= DCD_THRESHOLD_DB;
 }
 

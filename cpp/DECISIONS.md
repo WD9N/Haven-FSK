@@ -772,3 +772,144 @@ settings change.
 FCC Part 97.119. The software makes this requirement visible and prevents
 accidental unidentified transmissions. The warning disappears as soon as
 the operator enters their callsign.
+
+## ADR-039 — RS report computed from physical signal measurements
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** HAVEN-FSK generates RS (Readability/Strength) signal reports
+from actual physical measurements rather than conventional 599 reporting.
+Tone (T) is omitted as it is not applicable to digital modes.
+
+R (Readability) derived from FEC convergence:
+- R1: FEC did not converge (CRC fail)
+- R3: Converged >150 iterations (marginal)
+- R4: Converged 50-150 iterations (good)
+- R5: Converged <50 iterations (excellent)
+
+S (Strength) derived from measured SNR:
+- S1-S9 mapped from dB SNR using standard 6dB/S-unit scale
+
+RS is cached per sending station for 10 minutes. When operator clicks
+a callsign in the RX window, the cached RS for that station populates
+RS-S in the log entry and <rstSent> in macros automatically.
+
+This is documented in the HAVEN-FSK specification as a defined feature.
+
+**Reasoning:** Conventional 599 reporting is meaningless in digital modes.
+HAVEN-FSK has the data to generate accurate reports — FEC iteration count
+and DCD band energy ratio are already computed for every decoded frame.
+Using them for RS reports is a genuine differentiator and provides
+operators with meaningful signal quality information.
+
+## ADR-040 — RS cache keyed by sender callsign, 10-minute expiry
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** DspPipeline maintains a QMap<QString, RxMeasurement>
+cache of per-station signal measurements. Cache entries expire after
+10 minutes. The sender callsign is parsed from decoded frame text
+using the standard DE pattern. Cache is in memory only.
+
+**Reasoning:** In pileup operation multiple stations decode sequentially
+(not simultaneously — our backoff system staggers transmissions and
+simultaneous signals don't decode). The cache correctly associates
+each measurement with the specific station that generated it. If two
+stations somehow decode simultaneously and corrupt each other, neither
+decodes — the cache receives nothing, failing safely.
+
+## ADR-041 — Structured field tags in transmitted messages
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** HAVEN-FSK defines optional structured field tags for
+machine-parseable data in free-text messages. Tags use FIELD:value
+format. Documented in the HAVEN-FSK specification.
+
+Defined tags:
+- NAME:  operator name
+- QTH:   location (state, province, country)
+- GRID:  Maidenhead grid square
+- RS:    signal report (RS format, not RST)
+- POTA:  park reference(s), space-separated, US-XXXX format
+- SOTA:  summit reference, XX/XX-XXX format
+- FD:    Field Day exchange (class + section)
+
+POTA references use current ISO country code format (US-XXXX)
+not legacy ham prefix format (K-XXXX).
+
+The RxDisplay parser recognizes these tags and renders values as
+clickable elements that populate log entry fields automatically.
+
+**Reasoning:** HAVEN-FSK is a free-text mode. Structured tags are
+opt-in — operators who use them get click-to-populate efficiency,
+operators who don't use them lose nothing. The <stationInfo> macro
+makes structured tag transmission trivial.
+
+## ADR-042 — Two macro banks (A/B) of 8 buttons, manually switched
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** MacroPanel provides two banks (A and B) of 8
+user-configurable macro buttons. Banks are switched manually via
+A/B selector buttons. No automatic bank switching based on operating
+context — operator controls which bank is active at all times.
+
+Bank A defaults: activating macros (CQ POTA, Stn Info, TU 73, etc.)
+Bank B defaults: chasing/general macros (CQ, Stn Info, TU 73, etc.)
+
+Macros containing <TX> auto-transmit when clicked. Macros without
+<TX> populate the TX input field for operator review.
+
+Right-click any button to edit label and macro text. All macros
+persist in QSettings. Default macros pre-populated on first run.
+
+**Reasoning:** Manual bank switching respects operator customization.
+Auto-switching based on activator mode could disrupt operators who
+have customized their banks differently. Banks are labeled A/B with
+no implied purpose so operators can use them however they prefer.
+
+## ADR-043 — Log panel unified: entry strip + contact table
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The log entry fields and recent contacts list are
+presented as a single unified LogPanel widget. The entry strip
+occupies the top of the panel with the same column alignment as
+the completed contacts table below. To the operator it reads as
+one continuous log window — the top row is the contact being worked.
+
+Clicking a completed contact row re-populates the entry strip for
+correction. Most recent contact is always at the top of the table.
+
+Context-adaptive field visibility:
+- POTA fields visible when station info has POTA references
+- SOTA field visible when station info has SOTA reference
+- Field Day mode (menu toggle) replaces activity fields with FD exchange
+- General fields (grid, name, QTH) hidden in Field Day mode
+
+**Reasoning:** Separating log entry from log display creates an
+artificial visual boundary in what is logically one continuous
+activity. The unified panel matches the familiar feel of other
+logging software and reduces the operator's visual scanning area.
+
+## ADR-044 — Splitter layout with QSettings persistence
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The main window uses a QSplitter covering the waterfall
+placeholder, RX display, and log panel. Fixed elements (station info
+block, macro buttons, TX input, status bar) are outside the splitter.
+Splitter state is saved to QSettings on close and restored on startup.
+
+**Reasoning:** Different operators have different priorities — a POTA
+activator running a pileup wants maximum log panel visibility, a casual
+ragchewer wants maximum RX text visibility. Resizable panels let each
+operator configure the layout for their operating style, and persistence
+means they only configure it once.

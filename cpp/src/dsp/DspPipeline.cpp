@@ -1,5 +1,8 @@
 #include "DspPipeline.h"
 #include "FEC.h"
+#include "../radio/RadioSettings.h"
+#include <QDateTime>
+#include <QRegularExpression>
 #include <QDebug>
 #include <algorithm>
 #include <cmath>
@@ -183,16 +186,109 @@ void DspPipeline::processFrame() {
     }
 
     RxMessage msg;
-    msg.text      = QString::fromStdString(result.text);
-    msg.crcOk     = result.crcOk;
-    msg.converged = result.converged;
-    msg.nBlocks   = result.nBlocks;
-    msg.snr       = estimateSnr();
+    msg.text          = QString::fromStdString(result.text);
+    msg.crcOk         = result.crcOk;
+    msg.converged     = result.converged;
+    msg.nBlocks       = result.nBlocks;
+    msg.fecIterations = 0;  // set from FEC result if available
+    msg.snr           = m_dcd.lastSnrDb();
+
+    HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
+    msg.senderCallsign = parseSenderCallsign(msg.text, info.callsign);
+
+    updateRxCache(msg);
+    expireRxCache();
 
     qDebug() << "DspPipeline: decoded message:" << msg.text
-             << "(CRC OK, FEC converged:" << msg.converged << ")";
+             << "(CRC OK, FEC converged:" << msg.converged
+             << ", sender:" << msg.senderCallsign << ")";
 
     emit messageReceived(msg);
+}
+
+// ── RS measurement cache ──────────────────────────────────────────────────
+
+const RxMeasurement* DspPipeline::getRxMeasurement(
+    const QString& callsign) const
+{
+    auto it = m_rxCache.find(callsign.toUpper());
+    if (it == m_rxCache.end()) return nullptr;
+    if (it->timestamp.secsTo(QDateTime::currentDateTime())
+        > RS_CACHE_MINUTES * 60) return nullptr;
+    return &(*it);
+}
+
+QString DspPipeline::computeRS(const RxMeasurement& m) {
+    // R: Readability from FEC convergence and iteration count
+    int r = 1;
+    if (m.converged) {
+        if      (m.fecIterations < 50)  r = 5;
+        else if (m.fecIterations < 150) r = 4;
+        else                            r = 3;
+    }
+
+    // S: Signal strength from SNR dB — standard 6 dB per S-unit scale
+    int s = 1;
+    if      (m.snrDb >= 26) s = 9;
+    else if (m.snrDb >= 21) s = 8;
+    else if (m.snrDb >= 15) s = 7;
+    else if (m.snrDb >= 12) s = 6;
+    else if (m.snrDb >=  9) s = 5;
+    else if (m.snrDb >=  6) s = 4;
+    else if (m.snrDb >=  3) s = 3;
+    else if (m.snrDb >=  0) s = 2;
+    else                    s = 1;
+
+    return QString("%1%2").arg(r).arg(s);
+}
+
+QString DspPipeline::parseSenderCallsign(const QString& text,
+                                          const QString& myCallsign)
+{
+    QStringList words = text.toUpper().split(' ', Qt::SkipEmptyParts);
+    QString myCall = myCallsign.toUpper();
+
+    static QRegularExpression callRe(
+        "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
+
+    // Pattern: THEIRCALL DE MYCALL — sender is the word before DE
+    for (int i = 1; i < words.size() - 1; i++) {
+        if (words[i] == "DE") {
+            QString before = words[i - 1];
+            QString after  = words[i + 1];
+            if (callRe.match(before).hasMatch() && before != myCall)
+                return before;
+            if (callRe.match(after).hasMatch() && after != myCall)
+                return after;
+        }
+    }
+
+    // Fallback: first callsign-like word that isn't our call
+    for (const QString& word : words) {
+        if (callRe.match(word).hasMatch() && word != myCall)
+            return word;
+    }
+    return QString();
+}
+
+void DspPipeline::updateRxCache(const RxMessage& msg) {
+    if (msg.senderCallsign.isEmpty()) return;
+    RxMeasurement m;
+    m.snrDb         = msg.snr;
+    m.fecIterations = msg.fecIterations;
+    m.converged     = msg.converged;
+    m.timestamp     = QDateTime::currentDateTime();
+    m_rxCache[msg.senderCallsign.toUpper()] = m;
+}
+
+void DspPipeline::expireRxCache() {
+    auto now = QDateTime::currentDateTime();
+    for (auto it = m_rxCache.begin(); it != m_rxCache.end(); ) {
+        if (it->timestamp.secsTo(now) > RS_CACHE_MINUTES * 60)
+            it = m_rxCache.erase(it);
+        else
+            ++it;
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -214,12 +310,6 @@ void DspPipeline::resetRx() {
     m_searchWindow.clear();
     m_expectedSymbols = 0;
     setRxState(RxState::Idle);
-}
-
-float DspPipeline::estimateSnr() const {
-    // Placeholder — DCD doesn't currently expose band energies publicly.
-    // Returns 0.0 until DCD is extended to expose signal/noise band energy.
-    return 0.0f;
 }
 
 } // namespace HavenFSK
