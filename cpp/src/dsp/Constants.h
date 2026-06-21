@@ -36,6 +36,7 @@ constexpr double PREAMBLE_THRESHOLD  = 1.4;  // correlation score
 // ── FEC ────────────────────────────────────────────────────────
 constexpr int LDPC_N                 = 192;  // coded bits
 constexpr int LDPC_K                 = 96;   // data bits
+constexpr int LDPC_M                 = LDPC_N - LDPC_K;  // 96 parity bits
 constexpr int LDPC_BYTES_PER_BLOCK   = 12;   // LDPC_K / 8
 constexpr int LDPC_PEG_SEED          = 1234;
 constexpr int LDPC_MAX_ITERATIONS    = 200;
