@@ -22,10 +22,8 @@ namespace StationKeys {
     static constexpr const char* CALLSIGN   = "station/callsign";
     static constexpr const char* GRID       = "station/grid";
     static constexpr const char* OP_NAME    = "station/opName";
-    static constexpr const char* POTA_REF_1 = "station/pota/ref1";
-    static constexpr const char* POTA_REF_2 = "station/pota/ref2";
-    static constexpr const char* POTA_REF_3 = "station/pota/ref3";
-    static constexpr const char* POTA_REF_4 = "station/pota/ref4";
+    static constexpr const char* POTA_REFS  = "station/pota/refs";
+    // Stored as QSettings::setValue(key, QStringList) — unbounded list
     static constexpr const char* SOTA_REF   = "station/sota/ref";
     static constexpr const char* FD_CLASS   = "station/fd/class";
     static constexpr const char* FD_SECTION = "station/fd/section";
@@ -61,14 +59,9 @@ inline StationInfo loadStationInfo() {
     info.fdClass   = s.value(StationKeys::FD_CLASS).toString().toUpper();
     info.fdSection = s.value(StationKeys::FD_SECTION).toString().toUpper();
 
-    const QStringList potaKeys = {
-        StationKeys::POTA_REF_1, StationKeys::POTA_REF_2,
-        StationKeys::POTA_REF_3, StationKeys::POTA_REF_4
-    };
-    for (const QString& key : potaKeys) {
-        QString ref = s.value(key).toString().toUpper();
-        if (!ref.isEmpty()) info.potaRefs.append(ref);
-    }
+    info.potaRefs = s.value(StationKeys::POTA_REFS,
+                             QStringList()).toStringList();
+    info.potaRefs.removeAll(QString());
     return info;
 }
 
@@ -81,14 +74,7 @@ inline void saveStationInfo(const StationInfo& info) {
     s.setValue(StationKeys::FD_CLASS,   info.fdClass);
     s.setValue(StationKeys::FD_SECTION, info.fdSection);
 
-    const QStringList potaKeys = {
-        StationKeys::POTA_REF_1, StationKeys::POTA_REF_2,
-        StationKeys::POTA_REF_3, StationKeys::POTA_REF_4
-    };
-    for (int i = 0; i < 4; i++) {
-        s.setValue(potaKeys[i],
-                   i < info.potaRefs.size() ? info.potaRefs[i] : QString());
-    }
+    s.setValue(StationKeys::POTA_REFS, info.potaRefs);
 }
 
 // Rigctld connection settings

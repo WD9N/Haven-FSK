@@ -719,3 +719,56 @@ as a recognized submode.
 **Reasoning:** HAVEN-FSK is a new mode not yet in the ADIF submode list.
 DIGITAL is the correct fallback. Once the mode gains adoption, a request
 to add it as a recognized ADIF submode is appropriate.
+
+## ADR-020 — REVISED: POTA references unbounded list, no fixed limit
+
+**Status:** Decided (revised from original ADR-020)
+**Date:** June 2026
+
+**Revision:** The original ADR-020 specified a maximum of four POTA
+references. This limit has been removed. The POTA reference list is now
+unbounded.
+
+**Reasoning:** Operators in high-density areas (e.g. Washington DC) may
+simultaneously activate seven or more overlapping parks — national
+monuments, national parks, C&O Canal, Rock Creek Park, and others can all
+overlap at a single operating location. A fixed limit of four would
+prevent valid activations in these areas. The list is now dynamic with
+no upper bound.
+
+**Implementation:** QSettings stores the list as a QStringList under
+a single key (station/pota/refs) rather than four numbered keys. The
+UI presents a dynamic list widget with Add/Remove buttons. The
+`StationInfo.potaRefs` field is a QStringList. The `<myParks>` macro
+expands to all references space-separated regardless of count. Export
+generates one ADIF file per reference regardless of count.
+
+## ADR-037 — Settings organized in tabbed dialog
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** All operator-configurable settings are in a single tabbed
+QDialog: Station Information, Radio Control, and Audio Devices. A single
+Settings menu item (Ctrl+,) opens the dialog. Apply button allows
+verification without closing.
+
+**Reasoning:** Standard pattern for application preferences. Keeps all
+configuration in one place. Operator can configure everything before
+first transmission without hunting through multiple menus.
+
+## ADR-038 — TX blocked at FCC compliance guard if callsign empty
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** If operator callsign is empty, all TX is blocked. TX button
+and input field are disabled. Attempting TX via Enter key shows a warning
+dialog citing FCC Part 97.119. Station Information display shows
+"NO CALLSIGN" in red. Guard is checked on startup and on every
+settings change.
+
+**Reasoning:** Transmitting without identifying by callsign violates
+FCC Part 97.119. The software makes this requirement visible and prevents
+accidental unidentified transmissions. The warning disappears as soon as
+the operator enters their callsign.

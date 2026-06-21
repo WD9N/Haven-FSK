@@ -57,6 +57,7 @@ set(SOURCES
     src/radio/HamlibClient.cpp
     src/radio/PTTManager.cpp
     src/ui/MainWindow.cpp
+    src/ui/SettingsDialog.cpp
     src/log/LogManager.cpp
 )
 
@@ -78,6 +79,8 @@ set(HEADERS
     src/radio/PTTManager.h
     src/radio/RadioSettings.h
     src/ui/MainWindow.h
+    src/ui/SettingsDialog.h
+    src/ui/StationInfoWidget.h
     src/log/LogEntry.h
     src/log/LogManager.h
 )
