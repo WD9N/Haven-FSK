@@ -34,7 +34,6 @@ struct RxMessage {
 };
 
 // Per-station signal quality measurement stored in cache
-// after each successful decode. Used to generate RS reports.
 struct RxMeasurement {
     float     snrDb;         // measured SNR from DCD band energy
     int       fecIterations; // BP iterations — lower = cleaner signal
@@ -51,58 +50,41 @@ public:
     ~DspPipeline() override = default;
 
     // ── TX ────────────────────────────────────────────────────────────────
-    // Assemble and queue a message for transmission.
-    // Emits txAudioReady() with the complete frame audio.
-    // Returns false if a transmission is already in progress.
     bool transmit(const QString& text);
 
     // ── State ─────────────────────────────────────────────────────────────
-    RxState rxState()       const { return m_rxState; }
-    bool    dcdActive()     const { return m_dcdActive; }
+    RxState rxState()        const { return m_rxState; }
+    bool    dcdActive()      const { return m_dcdActive; }
     bool    isTransmitting() const { return m_transmitting; }
 
+    // ── AFC controls ──────────────────────────────────────────────────────
+    void  setAfcEnabled(bool enabled) { m_afcEnabled = enabled; }
+    bool  afcEnabled()      const     { return m_afcEnabled; }
+    float afcOffsetHz()     const     { return m_afcOffsetHz; }
+
+    // AFC range — beyond this AFC clamps and MainWindow warns operator
+    static constexpr float AFC_MAX_HZ = 75.0f;
+
     // ── RS measurement cache ──────────────────────────────────────────────
-    // Retrieve cached signal measurement for a specific callsign.
-    // Returns nullptr if no entry exists or entry has expired (>10 min).
     const RxMeasurement* getRxMeasurement(const QString& callsign) const;
-
-    // Compute RS report string from a measurement.
-    // R: 1-5 from FEC convergence/iterations
-    // S: 1-9 from SNR dB
-    // Returns formatted string e.g. "57"
     static QString computeRS(const RxMeasurement& m);
-
-    // Extract sender callsign from decoded message text.
-    // Looks for standard "THEIRCALL DE MYCALL" pattern.
-    // Returns empty string if not found.
     static QString parseSenderCallsign(const QString& text,
                                        const QString& myCallsign);
 
 public slots:
-    // Connected to AudioEngine::rxDataReady
     void onAudioChunk(const std::vector<float>& samples);
-
-    // Connected to AudioEngine::txComplete
     void onTxComplete();
 
 signals:
-    // Emitted when a complete message is decoded
     void messageReceived(const HavenFSK::RxMessage& msg);
-
-    // Emitted when DCD state changes — for UI carrier indicator
     void dcdChanged(bool active);
-
-    // Emitted when RX state changes — for UI status display
     void rxStateChanged(HavenFSK::RxState state);
-
-    // Emitted with complete TX audio ready for AudioEngine::startTx()
     void txAudioReady(const std::vector<float>& samples);
-
-    // Emitted when preamble is detected — for UI sync indicator
     void preambleDetected(float score);
-
-    // Emitted periodically with symbol count during reception
     void rxProgress(int symbolsReceived, int symbolsExpected);
+
+    // Emitted when AFC offset changes — connected to WaterfallWidget
+    void afcOffsetChanged(float hz);
 
 private:
     // ── DSP objects ───────────────────────────────────────────────────────
@@ -117,19 +99,24 @@ private:
     bool    m_dcdActive  = false;
     bool    m_transmitting = false;
 
-    // Sample accumulator — collects partial chunks until a full symbol
-    // worth of samples is available
     std::vector<float> m_sampleAccum;
-
-    // Soft symbol accumulator — collects symbols after preamble detection
     std::vector<std::vector<float>> m_symbolAccum;
-
-    // Preamble search window — soft symbols collected during Searching state
     std::vector<std::vector<float>> m_searchWindow;
-
-    // Expected frame size in symbols (set when preamble detected)
-    // Set to a safe maximum initially, refined after header decode
     int m_expectedSymbols = 0;
+
+    // ── AFC state ─────────────────────────────────────────────────────────
+    float  m_afcOffsetHz   = 0.0f;
+    bool   m_afcEnabled    = true;
+    float  m_afcPhase      = 0.0f;   // NCO phase accumulator
+
+    static constexpr float AFC_TRACK_ALPHA = 0.02f;  // slow tracking
+    static constexpr float AFC_RESET_DECAY = 0.50f;  // partial reset
+
+    void  applyAfcCorrection(std::vector<float>& samples);
+    float measureToneOffset(
+        const std::vector<std::vector<float>>& softSymbols) const;
+    void  updateAfcTracking(
+        const std::vector<std::vector<float>>& softSymbols);
 
     // ── RS measurement cache ──────────────────────────────────────────────
     QMap<QString, RxMeasurement> m_rxCache;
@@ -144,9 +131,6 @@ private:
     void setRxState(RxState newState);
     void resetRx();
 
-    // Maximum symbols to accumulate before giving up on a frame
-    // = PREAMBLE_LENGTH + HEADER_SYMS + CRC_SYMS + MAX_BLOCKS * 48
-    // Use 32 FEC blocks as a generous maximum
     static constexpr int MAX_FRAME_SYMBOLS =
         16 + 4 + 4 + (32 * 48);  // 1560 symbols = ~50 seconds
 };

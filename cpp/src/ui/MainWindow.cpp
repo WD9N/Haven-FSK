@@ -5,6 +5,8 @@
 #include "LogPanel.h"
 #include "MacroPanel.h"
 #include "ExportDialog.h"
+#include "WaterfallWidget.h"
+#include "FrequencyControl.h"
 #include "../log/LogManager.h"
 #include "../audio/AudioEngine.h"
 #include "../audio/AudioSettings.h"
@@ -17,7 +19,6 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
-#include <QFrame>
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
@@ -34,7 +35,7 @@ MainWindow::MainWindow(QWidget* parent)
         QString("%1 v%2")
         .arg(HavenFSK::APP_NAME)
         .arg(HavenFSK::APP_VERSION));
-    setMinimumSize(800, 620);
+    setMinimumSize(800, 640);
 
     m_audio      = new AudioEngine(this);
     m_pipeline   = new HavenFSK::DspPipeline(this);
@@ -91,13 +92,24 @@ void MainWindow::setupMenu() {
     radioMenu->addAction(m_disconnectRigAction);
 
     // Operating menu
-    QMenu* opMenu   = menuBar()->addMenu("&Operating");
-    m_fdModeAction  = new QAction("&Field Day Mode", this);
+    QMenu* opMenu  = menuBar()->addMenu("&Operating");
+    m_fdModeAction = new QAction("&Field Day Mode", this);
     m_fdModeAction->setCheckable(true);
     m_fdModeAction->setChecked(false);
     opMenu->addAction(m_fdModeAction);
     connect(m_fdModeAction, &QAction::toggled,
             this, &MainWindow::onFieldDayToggled);
+
+    opMenu->addSeparator();
+    auto* afcAction = new QAction("AFC — Auto Frequency Correct", this);
+    afcAction->setCheckable(true);
+    afcAction->setChecked(true);
+    opMenu->addAction(afcAction);
+    connect(afcAction, &QAction::toggled, this, [this](bool on) {
+        m_pipeline->setAfcEnabled(on);
+        if (!on)
+            m_waterfall->setAfcOffset(0.0f);
+    });
 
     // Help menu
     QMenu* helpMenu   = menuBar()->addMenu("&Help");
@@ -128,19 +140,13 @@ void MainWindow::setupUi() {
     m_stationInfo = new StationInfoWidget(central);
     mainLayout->addWidget(m_stationInfo);
 
-    // Splitter — waterfall placeholder / RX display / log panel
+    // Splitter — waterfall / RX display / log panel
     m_splitter = new QSplitter(Qt::Vertical, central);
 
-    // Waterfall placeholder (Phase 7)
-    auto* waterfallPlaceholder = new QFrame;
-    waterfallPlaceholder->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
-    waterfallPlaceholder->setMinimumHeight(60);
-    auto* wfLabel = new QLabel("Waterfall — Phase 7", waterfallPlaceholder);
-    wfLabel->setAlignment(Qt::AlignCenter);
-    wfLabel->setStyleSheet("color: gray;");
-    auto* wfl = new QVBoxLayout(waterfallPlaceholder);
-    wfl->addWidget(wfLabel);
-    m_splitter->addWidget(waterfallPlaceholder);
+    // Waterfall — receives raw audio directly from AudioEngine
+    m_waterfall = new WaterfallWidget(this);
+    m_waterfall->setMinimumHeight(80);
+    m_splitter->addWidget(m_waterfall);
 
     // RX display
     auto* rxGroup  = new QGroupBox("Received");
@@ -192,10 +198,8 @@ void MainWindow::setupUi() {
     m_rxStateLabel->setMinimumWidth(80);
     statusLayout->addWidget(m_rxStateLabel);
 
-    m_freqLabel = new QLabel("-- MHz");
-    m_freqLabel->setFont(QFont("Courier New", 10));
-    m_freqLabel->setMinimumWidth(110);
-    statusLayout->addWidget(m_freqLabel);
+    m_freqControl = new FrequencyControl(statusBar);
+    statusLayout->addWidget(m_freqControl);
 
     m_rigLabel = new QLabel("No rig");
     m_rigLabel->setStyleSheet("color: gray;");
@@ -242,7 +246,7 @@ void MainWindow::setupConnections() {
     connect(m_txInput, &QLineEdit::returnPressed,
             this, &MainWindow::onTransmit);
 
-    // AudioEngine → DspPipeline
+    // AudioEngine → DspPipeline (AFC-corrected path)
     connect(m_audio, &AudioEngine::rxDataReady,
             m_pipeline, &HavenFSK::DspPipeline::onAudioChunk);
     connect(m_audio, &AudioEngine::txComplete,
@@ -253,6 +257,57 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onAudioError);
     connect(m_audio, &AudioEngine::rxLevelChanged,
             this, &MainWindow::onRxLevelChanged);
+
+    // ── Waterfall receives RAW audio directly from AudioEngine ────────────
+    // CRITICAL: do NOT route through DspPipeline — waterfall must see
+    // unmodified audio so the display shows true signal positions.
+    connect(m_audio, &AudioEngine::rxDataReady,
+            m_waterfall, &WaterfallWidget::pushChunk,
+            Qt::QueuedConnection);
+
+    // Waterfall tune request
+    connect(m_waterfall, &WaterfallWidget::tuneRequested,
+            this, &MainWindow::onWaterfallTune);
+
+    // Waterfall tuning line movement → status bar preview
+    connect(m_waterfall, &WaterfallWidget::tuningLineAt,
+            this, [this](float hz) {
+                if (!m_radio || !m_radio->isConnected()) return;
+                uint64_t dial = m_radio->getFrequency();
+                if (dial == 0) return;
+                int64_t  offset = static_cast<int64_t>(hz)
+                                - static_cast<int64_t>(HavenFSK::BASE_FREQ);
+                uint64_t newHz  = static_cast<uint64_t>(
+                    static_cast<int64_t>(dial) + offset);
+                m_statusLabel->setText(
+                    QString("Tune to: %1 MHz  "
+                            "[Left-click confirms | Esc cancels]")
+                    .arg(static_cast<double>(newHz) / 1.0e6, 0, 'f', 6));
+            });
+
+    // AFC offset → waterfall AFC marker lines
+    connect(m_pipeline,
+            &HavenFSK::DspPipeline::afcOffsetChanged,
+            m_waterfall,
+            &WaterfallWidget::setAfcOffset);
+
+    // AFC limit warning → status bar
+    connect(m_pipeline,
+            &HavenFSK::DspPipeline::afcOffsetChanged,
+            this, [this](float hz) {
+                if (std::abs(hz) >=
+                    HavenFSK::DspPipeline::AFC_MAX_HZ - 1.0f) {
+                    m_statusLabel->setText(
+                        "AFC limit ⚠ — please retune closer to signal");
+                }
+            });
+
+    // FrequencyControl → radio
+    connect(m_freqControl, &FrequencyControl::frequencyRequested,
+            this, [this](uint64_t hz) {
+                if (m_radio && m_radio->isConnected())
+                    m_radio->setFrequency(hz);
+            });
 
     // DspPipeline → AudioEngine (TX audio)
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
@@ -335,7 +390,7 @@ void MainWindow::stopRadio() {
     }
     m_rigLabel->setText("No rig control");
     m_rigLabel->setStyleSheet("color: gray;");
-    m_freqLabel->setText("-- MHz");
+    m_freqControl->setFrequency(0);
     m_connectRigAction->setEnabled(true);
     m_disconnectRigAction->setEnabled(false);
 }
@@ -353,7 +408,6 @@ void MainWindow::onSettingsChanged() {
     m_stationInfo->refresh();
     m_logPanel->refresh();
 
-    // FCC compliance guard — disable TX if no callsign
     HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
     bool hasCall = !info.callsign.isEmpty();
     m_txButton->setEnabled(hasCall);
@@ -462,16 +516,11 @@ void MainWindow::onRadioDisconnected() {
     m_rigLabel->setStyleSheet("color: orange;");
     m_connectRigAction->setEnabled(true);
     m_disconnectRigAction->setEnabled(false);
-    m_freqLabel->setText("-- MHz");
+    m_freqControl->setFrequency(0);
 }
 
 void MainWindow::onFrequencyChanged(uint64_t hz) {
-    m_freqLabel->setText(formatFrequency(hz));
-}
-
-QString MainWindow::formatFrequency(uint64_t hz) const {
-    return QString("%1 MHz")
-        .arg(static_cast<double>(hz) / 1e6, 0, 'f', 6);
+    m_freqControl->setFrequency(hz);
 }
 
 void MainWindow::onWatchdogTripped() {
@@ -482,13 +531,10 @@ void MainWindow::onWatchdogTripped() {
 }
 
 void MainWindow::onChannelBusy() {
-    m_statusLabel->setText(
-        "Channel busy — waiting for clear frequency");
+    m_statusLabel->setText("Channel busy — waiting for clear frequency");
 }
 
-void MainWindow::onElementClicked(const QString& scheme,
-                                   const QString& value)
-{
+void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
     m_logPanel->populateField(scheme, value);
 
     if (scheme == "callsign") {
@@ -533,4 +579,27 @@ void MainWindow::onExport() {
 
 void MainWindow::onFieldDayToggled(bool enabled) {
     m_logPanel->setFieldDayMode(enabled);
+}
+
+void MainWindow::onWaterfallTune(float audioHz) {
+    if (!m_radio || !m_radio->isConnected()) {
+        m_statusLabel->setText(
+            "Connect rig control to enable click-to-tune");
+        return;
+    }
+    uint64_t dialHz = m_radio->getFrequency();
+    if (dialHz == 0) return;
+
+    // Place lowest HAVEN-FSK tone (BASE_FREQ) at the clicked audio position.
+    // newDial = currentDial + (clickedAudioHz - BASE_FREQ)
+    int64_t  offset = static_cast<int64_t>(audioHz)
+                    - static_cast<int64_t>(HavenFSK::BASE_FREQ);
+    uint64_t newHz  = static_cast<uint64_t>(
+        static_cast<int64_t>(dialHz) + offset);
+
+    m_radio->setFrequency(newHz);
+    m_freqControl->setFrequency(newHz);
+    m_statusLabel->setText(
+        QString("Tuned to %1 MHz")
+        .arg(static_cast<double>(newHz) / 1.0e6, 0, 'f', 6));
 }

@@ -12,7 +12,6 @@ namespace HavenFSK {
 DspPipeline::DspPipeline(QObject* parent)
     : QObject(parent)
 {
-    // Pre-size the sample accumulator
     m_sampleAccum.reserve(SAMPLES_PER_SYMBOL * 2);
 }
 
@@ -23,21 +22,15 @@ bool DspPipeline::transmit(const QString& text) {
         qWarning() << "DspPipeline: transmit called while already transmitting";
         return false;
     }
-
     if (text.trimmed().isEmpty()) {
         qWarning() << "DspPipeline: transmit called with empty text";
         return false;
     }
-
     m_transmitting = true;
-
-    // Frame::assemble() handles: preamble + header + CRC + FEC encode + modulate
     std::vector<float> audio = m_frame.assemble(text.toStdString());
-
     qDebug() << "DspPipeline: TX" << text.length() << "chars ="
              << audio.size() << "samples ="
              << (audio.size() / static_cast<double>(SAMPLE_RATE)) << "seconds";
-
     emit txAudioReady(audio);
     return true;
 }
@@ -50,16 +43,24 @@ void DspPipeline::onTxComplete() {
 // ── RX ────────────────────────────────────────────────────────────────────
 
 void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
+    // Make a corrected copy for DSP — waterfall gets raw audio separately
+    // via its own direct connection to AudioEngine::rxDataReady.
+    std::vector<float> corrected = samples;
+    applyAfcCorrection(corrected);
+
     // ── DCD update ────────────────────────────────────────────────────────
-    bool dcdNow = m_dcd.update(samples);
+    bool dcdNow = m_dcd.update(corrected);
     if (dcdNow != m_dcdActive) {
         m_dcdActive = dcdNow;
         emit dcdChanged(m_dcdActive);
 
         if (!m_dcdActive && m_rxState != RxState::Idle) {
-            // Signal dropped — if we were receiving, process what we have
             if (m_rxState == RxState::Receiving && !m_symbolAccum.empty())
                 processFrame();
+            // Partial reset: keep half the correction for the next station
+            m_afcOffsetHz *= AFC_RESET_DECAY;
+            m_afcPhase = 0.0f;
+            emit afcOffsetChanged(m_afcOffsetHz);
             resetRx();
         }
 
@@ -67,16 +68,14 @@ void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
             setRxState(RxState::Searching);
     }
 
-    // Don't process audio if idle or transmitting
     if (m_rxState == RxState::Idle || m_transmitting)
         return;
 
     // ── Accumulate samples into symbol-sized blocks ────────────────────────
-    // AUDIO_CHUNK_SAMPLES (2048) is not a multiple of SAMPLES_PER_SYMBOL
-    // (1536), so we buffer across chunk boundaries.
-    m_sampleAccum.insert(m_sampleAccum.end(), samples.begin(), samples.end());
+    m_sampleAccum.insert(m_sampleAccum.end(),
+                          corrected.begin(), corrected.end());
 
-    while ((int)m_sampleAccum.size() >= SAMPLES_PER_SYMBOL) {
+    while (static_cast<int>(m_sampleAccum.size()) >= SAMPLES_PER_SYMBOL) {
         std::vector<float> symbolBlock(
             m_sampleAccum.begin(),
             m_sampleAccum.begin() + SAMPLES_PER_SYMBOL);
@@ -86,7 +85,6 @@ void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
 
         auto softSymbols = m_demodulator.demodulateToSoft(symbolBlock);
         if (softSymbols.empty()) continue;
-
         processSymbol(softSymbols[0]);
     }
 }
@@ -97,11 +95,10 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
     case RxState::Searching: {
         m_searchWindow.push_back(softEnergies);
 
-        // Sliding window: keep 2× preamble length
-        if ((int)m_searchWindow.size() > PREAMBLE_LENGTH * 2)
+        if (static_cast<int>(m_searchWindow.size()) > PREAMBLE_LENGTH * 2)
             m_searchWindow.erase(m_searchWindow.begin());
 
-        if ((int)m_searchWindow.size() >= PREAMBLE_LENGTH) {
+        if (static_cast<int>(m_searchWindow.size()) >= PREAMBLE_LENGTH) {
             float score = 0.0f;
             if (m_preamble.detect(m_searchWindow, score)) {
                 qDebug() << "DspPipeline: preamble detected, score =" << score;
@@ -110,6 +107,18 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
                 m_symbolAccum.clear();
                 m_expectedSymbols = MAX_FRAME_SYMBOLS;
                 setRxState(RxState::Receiving);
+
+                // AFC hard lock from preamble symbols — immediate correction,
+                // phase reset. Handles the jump when a new station calls.
+                if (m_afcEnabled && !m_searchWindow.empty()) {
+                    float offset = measureToneOffset(m_searchWindow);
+                    m_afcOffsetHz = std::max(-AFC_MAX_HZ,
+                                    std::min(AFC_MAX_HZ, offset));
+                    m_afcPhase = 0.0f;
+                    qDebug() << "DspPipeline: AFC hard lock"
+                             << m_afcOffsetHz << "Hz";
+                    emit afcOffsetChanged(m_afcOffsetHz);
+                }
             }
         }
         break;
@@ -121,11 +130,11 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
         emit rxProgress(static_cast<int>(m_symbolAccum.size()),
                         m_expectedSymbols);
 
-        // After header + CRC arrive, peek at nBlocks to refine expected count
-        if ((int)m_symbolAccum.size() == 8) {
+        // Header peek to refine expected symbol count
+        if (static_cast<int>(m_symbolAccum.size()) == 8) {
             auto argmax = [](const std::vector<float>& v) {
-                return (int)std::distance(
-                    v.begin(), std::max_element(v.begin(), v.end()));
+                return static_cast<int>(std::distance(
+                    v.begin(), std::max_element(v.begin(), v.end())));
             };
             int s2 = argmax(m_symbolAccum[2]);
             int s3 = argmax(m_symbolAccum[3]);
@@ -133,29 +142,37 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
             if (nBlocks > 0 && nBlocks <= 32) {
                 m_expectedSymbols = 4 + 4 + nBlocks * 48;
                 qDebug() << "DspPipeline: header peek — nBlocks ="
-                         << nBlocks
-                         << ", expecting" << m_expectedSymbols
-                         << "total symbols";
+                         << nBlocks << ", expecting"
+                         << m_expectedSymbols << "total symbols";
             } else {
                 m_expectedSymbols = MAX_FRAME_SYMBOLS;
             }
         }
 
-        if ((int)m_symbolAccum.size() >= m_expectedSymbols &&
+        // Slow AFC tracking every 8 symbols using 16 recent symbols
+        if (static_cast<int>(m_symbolAccum.size()) % 8 == 0 &&
+            static_cast<int>(m_symbolAccum.size()) >= 16)
+        {
+            int start = std::max(0,
+                static_cast<int>(m_symbolAccum.size()) - 16);
+            std::vector<std::vector<float>> recent(
+                m_symbolAccum.begin() + start,
+                m_symbolAccum.end());
+            updateAfcTracking(recent);
+        }
+
+        if (static_cast<int>(m_symbolAccum.size()) >= m_expectedSymbols &&
             m_expectedSymbols > 8) {
             processFrame();
             resetRx();
-            if (m_dcdActive)
-                setRxState(RxState::Searching);
+            if (m_dcdActive) setRxState(RxState::Searching);
         }
 
-        // Safety: give up if we accumulate too many symbols
-        if ((int)m_symbolAccum.size() >= MAX_FRAME_SYMBOLS) {
+        if (static_cast<int>(m_symbolAccum.size()) >= MAX_FRAME_SYMBOLS) {
             qWarning() << "DspPipeline: frame too long, giving up";
             processFrame();
             resetRx();
-            if (m_dcdActive)
-                setRxState(RxState::Searching);
+            if (m_dcdActive) setRxState(RxState::Searching);
         }
         break;
     }
@@ -190,7 +207,7 @@ void DspPipeline::processFrame() {
     msg.crcOk         = result.crcOk;
     msg.converged     = result.converged;
     msg.nBlocks       = result.nBlocks;
-    msg.fecIterations = 0;  // set from FEC result if available
+    msg.fecIterations = 0;
     msg.snr           = m_dcd.lastSnrDb();
 
     HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
@@ -206,6 +223,75 @@ void DspPipeline::processFrame() {
     emit messageReceived(msg);
 }
 
+// ── AFC implementation ────────────────────────────────────────────────────
+
+void DspPipeline::applyAfcCorrection(std::vector<float>& samples) {
+    if (!m_afcEnabled || std::abs(m_afcOffsetHz) < 0.5f) return;
+
+    // NCO: multiply by cos(-2π * offset * n / Fs)
+    // Shifts received audio spectrum by -afcOffsetHz to compensate offset.
+    // TX path is completely unaffected — Modulator never uses this audio.
+    const float phaseInc = -2.0f * static_cast<float>(M_PI)
+                           * m_afcOffsetHz
+                           / static_cast<float>(SAMPLE_RATE);
+
+    for (auto& s : samples) {
+        s *= std::cos(m_afcPhase);
+        m_afcPhase += phaseInc;
+        // Wrap to [-π, π] to prevent float precision loss
+        while (m_afcPhase >  static_cast<float>(M_PI))
+            m_afcPhase -= 2.0f * static_cast<float>(M_PI);
+        while (m_afcPhase < -static_cast<float>(M_PI))
+            m_afcPhase += 2.0f * static_cast<float>(M_PI);
+    }
+}
+
+float DspPipeline::measureToneOffset(
+    const std::vector<std::vector<float>>& softSymbols) const
+{
+    if (softSymbols.empty()) return 0.0f;
+    float totalOffset = 0.0f;
+    int   count       = 0;
+
+    for (const auto& energies : softSymbols) {
+        if (static_cast<int>(energies.size()) != NUM_TONES) continue;
+
+        // Find winning tone
+        int winner = 0;
+        for (int i = 1; i < NUM_TONES; i++)
+            if (energies[i] > energies[winner]) winner = i;
+
+        // Centroid of winner and neighbors to estimate sub-tone offset
+        float eL = (winner > 0) ? energies[winner - 1] : 0.0f;
+        float eR = (winner < NUM_TONES - 1) ? energies[winner + 1] : 0.0f;
+        float eS = eL + energies[winner] + eR;
+        if (eS < 1e-10f) continue;
+
+        float centroid = (eR - eL) / eS;
+        totalOffset += centroid * static_cast<float>(SYMBOL_RATE);
+        count++;
+    }
+
+    return (count > 0) ? (totalOffset / count) : 0.0f;
+}
+
+void DspPipeline::updateAfcTracking(
+    const std::vector<std::vector<float>>& softSymbols)
+{
+    if (!m_afcEnabled) return;
+    float measured = measureToneOffset(softSymbols);
+
+    // Slow exponential average — responds over ~50 symbol periods (~1.6 s).
+    // Alpha=0.02 tracks thermal drift only, not noise fluctuations.
+    m_afcOffsetHz = (1.0f - AFC_TRACK_ALPHA) * m_afcOffsetHz
+                  + AFC_TRACK_ALPHA * measured;
+
+    m_afcOffsetHz = std::max(-AFC_MAX_HZ,
+                    std::min(AFC_MAX_HZ, m_afcOffsetHz));
+
+    emit afcOffsetChanged(m_afcOffsetHz);
+}
+
 // ── RS measurement cache ──────────────────────────────────────────────────
 
 const RxMeasurement* DspPipeline::getRxMeasurement(
@@ -219,15 +305,12 @@ const RxMeasurement* DspPipeline::getRxMeasurement(
 }
 
 QString DspPipeline::computeRS(const RxMeasurement& m) {
-    // R: Readability from FEC convergence and iteration count
     int r = 1;
     if (m.converged) {
         if      (m.fecIterations < 50)  r = 5;
         else if (m.fecIterations < 150) r = 4;
         else                            r = 3;
     }
-
-    // S: Signal strength from SNR dB — standard 6 dB per S-unit scale
     int s = 1;
     if      (m.snrDb >= 26) s = 9;
     else if (m.snrDb >= 21) s = 8;
@@ -238,7 +321,6 @@ QString DspPipeline::computeRS(const RxMeasurement& m) {
     else if (m.snrDb >=  3) s = 3;
     else if (m.snrDb >=  0) s = 2;
     else                    s = 1;
-
     return QString("%1%2").arg(r).arg(s);
 }
 
@@ -247,11 +329,9 @@ QString DspPipeline::parseSenderCallsign(const QString& text,
 {
     QStringList words = text.toUpper().split(' ', Qt::SkipEmptyParts);
     QString myCall = myCallsign.toUpper();
-
     static QRegularExpression callRe(
         "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
 
-    // Pattern: THEIRCALL DE MYCALL — sender is the word before DE
     for (int i = 1; i < words.size() - 1; i++) {
         if (words[i] == "DE") {
             QString before = words[i - 1];
@@ -262,8 +342,6 @@ QString DspPipeline::parseSenderCallsign(const QString& text,
                 return after;
         }
     }
-
-    // Fallback: first callsign-like word that isn't our call
     for (const QString& word : words) {
         if (callRe.match(word).hasMatch() && word != myCall)
             return word;

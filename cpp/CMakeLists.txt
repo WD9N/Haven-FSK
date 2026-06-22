@@ -62,6 +62,7 @@ set(SOURCES
     src/ui/RxDisplay.cpp
     src/ui/LogPanel.cpp
     src/ui/MacroPanel.cpp
+    src/ui/WaterfallWidget.cpp
     src/log/LogManager.cpp
     src/log/AdifExporter.cpp
     src/ui/ExportDialog.cpp
@@ -90,6 +91,8 @@ set(HEADERS
     src/ui/RxDisplay.h
     src/ui/LogPanel.h
     src/ui/MacroPanel.h
+    src/ui/WaterfallWidget.h
+    src/ui/FrequencyControl.h
     src/log/LogEntry.h
     src/log/LogManager.h
     src/log/AdifExporter.h

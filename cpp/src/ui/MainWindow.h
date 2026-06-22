@@ -8,6 +8,7 @@
 #include <QSplitter>
 #include <QCloseEvent>
 #include <cstdint>
+#include <cmath>
 
 class AudioEngine;
 
@@ -25,6 +26,8 @@ class LogPanel;
 class MacroPanel;
 class LogManager;
 class ExportDialog;
+class WaterfallWidget;
+class FrequencyControl;
 
 class MainWindow : public QMainWindow
 {
@@ -57,6 +60,7 @@ private slots:
     void onContactLogged(const QVariantMap& fields);
     void onFieldDayToggled(bool enabled);
     void onExport();
+    void onWaterfallTune(float audioHz);
 
 private:
     void setupUi();
@@ -65,10 +69,10 @@ private:
     void startAudio();
     void startRadio();
     void stopRadio();
-    QString formatFrequency(uint64_t hz) const;
 
     // ── UI widgets ────────────────────────────────────────────────────────
     StationInfoWidget* m_stationInfo  {nullptr};
+    WaterfallWidget*   m_waterfall    {nullptr};
     RxDisplay*         m_rxDisplay    {nullptr};
     LogPanel*          m_logPanel     {nullptr};
     MacroPanel*        m_macroPanel   {nullptr};
@@ -78,7 +82,7 @@ private:
     QLabel*            m_dcdLabel     {nullptr};
     QLabel*            m_statusLabel  {nullptr};
     QLabel*            m_rxStateLabel {nullptr};
-    QLabel*            m_freqLabel    {nullptr};
+    FrequencyControl*  m_freqControl  {nullptr};
     QLabel*            m_rigLabel     {nullptr};
     QProgressBar*      m_rxLevel      {nullptr};
 
