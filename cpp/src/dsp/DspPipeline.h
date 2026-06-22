@@ -62,6 +62,11 @@ public:
     bool  afcEnabled()      const     { return m_afcEnabled; }
     float afcOffsetHz()     const     { return m_afcOffsetHz; }
 
+    // Returns true if the most recent transmit() text contained "CQ"
+    bool lastTxWasCQ() const {
+        return m_lastTxText.contains("CQ", Qt::CaseInsensitive);
+    }
+
     // AFC range — beyond this AFC clamps and MainWindow warns operator
     static constexpr float AFC_MAX_HZ = 75.0f;
 
@@ -106,6 +111,9 @@ private:
     std::vector<std::vector<float>> m_symbolAccum;
     std::vector<std::vector<float>> m_searchWindow;
     int m_expectedSymbols = 0;
+
+    // ── TX state ──────────────────────────────────────────────────────────
+    QString m_lastTxText;
 
     // ── AFC state ─────────────────────────────────────────────────────────
     float  m_afcOffsetHz   = 0.0f;

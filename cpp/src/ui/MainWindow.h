@@ -9,6 +9,7 @@
 #include <QCloseEvent>
 #include <cstdint>
 #include <cmath>
+#include "../radio/PTTManager.h"
 
 class AudioEngine;
 
@@ -98,4 +99,5 @@ private:
     HavenFSK::DspPipeline* m_pipeline  {nullptr};
     RadioInterface*        m_radio      {nullptr};
     LogManager*            m_logManager {nullptr};
+    PTTManager*            m_pttManager {nullptr};
 };

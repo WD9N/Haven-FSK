@@ -156,8 +156,15 @@ void TCIClient::sendTCI(const QString& cmd) {
 }
 
 bool TCIClient::setPTT(bool active) {
-    if (!m_connected) return false;
-    sendTCI(active ? "trx:0,true;" : "trx:0,false;");
+    if (!m_connected || !m_ready) {
+        qWarning() << "TCIClient::setPTT: not ready"
+                   << "connected=" << m_connected << "ready=" << m_ready;
+        return false;
+    }
+    QString cmd = active ? "trx:0,true;" : "trx:0,false;";
+    qDebug() << "TCIClient: setPTT" << (active ? "ON" : "OFF")
+             << "sending:" << cmd;
+    m_socket->sendTextMessage(cmd);
     return true;
 }
 

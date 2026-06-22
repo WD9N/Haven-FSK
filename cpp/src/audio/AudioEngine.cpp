@@ -188,18 +188,31 @@ bool AudioEngine::startTx(const QString& deviceName,
         return false;
     }
 
+    qDebug() << "AudioEngine::startTx using device:" << dev.description()
+             << "(requested:" << deviceName << ")"
+             << samples.size() << "samples ="
+             << (samples.size() / 48000.0) << "sec";
+
     qint64 written = m_txDevice->write(m_txBuffer);
     if (written < m_txBuffer.size())
         m_txOffset = static_cast<int>(written);
 
     m_transmitting = true;
-    qDebug() << "AudioEngine: TX started on" << dev.description()
-             << "—" << samples.size() << "samples";
     return true;
 }
 
 void AudioEngine::onTxStateChanged(QAudio::State state) {
+    qDebug() << "AudioEngine::onTxStateChanged state=" << state
+             << "error=" << (m_txSink ? static_cast<int>(m_txSink->error()) : -1)
+             << "transmitting=" << m_transmitting.load();
+
     if (state == QAudio::IdleState && m_transmitting) {
+        // Diagnostic: warn if TX completed in under 100ms (likely device issue)
+        if (m_txSink && m_txSink->processedUSecs() < 100000) {
+            qWarning() << "AudioEngine: TX completed in <100ms"
+                       << "— possible audio device problem."
+                       << "Processed:" << m_txSink->processedUSecs() << "us";
+        }
         m_transmitting = false;
         m_txSink.reset();
         m_txDevice = nullptr;
@@ -209,6 +222,7 @@ void AudioEngine::onTxStateChanged(QAudio::State state) {
         emit txComplete();
     } else if (state == QAudio::StoppedState) {
         if (m_txSink && m_txSink->error() != QAudio::NoError) {
+            qWarning() << "AudioEngine: TX error:" << m_txSink->error();
             emit audioError(QString("TX audio error: %1")
                             .arg(static_cast<int>(m_txSink->error())));
         }

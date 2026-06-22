@@ -27,6 +27,7 @@ bool DspPipeline::transmit(const QString& text) {
         return false;
     }
     m_transmitting = true;
+    m_lastTxText = text;            // store for CQ detection
     emit messageTransmitted(text);  // notify UI before assembling
     std::vector<float> audio = m_frame.assemble(text.toStdString());
     qDebug() << "DspPipeline: TX" << text.length() << "chars ="

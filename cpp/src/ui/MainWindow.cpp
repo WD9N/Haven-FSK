@@ -48,12 +48,32 @@ MainWindow::MainWindow(QWidget* parent)
             "Database path: " + m_logManager->databasePath());
     }
 
+    // PTTManager starts with no radio — updated when radio connects
+    m_pttManager = new PTTManager(nullptr, this);
+    connect(m_pttManager, &PTTManager::watchdogTripped,
+            this, &MainWindow::onWatchdogTripped);
+    connect(m_pttManager, &PTTManager::channelBusy,
+            this, &MainWindow::onChannelBusy);
+
     setupMenu();
     setupUi();
     setupConnections();
 
     m_stationInfo->refresh();
     onSettingsChanged();
+
+    // Fix 2: warn if saved output device is unavailable
+    {
+        QString savedOut = HavenFSK::savedOutputDevice();
+        QStringList outputs = AudioEngine::availableOutputDevices();
+        if (savedOut.isEmpty()) {
+            qWarning() << "No audio output device configured";
+        } else if (!outputs.contains(savedOut)) {
+            qWarning() << "Saved output device not found:" << savedOut;
+            m_statusLabel->setText(
+                "⚠ Audio output device not found — check Settings → Audio");
+        }
+    }
 
     startAudio();
     startRadio();
@@ -322,10 +342,31 @@ void MainWindow::setupConnections() {
                     m_radio->setFrequency(hz);
             });
 
-    // DspPipeline → AudioEngine (TX audio)
+    // DspPipeline → AudioEngine (TX audio) — with PTT and diagnostics
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
             this, [this](const std::vector<float>& samples) {
-                m_audio->startTx(HavenFSK::savedOutputDevice(), samples);
+                QString outDev = HavenFSK::savedOutputDevice();
+                qDebug() << "txAudioReady:" << samples.size()
+                         << "samples =" << (samples.size() / 48000.0) << "sec"
+                         << "device:" << outDev;
+
+                // Fix 1: key PTT via PTTManager before playing audio
+                bool isCQ      = m_pipeline->lastTxWasCQ();
+                bool dcdActive = m_pipeline->dcdActive();
+                if (m_pttManager && m_radio && m_radio->isConnected()) {
+                    m_pttManager->requestTX(isCQ, dcdActive);
+                } else {
+                    qDebug() << "No rig connected — playing audio (VOX/no-PTT mode)";
+                }
+
+                bool ok = m_audio->startTx(outDev, samples);
+                qDebug() << "startTx returned:" << ok;
+                if (!ok) {
+                    qWarning() << "startTx failed — aborting TX";
+                    m_pipeline->onTxComplete();
+                    onTxComplete();
+                    if (m_pttManager) m_pttManager->txOff();
+                }
             });
 
     // DspPipeline → UI
@@ -407,7 +448,26 @@ void MainWindow::startRadio() {
     }
 
     connect(m_radio, &RadioInterface::connected,
-            this, &MainWindow::onRadioConnected);
+            this, [this]() {
+                onRadioConnected();
+                // Recreate PTTManager now that we have a connected radio
+                if (m_pttManager) m_pttManager->deleteLater();
+                m_pttManager = new PTTManager(m_radio, this);
+                connect(m_pttManager, &PTTManager::txStarted, this, [this]() {
+                    qDebug() << "PTTManager: TX started (PTT keyed)";
+                    m_statusLabel->setText("Transmitting...");
+                });
+                connect(m_pttManager, &PTTManager::watchdogTripped,
+                        this, &MainWindow::onWatchdogTripped);
+                connect(m_pttManager, &PTTManager::channelBusy,
+                        this, &MainWindow::onChannelBusy);
+                // Set operating mode from station info
+                HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
+                m_pttManager->setOperatingMode(
+                    info.isActivator()
+                    ? HavenFSK::OperatingMode::Activator
+                    : HavenFSK::OperatingMode::Standard);
+            });
     connect(m_radio, &RadioInterface::disconnected,
             this, &MainWindow::onRadioDisconnected);
     connect(m_radio, &RadioInterface::frequencyChanged,
@@ -456,12 +516,26 @@ void MainWindow::onSettingsChanged() {
     else
         m_statusLabel->setText("Listening...");
 
+    // Update PTTManager operating mode when station info changes
+    if (m_pttManager) {
+        HavenFSK::StationInfo si = HavenFSK::loadStationInfo();
+        m_pttManager->setOperatingMode(
+            si.isActivator()
+            ? HavenFSK::OperatingMode::Activator
+            : HavenFSK::OperatingMode::Standard);
+    }
+
     m_audio->stop();
     startAudio();
     startRadio();
 }
 
 void MainWindow::onTransmit() {
+    qDebug() << "=== TX START ===";
+    qDebug() << "Audio transmitting:" << m_audio->isTransmitting();
+    qDebug() << "Radio connected:" << (m_radio && m_radio->isConnected());
+    qDebug() << "Output device:" << HavenFSK::savedOutputDevice();
+
     HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
     if (info.callsign.isEmpty()) {
         QMessageBox::warning(this, "No Callsign",
@@ -494,6 +568,9 @@ void MainWindow::onTransmit() {
 }
 
 void MainWindow::onTxComplete() {
+    qDebug() << "=== TX COMPLETE === unkeying PTT";
+    // Fix 1: unkey PTT after audio finishes
+    if (m_pttManager) m_pttManager->txOff();
     m_txButton->setEnabled(true);
     m_txInput->setEnabled(true);
     m_txInput->clear();

@@ -1169,3 +1169,36 @@ to any radio interface.
 still need to log the operating frequency. Requiring rig control for
 frequency entry would exclude a significant portion of field operators
 using vintage or budget equipment.
+
+## ADR-065 — PTTManager wired into MainWindow TX sequence
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** PTTManager is instantiated in MainWindow and wired
+into the TX sequence. PTT is keyed via PTTManager before audio
+plays and unkeyed in onTxComplete() after audio finishes.
+PTTManager is recreated when the radio connects to receive the
+active RadioInterface pointer. Operating mode (Standard/Activator)
+is set from station info whenever settings change.
+
+**Reasoning:** Phase 5B implemented PTTManager but it was not
+wired into the MainWindow TX flow. First-run testing revealed
+that the radio never received PTT commands because nothing was
+calling PTTManager::requestTX(). The TX audio was playing (or
+attempting to play) without the radio being keyed.
+
+## ADR-066 — TX audio debug logging for diagnosis
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Comprehensive qDebug() logging added throughout the
+TX pipeline — txAudioReady handler, AudioEngine::startTx(),
+onTxStateChanged(), PTTManager, and TCIClient::setPTT(). Logging
+remains in the codebase to assist future debugging but can be
+disabled by defining QT_NO_DEBUG_OUTPUT in release builds.
+
+**Reasoning:** First-run testing revealed TX completing instantly
+without audio playing. Systematic debug logging throughout the
+pipeline is the fastest path to diagnosing where the failure occurs.
