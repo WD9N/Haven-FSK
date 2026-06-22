@@ -101,22 +101,11 @@ void MainWindow::setupMenu() {
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
     fileMenu->addAction(quitAction);
 
-    // Fix 1: Radio menu with Configure... action
-    QMenu* radioMenu = menuBar()->addMenu("&Radio");
-    auto* configAction = new QAction("&Configure...", this);
-    connect(configAction, &QAction::triggered, this, [this]() {
-        RadioConfigDialog dlg(this);
-        connect(&dlg, &RadioConfigDialog::configChanged,
-                this, &MainWindow::startRadio);
-        dlg.exec();
-    });
-    radioMenu->addAction(configAction);
-    radioMenu->addSeparator();
-    m_connectRigAction    = new QAction("&Connect Rig", this);
-    m_disconnectRigAction = new QAction("&Disconnect Rig", this);
-    m_disconnectRigAction->setEnabled(false);
-    radioMenu->addAction(m_connectRigAction);
-    radioMenu->addAction(m_disconnectRigAction);
+    // Radio — single click opens config dialog directly (RADIO_FIX)
+    auto* radioAction = new QAction("Radio", this);
+    menuBar()->addAction(radioAction);
+    connect(radioAction, &QAction::triggered,
+            this, &MainWindow::onOpenRadioConfig);
 
     // Operating menu
     QMenu* opMenu  = menuBar()->addMenu("&Operating");
@@ -260,12 +249,6 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onOpenSettings);
     connect(m_exportAction, &QAction::triggered,
             this, &MainWindow::onExport);
-
-    // Radio menu
-    connect(m_connectRigAction, &QAction::triggered,
-            this, &MainWindow::startRadio);
-    connect(m_disconnectRigAction, &QAction::triggered,
-            this, &MainWindow::stopRadio);
 
     // TX
     connect(m_txButton, &QPushButton::clicked,
@@ -448,8 +431,6 @@ void MainWindow::stopRadio() {
     m_rigLabel->setText("No rig control");
     m_rigLabel->setStyleSheet("color: gray;");
     m_freqControl->setFrequency(0);
-    m_connectRigAction->setEnabled(true);
-    m_disconnectRigAction->setEnabled(false);
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────
@@ -564,15 +545,11 @@ void MainWindow::onRadioConnected() {
     QString name = m_radio ? m_radio->rigName() : "Rig";
     m_rigLabel->setText(name + "  ✓");
     m_rigLabel->setStyleSheet("color: green;");
-    m_connectRigAction->setEnabled(false);
-    m_disconnectRigAction->setEnabled(true);
 }
 
 void MainWindow::onRadioDisconnected() {
     m_rigLabel->setText("Rig disconnected");
     m_rigLabel->setStyleSheet("color: orange;");
-    m_connectRigAction->setEnabled(true);
-    m_disconnectRigAction->setEnabled(false);
     m_freqControl->setFrequency(0);
 }
 
@@ -636,6 +613,18 @@ void MainWindow::onExport() {
 
 void MainWindow::onFieldDayToggled(bool enabled) {
     m_logPanel->setFieldDayMode(enabled);
+}
+
+void MainWindow::onOpenRadioConfig() {
+    RadioConfigDialog dlg(this);
+    dlg.setConnected(m_radio && m_radio->isConnected());
+    connect(&dlg, &RadioConfigDialog::configChanged,
+            this, &MainWindow::startRadio);
+    connect(&dlg, &RadioConfigDialog::connectRequested,
+            this, &MainWindow::startRadio);
+    connect(&dlg, &RadioConfigDialog::disconnectRequested,
+            this, &MainWindow::stopRadio);
+    dlg.exec();
 }
 
 void MainWindow::onWaterfallTune(float audioHz) {

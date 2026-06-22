@@ -10,6 +10,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QRegularExpression>
+#include <algorithm>
 
 // Auto-correct POTA ref to canonical XX-NNNN format
 static QString fixPotaRef(const QString& raw) {
@@ -115,21 +116,27 @@ void SettingsDialog::setupStationTab() {
         "POTA References (leave empty if not activating)");
     auto* potaLayout = new QVBoxLayout(potaGroup);
 
-    auto* potaNote = new QLabel(
-        "Add all park references for your activation location.\n"
-        "No limit — boundary overlaps may involve many parks.\n"
-        "Format: XX-NNNN (e.g. US-1234, CA-0001)");
-    potaNote->setStyleSheet("color: gray; font-size: 9pt;");
-    potaLayout->addWidget(potaNote);
-
     m_potaList = new QListWidget;
-    m_potaList->setMaximumHeight(120);
     m_potaList->setAlternatingRowColors(true);
+    m_potaList->setFixedHeight(40);  // compact when empty, grows with content
     potaLayout->addWidget(m_potaList);
+
+    // Dynamic height: expands as references are added
+    auto adjustListHeight = [this]() {
+        int rows = m_potaList->count();
+        int itemH = m_potaList->sizeHintForRow(0);
+        if (itemH < 1) itemH = 22;
+        int newH = std::clamp(rows * itemH + 8, 40, 200);
+        m_potaList->setFixedHeight(newH);
+    };
+    connect(m_potaList->model(), &QAbstractItemModel::rowsInserted,
+            this, adjustListHeight);
+    connect(m_potaList->model(), &QAbstractItemModel::rowsRemoved,
+            this, adjustListHeight);
 
     auto* potaEntryRow = new QHBoxLayout;
     m_potaEntry = new QLineEdit;
-    m_potaEntry->setPlaceholderText("XX-NNNN (e.g. US-1234)");
+    m_potaEntry->setPlaceholderText("XX-NNNN");
     m_potaEntry->setMaxLength(20);
     m_potaAdd    = new QPushButton("+ Add");
     m_potaRemove = new QPushButton("Remove");
@@ -138,13 +145,6 @@ void SettingsDialog::setupStationTab() {
     potaEntryRow->addWidget(m_potaAdd);
     potaEntryRow->addWidget(m_potaRemove);
     potaLayout->addLayout(potaEntryRow);
-
-    auto* activatorNote = new QLabel(
-        "Setting any POTA reference enables Activator mode "
-        "(TX backoff 0–50ms).");
-    activatorNote->setStyleSheet("color: gray; font-size: 9pt;");
-    activatorNote->setWordWrap(true);
-    potaLayout->addWidget(activatorNote);
 
     layout->addWidget(potaGroup);
 

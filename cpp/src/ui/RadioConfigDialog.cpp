@@ -1,8 +1,8 @@
 #include "RadioConfigDialog.h"
 #include "../radio/RadioSettings.h"
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QFormLayout>
-#include <QDialogButtonBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QLabel>
@@ -10,7 +10,7 @@
 RadioConfigDialog::RadioConfigDialog(QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle("Radio Control Configuration");
+    setWindowTitle("Radio Control");
     setMinimumWidth(440);
     setModal(true);
     setupUi();
@@ -36,7 +36,7 @@ void RadioConfigDialog::setupUi() {
 
     auto* methodNote = new QLabel(
         "VOX: radio handles PTT via audio level — no rig control needed.\n"
-        "rigctld: start Hamlib rigctld before launching HAVEN-FSK.\n"
+        "rigctld: start Hamlib rigctld before connecting.\n"
         "TCI: enable TCI server in your SDR software first.");
     methodNote->setStyleSheet("color: gray; font-size: 9pt;");
     methodNote->setWordWrap(true);
@@ -53,7 +53,7 @@ void RadioConfigDialog::setupUi() {
     m_rigctldPort->setRange(1, 65535);
     m_rigctldPort->setValue(4532);
     rigForm->addRow("Port:", m_rigctldPort);
-    auto* rigNote  = new QLabel("Default port 4532 (rigctld universal default).");
+    auto* rigNote  = new QLabel("Default port 4532.");
     rigNote->setStyleSheet("color: gray; font-size: 9pt;");
     rigForm->addRow("", rigNote);
     layout->addWidget(m_rigctldGroup);
@@ -69,27 +69,51 @@ void RadioConfigDialog::setupUi() {
     m_tciPort->setValue(50001);
     tciForm->addRow("Port:", m_tciPort);
     auto* tciNote = new QLabel(
-        "Default port 50001 (standard Thetis).\n"
-        "Thetis HL2 users: verify port in Setup → TCI.\n"
-        "Compatible with all TCI protocol versions.");
+        "Default port 50001 (Thetis). Thetis HL2 users: verify port in Setup → TCI.");
     tciNote->setStyleSheet("color: gray; font-size: 9pt;");
     tciNote->setWordWrap(true);
     tciForm->addRow("", tciNote);
     layout->addWidget(m_tciGroup);
-    layout->addStretch();
 
-    auto* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok |
-        QDialogButtonBox::Apply |
-        QDialogButtonBox::Cancel, this);
-    connect(buttons, &QDialogButtonBox::accepted,
-            this, &RadioConfigDialog::onOk);
-    connect(buttons->button(QDialogButtonBox::Apply),
-            &QPushButton::clicked,
-            this, &RadioConfigDialog::onApply);
-    connect(buttons, &QDialogButtonBox::rejected,
-            this, &QDialog::reject);
-    layout->addWidget(buttons);
+    // Button row: [Connect Rig] [Disconnect Rig] <stretch> [Save] [Close]
+    auto* btnLayout = new QHBoxLayout;
+
+    m_connectBtn = new QPushButton("Connect Rig");
+    m_connectBtn->setStyleSheet(
+        "QPushButton { background: #1a3a1a; color: #88cc88; "
+        "border: 1px solid #336633; padding: 4px 12px; }"
+        "QPushButton:hover { background: #2a5a2a; }"
+        "QPushButton:disabled { background: #111; color: #444; "
+        "border: 1px solid #222; }");
+
+    m_disconnectBtn = new QPushButton("Disconnect Rig");
+    m_disconnectBtn->setStyleSheet(
+        "QPushButton { background: #3a1a1a; color: #cc8888; "
+        "border: 1px solid #663333; padding: 4px 12px; }"
+        "QPushButton:hover { background: #5a2a2a; }"
+        "QPushButton:disabled { background: #111; color: #444; "
+        "border: 1px solid #222; }");
+    m_disconnectBtn->setEnabled(false);
+
+    auto* saveBtn  = new QPushButton("Save");
+    auto* closeBtn = new QPushButton("Close");
+
+    btnLayout->addWidget(m_connectBtn);
+    btnLayout->addWidget(m_disconnectBtn);
+    btnLayout->addStretch();
+    btnLayout->addWidget(saveBtn);
+    btnLayout->addWidget(closeBtn);
+
+    layout->addLayout(btnLayout);
+
+    connect(m_connectBtn,    &QPushButton::clicked,
+            this, &RadioConfigDialog::onConnect);
+    connect(m_disconnectBtn, &QPushButton::clicked,
+            this, &RadioConfigDialog::onDisconnect);
+    connect(saveBtn,  &QPushButton::clicked,
+            this, &RadioConfigDialog::onSave);
+    connect(closeBtn, &QPushButton::clicked,
+            this, &QDialog::accept);
 
     connect(m_radioNone,    &QRadioButton::toggled,
             this, &RadioConfigDialog::onMethodChanged);
@@ -130,18 +154,32 @@ void RadioConfigDialog::saveSettings() {
                m_tciPort->value());
 }
 
+void RadioConfigDialog::setConnected(bool connected) {
+    m_isConnected = connected;
+    if (m_connectBtn)    m_connectBtn->setEnabled(!connected);
+    if (m_disconnectBtn) m_disconnectBtn->setEnabled(connected);
+}
+
 void RadioConfigDialog::onMethodChanged() {
     m_rigctldGroup->setEnabled(m_radioRigctld->isChecked());
     m_tciGroup->setEnabled(m_radioTCI->isChecked());
 }
 
-void RadioConfigDialog::onOk() {
+void RadioConfigDialog::onConnect() {
     saveSettings();
     emit configChanged();
-    accept();
+    emit connectRequested();
+    m_connectBtn->setEnabled(false);
+    m_disconnectBtn->setEnabled(true);
 }
 
-void RadioConfigDialog::onApply() {
+void RadioConfigDialog::onDisconnect() {
+    emit disconnectRequested();
+    m_connectBtn->setEnabled(true);
+    m_disconnectBtn->setEnabled(false);
+}
+
+void RadioConfigDialog::onSave() {
     saveSettings();
     emit configChanged();
 }

@@ -62,6 +62,7 @@ private slots:
     void onFieldDayToggled(bool enabled);
     void onExport();
     void onWaterfallTune(float audioHz);
+    void onOpenRadioConfig();
 
 private:
     void setupUi();
@@ -88,11 +89,9 @@ private:
     QProgressBar*      m_rxLevel      {nullptr};
 
     // ── Menu actions ──────────────────────────────────────────────────────
-    QAction* m_settingsAction      {nullptr};
-    QAction* m_exportAction        {nullptr};
-    QAction* m_connectRigAction    {nullptr};
-    QAction* m_disconnectRigAction {nullptr};
-    QAction* m_fdModeAction        {nullptr};
+    QAction* m_settingsAction {nullptr};
+    QAction* m_exportAction   {nullptr};
+    QAction* m_fdModeAction   {nullptr};
 
     // ── Backend objects ───────────────────────────────────────────────────
     AudioEngine*           m_audio      {nullptr};

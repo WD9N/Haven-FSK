@@ -4,12 +4,10 @@
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QGroupBox>
-#include <QLabel>
+#include <QPushButton>
 
-// RadioConfigDialog — radio control method and connection settings.
-// Opened from Radio → Configure... on the main menu bar.
-// Settings persisted in QSettings under radio/* keys.
-// Emits configChanged() on OK/Apply so MainWindow reconnects.
+// RadioConfigDialog — radio control method, connection settings, and
+// Connect/Disconnect controls. Opened directly from the Radio menu bar item.
 
 class RadioConfigDialog : public QDialog
 {
@@ -17,12 +15,18 @@ class RadioConfigDialog : public QDialog
 public:
     explicit RadioConfigDialog(QWidget* parent = nullptr);
 
+    // Call after construction to reflect current connection state
+    void setConnected(bool connected);
+
 signals:
-    void configChanged();
+    void configChanged();       // settings saved
+    void connectRequested();    // operator clicked Connect Rig
+    void disconnectRequested(); // operator clicked Disconnect Rig
 
 private slots:
-    void onOk();
-    void onApply();
+    void onConnect();
+    void onDisconnect();
+    void onSave();
     void onMethodChanged();
 
 private:
@@ -41,4 +45,9 @@ private:
     QGroupBox*  m_tciGroup     {nullptr};
     QLineEdit*  m_tciHost      {nullptr};
     QSpinBox*   m_tciPort      {nullptr};
+
+    QPushButton* m_connectBtn    {nullptr};
+    QPushButton* m_disconnectBtn {nullptr};
+
+    bool m_isConnected {false};
 };
