@@ -13,17 +13,13 @@
 #include <cstdint>
 #include "../radio/RadioSettings.h"
 
-class RadioInterface;
-
 namespace HavenFSK {
     struct RxMeasurement;
 }
 
 // LogPanel — unified log entry and recent contacts display.
-//
-// Entry strip at top + completed contacts table below in one visual container.
-// Context-adaptive: POTA/SOTA fields shown based on station info.
-// Field Day mode (menu toggle) replaces activity fields with FD exchange.
+// Entry strip at top + completed contacts table below.
+// Single-click row: populate fields. Double-click: enter edit mode.
 
 class LogPanel : public QGroupBox
 {
@@ -34,30 +30,29 @@ public:
     void setFieldDayMode(bool enabled);
     bool isFieldDayMode() const { return m_fdMode; }
 
-    // Populate entry fields from clicked RX element
     void populateField(const QString& scheme, const QString& value);
-
     void setRsSent(const QString& rs);
     void setFrequency(uint64_t hz);
-
-    // Refresh field visibility from current station info
     void refresh();
 
 signals:
     void contactLogged(const QVariantMap& fields);
+    void contactUpdated(const QVariantMap& fields);
     void entryCleared();
 
 private slots:
     void onLogIt();
     void onClear();
     void onContactRowClicked(int row, int col);
+    void onContactRowDoubleClicked(int row, int col);
 
 private:
     void setupEntryStrip();
     void setupContactTable();
     void updateFieldVisibility();
     void addContactRow(const QVariantMap& fields);
-    QString formatFrequency(uint64_t hz) const;
+    void updateContactRow(int row, const QVariantMap& fields);
+    void exitEditMode();
 
     // ── Entry strip ───────────────────────────────────────────────────────
     QLineEdit*   m_callEntry   {nullptr};
@@ -83,8 +78,9 @@ private:
     // ── Recent contacts table ─────────────────────────────────────────────
     QTableWidget* m_contactTable {nullptr};
 
-    bool     m_fdMode    {false};
-    uint64_t m_frequency {0};
+    bool     m_fdMode      {false};
+    uint64_t m_frequency   {0};
+    int      m_editingRow  {-1};   // -1 = new entry, >= 0 = editing row
 
     static constexpr int MAX_VISIBLE_ROWS = 10;
 };

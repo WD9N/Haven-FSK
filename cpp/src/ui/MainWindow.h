@@ -28,6 +28,7 @@ class LogManager;
 class ExportDialog;
 class WaterfallWidget;
 class FrequencyControl;
+class RadioConfigDialog;
 
 class MainWindow : public QMainWindow
 {

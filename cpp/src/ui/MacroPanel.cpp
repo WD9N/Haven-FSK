@@ -107,17 +107,44 @@ void MacroPanel::saveMacro(int bank, int index) {
 }
 
 void MacroPanel::updateButton(int bank, int index) {
+    // Fix 6: always enable so right-click works on empty slots
     const QString& label = m_macroLabel[bank][index];
+    bool isEmpty = label.isEmpty();
+
     m_buttons[bank][index]->setText(
-        label.isEmpty() ? QString("(%1)").arg(index + 1) : label);
-    m_buttons[bank][index]->setEnabled(!label.isEmpty());
-    if (label.isEmpty())
-        m_buttons[bank][index]->setToolTip("Right-click to configure");
+        isEmpty ? QString("(%1)").arg(index + 1) : label);
+    m_buttons[bank][index]->setEnabled(true);  // always enabled
+
+    if (isEmpty) {
+        m_buttons[bank][index]->setStyleSheet(
+            "QPushButton {"
+            "  background: #0d0d1a;"
+            "  color: #444;"
+            "  border: 1px dashed #333;"
+            "  font-size: 8pt;"
+            "}"
+            "QPushButton:hover { background: #1a1a2e; color: #666; }");
+        m_buttons[bank][index]->setToolTip(
+            "Right-click to configure this macro");
+    } else {
+        m_buttons[bank][index]->setStyleSheet(
+            "QPushButton {"
+            "  background: #1a1a2e;"
+            "  color: #ccc;"
+            "  border: 1px solid #333;"
+            "  font-size: 8pt;"
+            "}"
+            "QPushButton:hover { background: #0f3460; }"
+            "QPushButton:pressed { background: #162447; }");
+        m_buttons[bank][index]->setToolTip(
+            "Left-click: send macro\n"
+            "Right-click: edit macro");
+    }
 }
 
 void MacroPanel::onMacroClicked(int bank, int index) {
     QString raw = m_macroText[bank][index];
-    if (raw.isEmpty()) return;
+    if (raw.trimmed().isEmpty()) return;  // Fix 6: unconfigured, do nothing
 
     bool autoTx = raw.contains("<TX>", Qt::CaseInsensitive);
     QString text = expandMacro(raw);

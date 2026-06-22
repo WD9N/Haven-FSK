@@ -14,14 +14,12 @@
 
 // FrequencyControl — editable frequency display with increment buttons.
 //
-// Shows current radio frequency in MHz. Three tuning methods:
-//   1. Click field, type frequency in MHz, press Enter
-//   2. Click ▲/▼ to step by configured amount (default 100 Hz)
-//   3. Right-click ▲/▼ to set step size (1/10/100/1000 Hz)
+// Always editable — works with or without rig control (Fix 11).
+// Amber text: rig-controlled frequency.
+// Grey text: manual entry mode (no rig connected).
 //
 // Emits frequencyRequested(hz) when operator requests a change.
 // Call setFrequency(hz) to update display from rig control feedback.
-// Does NOT emit frequencyRequested when setFrequency() is called.
 
 class FrequencyControl : public QWidget
 {
@@ -39,19 +37,10 @@ public:
         m_freqEdit->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_freqEdit->setMinimumWidth(115);
         m_freqEdit->setMaximumWidth(135);
-        m_freqEdit->setStyleSheet(
-            "QLineEdit {"
-            "  background: #0d1117;"
-            "  color: #ffaa00;"
-            "  border: 1px solid #2a2a3e;"
-            "  padding: 2px 4px;"
-            "}"
-            "QLineEdit:focus {"
-            "  border: 1px solid #ffaa00;"
-            "}");
         m_freqEdit->setValidator(
             new QDoubleValidator(0.0, 450.0, 6, this));
-        m_freqEdit->setText("--");
+        m_freqEdit->setPlaceholderText("Enter MHz");
+        applyStyle(false);  // start in manual mode
         layout->addWidget(m_freqEdit);
 
         // ▲/▼ step buttons
@@ -96,14 +85,23 @@ public:
         }
     }
 
+    // Update display from rig control (amber style)
     void setFrequency(uint64_t hz) {
-        m_currentHz = hz;
-        if (hz == 0)
-            m_freqEdit->setText("--");
-        else
+        m_currentHz      = hz;
+        m_rigControlled  = (hz > 0);
+        if (hz == 0) {
+            m_freqEdit->setText("");
+            m_freqEdit->setPlaceholderText("Enter MHz");
+            applyStyle(false);
+        } else {
             m_freqEdit->setText(
-                QString::number(
-                    static_cast<double>(hz) / 1.0e6, 'f', 6));
+                QString::number(static_cast<double>(hz) / 1.0e6, 'f', 6));
+            applyStyle(true);
+        }
+        m_freqEdit->setToolTip(
+            m_rigControlled
+            ? "Frequency from rig control — click ▲▼ to adjust"
+            : "No rig control — type frequency in MHz and press Enter");
     }
 
     uint64_t frequency() const { return m_currentHz; }
@@ -153,9 +151,24 @@ private slots:
     }
 
 private:
-    QLineEdit*   m_freqEdit  {nullptr};
-    QPushButton* m_upBtn     {nullptr};
-    QPushButton* m_downBtn   {nullptr};
-    uint64_t     m_currentHz {0};
-    int          m_stepHz    {100};
+    void applyStyle(bool rigControlled) {
+        QString color = rigControlled ? "#ffaa00" : "#888888";
+        m_freqEdit->setStyleSheet(
+            QString("QLineEdit {"
+                    "  background: #0d1117;"
+                    "  color: %1;"
+                    "  border: 1px solid #2a2a3e;"
+                    "  padding: 2px 4px;"
+                    "}"
+                    "QLineEdit:focus {"
+                    "  border: 1px solid %1;"
+                    "}").arg(color));
+    }
+
+    QLineEdit*   m_freqEdit     {nullptr};
+    QPushButton* m_upBtn        {nullptr};
+    QPushButton* m_downBtn      {nullptr};
+    uint64_t     m_currentHz    {0};
+    int          m_stepHz       {100};
+    bool         m_rigControlled{false};
 };

@@ -6,9 +6,10 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QLabel>
-#include <QSpinBox>
 #include <QGroupBox>
-#include <QRadioButton>
+
+// SettingsDialog — Station Information and Audio device settings.
+// Radio control configuration has moved to Radio → Configure... (ADR-055).
 
 class SettingsDialog : public QDialog
 {
@@ -22,13 +23,11 @@ signals:
 private slots:
     void onOk();
     void onApply();
-    void onRadioMethodChanged();
     void onAddPotaRef();
     void onRemovePotaRef();
 
 private:
     void setupStationTab();
-    void setupRadioTab();
     void setupAudioTab();
     void loadSettings();
     void saveSettings();
@@ -50,19 +49,6 @@ private:
     QLineEdit*   m_sotaRef     {nullptr};
     QLineEdit*   m_fdClass     {nullptr};
     QLineEdit*   m_fdSection   {nullptr};
-
-    // ── Radio Control tab ─────────────────────────────────────────────────
-    QRadioButton* m_radioNone    {nullptr};
-    QRadioButton* m_radioRigctld {nullptr};
-    QRadioButton* m_radioTCI     {nullptr};
-
-    QGroupBox*  m_rigctldGroup {nullptr};
-    QLineEdit*  m_rigctldHost  {nullptr};
-    QSpinBox*   m_rigctldPort  {nullptr};
-
-    QGroupBox*  m_tciGroup     {nullptr};
-    QLineEdit*  m_tciHost      {nullptr};
-    QSpinBox*   m_tciPort      {nullptr};
 
     // ── Audio Devices tab ─────────────────────────────────────────────────
     QComboBox*  m_inputDev  {nullptr};

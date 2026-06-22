@@ -1108,3 +1108,64 @@ editable MHz field, ▲/▼ step buttons, right-click step size menu
 4. Thetis/radio VFO (TCI users — HAVEN-FSK follows automatically)
 
 All methods send setFrequency() to the active RadioInterface.
+
+## ADR-055 — Radio Control in Radio menu, not Settings dialog
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Radio control configuration (method, rigctld host/port,
+TCI host/port) is accessed via Radio → Configure... on the main menu
+bar. It is not part of the Settings dialog. Settings contains only
+Station Information and Audio device selection.
+
+**Reasoning:** Radio control is an operational setting operators may
+need to change quickly between sessions or when switching radios.
+Embedding it in the Radio menu where Connect/Disconnect also lives
+keeps all radio-related actions in one place. The Settings dialog
+is for station identity and audio hardware selection.
+
+## ADR-056 — POTA reference auto-correction to XX-NNNN format
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** POTA references are auto-corrected to the canonical
+format: two uppercase letters, hyphen, one or more digits (XX-NNNN).
+Any two-letter country prefix is accepted — the validator does not
+restrict to known POTA country codes to avoid maintenance burden
+as POTA expands internationally. Auto-correction inserts the hyphen
+if missing (US1234 → US-1234) and forces uppercase.
+
+## ADR-057 — Log inline edit mode on double-click
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Double-clicking a completed contact row in the log
+panel enters inline edit mode. The entry strip populates with the
+contact's data, Log It changes to Update, and saving overwrites
+the existing database record preserving the original date/time.
+Cancel returns to normal entry mode without changes.
+
+**Reasoning:** Operators need to correct errors (wrong callsign,
+RS report, missing park reference) immediately after logging without
+hunting through a separate editor dialog. Inline edit is the fastest
+correction path for the common case.
+
+## ADR-058 — Frequency always manually enterable regardless of rig control
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The FrequencyControl widget is always editable. When
+rig control is connected, the field shows amber text (rig-sourced).
+When no rig control is connected, the field shows grey text with
+"Enter MHz" placeholder — the operator types the frequency and presses
+Enter for logging purposes. Manual entry does not send setFrequency()
+to any radio interface.
+
+**Reasoning:** Operators using older radios without CAT or TCI support
+still need to log the operating frequency. Requiring rig control for
+frequency entry would exclude a significant portion of field operators
+using vintage or budget equipment.

@@ -63,14 +63,18 @@ void TCIClient::onDisconnected() {
 }
 
 void TCIClient::onReconnectTimer() {
-    if (!m_connected) {
+    // Fix 7: only reconnect if socket is not already in use
+    if (!m_connected && !m_socket->isValid()) {
         qDebug() << "TCIClient: attempting reconnect";
         connect();
     }
 }
 
 void TCIClient::onError(QAbstractSocket::SocketError error) {
-    Q_UNUSED(error)
+    // Fix 7: ignore OperationError during initial connect — it fires
+    // before the socket is established and is not a real failure.
+    if (!m_connected && error == QAbstractSocket::OperationError) return;
+
     emit rigError(QString("TCI WebSocket error: %1")
                   .arg(m_socket->errorString()));
 }

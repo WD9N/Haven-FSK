@@ -183,7 +183,56 @@ bool LogManager::logContact(const QVariantMap& fields) {
     qDebug() << "LogManager: logged"
              << fields["their_callsign"].toString()
              << fields["time_utc"].toString();
-    emit contactSaved(fields);
+
+    // Fix 12C: include db_id so LogPanel can reference this row for updates
+    QVariantMap savedFields = fields;
+    savedFields["db_id"] = q.lastInsertId().toInt();
+    emit contactSaved(savedFields);
+    return true;
+}
+
+bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
+    if (!m_open) return false;
+    QSqlQuery q(m_db);
+    q.prepare(R"(
+        UPDATE contacts SET
+            their_callsign  = :their_callsign,
+            rs_received     = :rs_received,
+            rs_sent         = :rs_sent,
+            their_pota_refs = :their_pota_refs,
+            their_sota_ref  = :their_sota_ref,
+            their_grid      = :their_grid,
+            their_name      = :their_name,
+            their_qth       = :their_qth,
+            their_fd        = :their_fd,
+            frequency_hz    = :frequency_hz,
+            notes           = :notes
+        WHERE id = :id
+    )");
+    q.bindValue(":their_callsign",
+        fields["their_callsign"].toString().toUpper());
+    q.bindValue(":rs_received",  fields["rs_received"].toString());
+    q.bindValue(":rs_sent",      fields["rs_sent"].toString());
+    q.bindValue(":their_pota_refs",
+        fields["their_pota_refs"].toStringList().join(" "));
+    q.bindValue(":their_sota_ref",
+        fields["their_sota_ref"].toString().toUpper());
+    q.bindValue(":their_grid",
+        fields["their_grid"].toString().toUpper());
+    q.bindValue(":their_name",   fields["their_name"].toString());
+    q.bindValue(":their_qth",    fields["their_qth"].toString());
+    q.bindValue(":their_fd",     fields["their_fd"].toString().toUpper());
+    q.bindValue(":frequency_hz",
+        QVariant::fromValue(fields["frequency_hz"].toULongLong()));
+    q.bindValue(":notes",        fields["notes"].toString());
+    q.bindValue(":id",           dbId);
+
+    if (!q.exec()) {
+        qWarning() << "LogManager: update failed:" << q.lastError().text();
+        emit logError("Failed to update contact: " + q.lastError().text());
+        return false;
+    }
+    qDebug() << "LogManager: updated contact id" << dbId;
     return true;
 }
 

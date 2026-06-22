@@ -6,23 +6,36 @@
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QDialogButtonBox>
-#include <QMessageBox>
 #include <QSettings>
 #include <QGroupBox>
 #include <QLabel>
-#include <QScrollArea>
+#include <QRegularExpression>
+
+// Auto-correct POTA ref to canonical XX-NNNN format
+static QString fixPotaRef(const QString& raw) {
+    QString s = raw.trimmed().toUpper();
+    static QRegularExpression correct("^[A-Z]{2}-[0-9]+$");
+    if (correct.match(s).hasMatch()) return s;
+
+    // Insert hyphen after first 2 letters: "US1234" → "US-1234"
+    static QRegularExpression noHyphen("^([A-Z]{2})([0-9]+)$");
+    auto m = noHyphen.match(s);
+    if (m.hasMatch())
+        return m.captured(1) + "-" + m.captured(2);
+
+    return s;
+}
 
 SettingsDialog::SettingsDialog(QWidget* parent)
     : QDialog(parent)
 {
     setWindowTitle("HAVEN-FSK Settings");
     setMinimumWidth(500);
-    setMinimumHeight(520);
+    setMinimumHeight(460);
     setModal(true);
 
     m_tabs = new QTabWidget(this);
     setupStationTab();
-    setupRadioTab();
     setupAudioTab();
 
     auto* buttons = new QDialogButtonBox(
@@ -51,13 +64,24 @@ void SettingsDialog::setupStationTab() {
     auto* widget = new QWidget;
     auto* layout = new QVBoxLayout(widget);
 
+    // Force-uppercase helper for identity fields
+    auto forceUpper = [](QLineEdit* edit) {
+        QObject::connect(edit, &QLineEdit::textEdited,
+                         edit, [edit](const QString& text) {
+                             int pos = edit->cursorPosition();
+                             edit->setText(text.toUpper());
+                             edit->setCursorPosition(pos);
+                         });
+    };
+
     // Identity group
     auto* idGroup = new QGroupBox("Operator Identity");
     auto* idForm  = new QFormLayout(idGroup);
 
     m_callsign = new QLineEdit;
-    m_callsign->setPlaceholderText("e.g. WD9N");
+    m_callsign->setPlaceholderText("Your callsign");  // Fix 5
     m_callsign->setMaxLength(12);
+    forceUpper(m_callsign);  // Fix 4
     idForm->addRow("Callsign *:", m_callsign);
 
     m_callWarning = new QLabel(
@@ -69,6 +93,7 @@ void SettingsDialog::setupStationTab() {
     m_grid = new QLineEdit;
     m_grid->setPlaceholderText("e.g. DN31");
     m_grid->setMaxLength(6);
+    forceUpper(m_grid);  // Fix 4
     idForm->addRow("Grid Square:", m_grid);
 
     m_opName = new QLineEdit;
@@ -84,7 +109,8 @@ void SettingsDialog::setupStationTab() {
 
     auto* potaNote = new QLabel(
         "Add all park references for your activation location.\n"
-        "No limit — boundary overlaps may involve many parks.");
+        "No limit — boundary overlaps may involve many parks.\n"
+        "Format: XX-NNNN (e.g. US-1234, CA-0001)");
     potaNote->setStyleSheet("color: gray; font-size: 9pt;");
     potaLayout->addWidget(potaNote);
 
@@ -93,10 +119,9 @@ void SettingsDialog::setupStationTab() {
     m_potaList->setAlternatingRowColors(true);
     potaLayout->addWidget(m_potaList);
 
-    // Entry row
     auto* potaEntryRow = new QHBoxLayout;
     m_potaEntry = new QLineEdit;
-    m_potaEntry->setPlaceholderText("e.g. K-1234");
+    m_potaEntry->setPlaceholderText("XX-NNNN (e.g. US-1234)");
     m_potaEntry->setMaxLength(20);
     m_potaAdd    = new QPushButton("+ Add");
     m_potaRemove = new QPushButton("Remove");
@@ -121,6 +146,7 @@ void SettingsDialog::setupStationTab() {
     auto* sotaForm  = new QFormLayout(sotaGroup);
     m_sotaRef = new QLineEdit;
     m_sotaRef->setPlaceholderText("e.g. W7W/SE-001");
+    forceUpper(m_sotaRef);  // Fix 4
     sotaForm->addRow("Summit:", m_sotaRef);
     layout->addWidget(sotaGroup);
 
@@ -132,10 +158,12 @@ void SettingsDialog::setupStationTab() {
     m_fdClass->setPlaceholderText("e.g. 2A");
     m_fdClass->setMaxLength(4);
     m_fdClass->setMaximumWidth(80);
+    forceUpper(m_fdClass);  // Fix 4
     m_fdSection = new QLineEdit;
     m_fdSection->setPlaceholderText("e.g. MWA");
     m_fdSection->setMaxLength(5);
     m_fdSection->setMaximumWidth(80);
+    forceUpper(m_fdSection);  // Fix 4
     fdLayout->addWidget(new QLabel("Class:"));
     fdLayout->addWidget(m_fdClass);
     fdLayout->addWidget(new QLabel("Section:"));
@@ -154,13 +182,10 @@ void SettingsDialog::setupStationTab() {
 
     connect(m_potaAdd, &QPushButton::clicked,
             this, &SettingsDialog::onAddPotaRef);
-
     connect(m_potaEntry, &QLineEdit::returnPressed,
             this, &SettingsDialog::onAddPotaRef);
-
     connect(m_potaRemove, &QPushButton::clicked,
             this, &SettingsDialog::onRemovePotaRef);
-
     connect(m_potaList, &QListWidget::itemSelectionChanged,
             this, [this]() {
                 m_potaRemove->setEnabled(
@@ -169,9 +194,11 @@ void SettingsDialog::setupStationTab() {
 }
 
 void SettingsDialog::onAddPotaRef() {
-    QString ref = m_potaEntry->text().trimmed().toUpper();
+    // Fix 3: auto-correct format before adding
+    QString ref = fixPotaRef(m_potaEntry->text());
     if (ref.isEmpty()) return;
 
+    // Duplicate check
     for (int i = 0; i < m_potaList->count(); i++) {
         if (m_potaList->item(i)->text() == ref) {
             m_potaEntry->clear();
@@ -189,85 +216,6 @@ void SettingsDialog::onRemovePotaRef() {
     for (auto* item : selected)
         delete m_potaList->takeItem(m_potaList->row(item));
     m_potaRemove->setEnabled(false);
-}
-
-// ── Radio Control tab ─────────────────────────────────────────────────────
-
-void SettingsDialog::setupRadioTab() {
-    auto* widget = new QWidget;
-    auto* layout = new QVBoxLayout(widget);
-
-    auto* methodGroup  = new QGroupBox("Radio Control Method");
-    auto* methodLayout = new QVBoxLayout(methodGroup);
-
-    m_radioNone    = new QRadioButton("None (audio only / VOX)");
-    m_radioRigctld = new QRadioButton(
-        "rigctld  —  Hamlib server (covers most radios)");
-    m_radioTCI     = new QRadioButton(
-        "TCI WebSocket  —  Thetis / ExpertSDR / HPSDR");
-
-    methodLayout->addWidget(m_radioNone);
-    methodLayout->addWidget(m_radioRigctld);
-    methodLayout->addWidget(m_radioTCI);
-
-    auto* methodNote = new QLabel(
-        "VOX: radio handles PTT via audio level — no rig control needed.\n"
-        "rigctld: start Hamlib rigctld before launching HAVEN-FSK.\n"
-        "TCI: enable TCI server in your SDR software first.");
-    methodNote->setStyleSheet("color: gray; font-size: 9pt;");
-    methodNote->setWordWrap(true);
-    methodLayout->addWidget(methodNote);
-    layout->addWidget(methodGroup);
-
-    // rigctld
-    m_rigctldGroup = new QGroupBox("rigctld Connection");
-    auto* rigForm  = new QFormLayout(m_rigctldGroup);
-    m_rigctldHost  = new QLineEdit;
-    m_rigctldHost->setPlaceholderText("localhost");
-    rigForm->addRow("Host:", m_rigctldHost);
-    m_rigctldPort = new QSpinBox;
-    m_rigctldPort->setRange(1, 65535);
-    m_rigctldPort->setValue(4532);
-    rigForm->addRow("Port:", m_rigctldPort);
-    auto* rigNote = new QLabel(
-        "Default port 4532 (rigctld universal default).");
-    rigNote->setStyleSheet("color: gray; font-size: 9pt;");
-    rigForm->addRow("", rigNote);
-    layout->addWidget(m_rigctldGroup);
-
-    // TCI
-    m_tciGroup    = new QGroupBox("TCI Connection");
-    auto* tciForm = new QFormLayout(m_tciGroup);
-    m_tciHost     = new QLineEdit;
-    m_tciHost->setPlaceholderText("localhost");
-    tciForm->addRow("Host:", m_tciHost);
-    m_tciPort = new QSpinBox;
-    m_tciPort->setRange(1, 65535);
-    m_tciPort->setValue(50001);
-    tciForm->addRow("Port:", m_tciPort);
-    auto* tciNote = new QLabel(
-        "Default port 50001 (standard Thetis).\n"
-        "Thetis HL2 users: verify port in Setup → TCI.\n"
-        "Compatible with all TCI protocol versions.");
-    tciNote->setStyleSheet("color: gray; font-size: 9pt;");
-    tciNote->setWordWrap(true);
-    tciForm->addRow("", tciNote);
-    layout->addWidget(m_tciGroup);
-    layout->addStretch();
-
-    m_tabs->addTab(widget, "Radio Control");
-
-    connect(m_radioNone,    &QRadioButton::toggled,
-            this, &SettingsDialog::onRadioMethodChanged);
-    connect(m_radioRigctld, &QRadioButton::toggled,
-            this, &SettingsDialog::onRadioMethodChanged);
-    connect(m_radioTCI,     &QRadioButton::toggled,
-            this, &SettingsDialog::onRadioMethodChanged);
-}
-
-void SettingsDialog::onRadioMethodChanged() {
-    m_rigctldGroup->setEnabled(m_radioRigctld->isChecked());
-    m_tciGroup->setEnabled(m_radioTCI->isChecked());
 }
 
 // ── Audio Devices tab ─────────────────────────────────────────────────────
@@ -314,20 +262,6 @@ void SettingsDialog::loadSettings() {
     m_fdClass->setText(info.fdClass);
     m_fdSection->setText(info.fdSection);
 
-    // Radio
-    QSettings s;
-    QString method = s.value(
-        HavenFSK::RadioSettingsKeys::RIG_METHOD, "none").toString();
-    if      (method == "rigctld") m_radioRigctld->setChecked(true);
-    else if (method == "tci")     m_radioTCI->setChecked(true);
-    else                          m_radioNone->setChecked(true);
-
-    m_rigctldHost->setText(HavenFSK::rigctldHost());
-    m_rigctldPort->setValue(HavenFSK::rigctldPort());
-    m_tciHost->setText(HavenFSK::tciHost());
-    m_tciPort->setValue(HavenFSK::tciPort());
-    onRadioMethodChanged();
-
     // Audio
     int idxIn = m_inputDev->findText(HavenFSK::savedInputDevice());
     if (idxIn >= 0) m_inputDev->setCurrentIndex(idxIn);
@@ -350,21 +284,6 @@ void SettingsDialog::saveSettings() {
     }
 
     HavenFSK::saveStationInfo(info);
-
-    QSettings s;
-    QString method = "none";
-    if      (m_radioRigctld->isChecked()) method = "rigctld";
-    else if (m_radioTCI->isChecked())     method = "tci";
-    s.setValue(HavenFSK::RadioSettingsKeys::RIG_METHOD, method);
-    s.setValue(HavenFSK::RadioSettingsKeys::RIGCTLD_HOST,
-               m_rigctldHost->text().trimmed());
-    s.setValue(HavenFSK::RadioSettingsKeys::RIGCTLD_PORT,
-               m_rigctldPort->value());
-    s.setValue(HavenFSK::RadioSettingsKeys::TCI_HOST,
-               m_tciHost->text().trimmed());
-    s.setValue(HavenFSK::RadioSettingsKeys::TCI_PORT,
-               m_tciPort->value());
-
     HavenFSK::saveInputDevice(m_inputDev->currentText());
     HavenFSK::saveOutputDevice(m_outputDev->currentText());
 }

@@ -6,6 +6,18 @@
 #include <QMessageBox>
 #include <QFrame>
 #include <QFont>
+#include <QRegularExpression>
+
+// Auto-correct POTA ref to canonical XX-NNNN format (Fix 3)
+static QString fixPotaRef(const QString& raw) {
+    QString s = raw.trimmed().toUpper();
+    static QRegularExpression correct("^[A-Z]{2}-[0-9]+$");
+    if (correct.match(s).hasMatch()) return s;
+    static QRegularExpression noHyphen("^([A-Z]{2})([0-9]+)$");
+    auto m = noHyphen.match(s);
+    if (m.hasMatch()) return m.captured(1) + "-" + m.captured(2);
+    return s;
+}
 
 LogPanel::LogPanel(QWidget* parent)
     : QGroupBox("Log", parent)
@@ -17,7 +29,8 @@ LogPanel::LogPanel(QWidget* parent)
     setupEntryStrip();
     setupContactTable();
 
-    refresh();
+    // Fix 2: updateFieldVisibility called after all widgets created
+    updateFieldVisibility();
 }
 
 void LogPanel::setupEntryStrip() {
@@ -30,29 +43,50 @@ void LogPanel::setupEntryStrip() {
 
     QFont mono("Courier New", 10);
 
-    // Row 1: Callsign, RS-R, RS-S, Parks, SOTA, FD exchange, Log/Clear
+    // Fix 4: auto-uppercase helper
+    auto forceUpper = [](QLineEdit* edit) {
+        QObject::connect(edit, &QLineEdit::textEdited,
+                         edit, [edit](const QString& text) {
+                             int pos = edit->cursorPosition();
+                             edit->setText(text.toUpper());
+                             edit->setCursorPosition(pos);
+                         });
+    };
+
+    // Row 1: Callsign, RS-R/S pairs (Fix 8/9), Parks, SOTA, FD, Log/Clear
     m_callEntry = new QLineEdit;
     m_callEntry->setPlaceholderText("Their Call");
     m_callEntry->setFont(mono);
     m_callEntry->setMaximumWidth(100);
+    forceUpper(m_callEntry);  // Fix 4
     row1->addWidget(m_callEntry);
 
-    row1->addWidget(new QLabel("RS-R:"));
+    // Fix 8/9: tight label-field pairs via nested QHBoxLayouts
+    auto* rsrPair = new QHBoxLayout;
+    rsrPair->setSpacing(2);
+    rsrPair->addWidget(new QLabel("RS-R:"));
     m_rsReceived = new QLineEdit;
-    m_rsReceived->setMaximumWidth(40);
+    m_rsReceived->setMaximumWidth(38);
     m_rsReceived->setFont(mono);
-    m_rsReceived->setPlaceholderText("59");
-    row1->addWidget(m_rsReceived);
+    m_rsReceived->setPlaceholderText("--");
+    rsrPair->addWidget(m_rsReceived);
+    row1->addLayout(rsrPair);
 
-    row1->addWidget(new QLabel("RS-S:"));
+    // Fix 8/9/10: RS-S visually distinct as read-only
+    auto* rssPair = new QHBoxLayout;
+    rssPair->setSpacing(2);
+    rssPair->addWidget(new QLabel("RS-S:"));
     m_rsSent = new QLineEdit;
-    m_rsSent->setMaximumWidth(40);
+    m_rsSent->setMaximumWidth(38);
     m_rsSent->setFont(mono);
     m_rsSent->setPlaceholderText("--");
     m_rsSent->setReadOnly(true);
-    m_rsSent->setToolTip("Auto-computed from received signal measurement");
-    m_rsSent->setStyleSheet("background: #f0f0f0;");
-    row1->addWidget(m_rsSent);
+    m_rsSent->setToolTip("Auto-computed from received signal (read-only)");
+    m_rsSent->setStyleSheet(
+        "QLineEdit { background: #1a1a1a; color: #888; "
+        "border: 1px solid #2a2a2a; }");
+    rssPair->addWidget(m_rsSent);
+    row1->addLayout(rssPair);
 
     m_parksLabel = new QLabel("Parks:");
     row1->addWidget(m_parksLabel);
@@ -60,6 +94,7 @@ void LogPanel::setupEntryStrip() {
     m_theirParks->setPlaceholderText("US-XXXX ...");
     m_theirParks->setFont(mono);
     m_theirParks->setMinimumWidth(120);
+    forceUpper(m_theirParks);  // Fix 4
     row1->addWidget(m_theirParks, 1);
 
     m_sotaLabel = new QLabel("SOTA:");
@@ -67,6 +102,7 @@ void LogPanel::setupEntryStrip() {
     m_theirSota = new QLineEdit;
     m_theirSota->setMaximumWidth(100);
     m_theirSota->setFont(mono);
+    forceUpper(m_theirSota);  // Fix 4
     row1->addWidget(m_theirSota);
 
     m_fdLabel = new QLabel("FD Exch:");
@@ -90,6 +126,7 @@ void LogPanel::setupEntryStrip() {
     m_theirGrid = new QLineEdit;
     m_theirGrid->setMaximumWidth(70);
     m_theirGrid->setFont(mono);
+    forceUpper(m_theirGrid);  // Fix 4
     row2->addWidget(m_theirGrid);
 
     m_nameLabel = new QLabel("Name:");
@@ -127,9 +164,11 @@ void LogPanel::setupEntryStrip() {
 }
 
 void LogPanel::setupContactTable() {
-    m_contactTable = new QTableWidget(0, 7, this);
+    // Fix 13: 8 columns with Freq MHz added
+    m_contactTable = new QTableWidget(0, 8, this);
     m_contactTable->setHorizontalHeaderLabels({
-        "Time", "Callsign", "RS-R", "RS-S", "Parks/SOTA", "Grid", "Notes"
+        "Time", "Callsign", "Freq MHz",
+        "RS-R", "RS-S", "Parks/SOTA", "Grid", "Notes"
     });
     m_contactTable->horizontalHeader()->setStretchLastSection(true);
     m_contactTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -139,17 +178,21 @@ void LogPanel::setupContactTable() {
     m_contactTable->verticalHeader()->setVisible(false);
     m_contactTable->setMinimumHeight(80);
 
-    m_contactTable->setColumnWidth(0, 65);
-    m_contactTable->setColumnWidth(1, 90);
-    m_contactTable->setColumnWidth(2, 45);
-    m_contactTable->setColumnWidth(3, 45);
-    m_contactTable->setColumnWidth(4, 150);
-    m_contactTable->setColumnWidth(5, 60);
+    m_contactTable->setColumnWidth(0, 65);   // Time
+    m_contactTable->setColumnWidth(1, 90);   // Callsign
+    m_contactTable->setColumnWidth(2, 90);   // Freq MHz
+    m_contactTable->setColumnWidth(3, 45);   // RS-R
+    m_contactTable->setColumnWidth(4, 45);   // RS-S
+    m_contactTable->setColumnWidth(5, 140);  // Parks/SOTA
+    m_contactTable->setColumnWidth(6, 60);   // Grid
+    // Notes: stretch last section
 
     static_cast<QVBoxLayout*>(layout())->addWidget(m_contactTable);
 
     connect(m_contactTable, &QTableWidget::cellClicked,
             this, &LogPanel::onContactRowClicked);
+    connect(m_contactTable, &QTableWidget::cellDoubleClicked,
+            this, &LogPanel::onContactRowDoubleClicked);
 }
 
 void LogPanel::refresh() {
@@ -198,12 +241,14 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
         m_callEntry->setText(value.toUpper());
     }
     else if (scheme == "pota") {
+        // Fix 3: auto-correct each ref when populating from RX
         QString existing = m_theirParks->text().trimmed();
         for (const QString& park : value.split(' ', Qt::SkipEmptyParts)) {
-            if (!existing.contains(park))
-                existing += (existing.isEmpty() ? "" : " ") + park;
+            QString fixed = fixPotaRef(park);
+            if (!existing.contains(fixed))
+                existing += (existing.isEmpty() ? "" : " ") + fixed;
         }
-        m_theirParks->setText(existing.toUpper());
+        m_theirParks->setText(existing);
     }
     else if (scheme == "sota")     m_theirSota->setText(value.toUpper());
     else if (scheme == "grid")     m_theirGrid->setText(value.toUpper());
@@ -221,6 +266,13 @@ void LogPanel::setFrequency(uint64_t hz) {
     m_frequency = hz;
 }
 
+void LogPanel::exitEditMode() {
+    m_editingRow = -1;
+    m_logButton->setText("Log It");
+    m_logButton->setStyleSheet("");
+    m_clearButton->setText("Clear");
+}
+
 void LogPanel::onLogIt() {
     QString call = m_callEntry->text().trimmed().toUpper();
     if (call.isEmpty()) {
@@ -230,14 +282,20 @@ void LogPanel::onLogIt() {
     }
 
     HavenFSK::StationInfo myInfo = HavenFSK::loadStationInfo();
-    QDateTime utcNow = QDateTime::currentDateTimeUtc();
 
     QVariantMap fields;
     fields["their_callsign"]  = call;
     fields["rs_received"]     = m_rsReceived->text().trimmed();
     fields["rs_sent"]         = m_rsSent->text().trimmed();
-    fields["their_pota_refs"] = m_theirParks->text().trimmed()
-                                    .split(' ', Qt::SkipEmptyParts);
+
+    // Fix 3: auto-correct POTA refs before logging
+    QStringList rawParks = m_theirParks->text().trimmed()
+                               .split(' ', Qt::SkipEmptyParts);
+    QStringList fixedParks;
+    for (const QString& p : rawParks)
+        fixedParks.append(fixPotaRef(p));
+    fields["their_pota_refs"] = fixedParks;
+
     fields["their_sota_ref"]  = m_theirSota->text().trimmed().toUpper();
     fields["their_grid"]      = m_theirGrid->text().trimmed().toUpper();
     fields["their_name"]      = m_theirName->text().trimmed();
@@ -245,8 +303,6 @@ void LogPanel::onLogIt() {
     fields["their_fd"]        = m_fdExchange->text().trimmed().toUpper();
     fields["notes"]           = m_notes->text().trimmed();
     fields["frequency_hz"]    = QVariant::fromValue(m_frequency);
-    fields["date_utc"]        = utcNow.toString("yyyyMMdd");
-    fields["time_utc"]        = utcNow.toString("hhmmss");
     fields["mode"]            = "DIGITAL";
     fields["submode"]         = "HAVEN-FSK";
     fields["my_callsign"]     = myInfo.callsign;
@@ -257,12 +313,31 @@ void LogPanel::onLogIt() {
     fields["my_fd_section"]   = myInfo.fdSection;
     fields["my_op_name"]      = myInfo.opName;
 
-    addContactRow(fields);
-    emit contactLogged(fields);
+    if (m_editingRow >= 0) {
+        // Fix 12: update existing entry — preserve original date/time and db_id
+        QVariant origData = m_contactTable->item(m_editingRow, 0)
+                                ->data(Qt::UserRole);
+        if (origData.isValid()) {
+            QVariantMap orig = origData.toMap();
+            fields["date_utc"] = orig["date_utc"];
+            fields["time_utc"] = orig["time_utc"];
+            fields["db_id"]    = orig["db_id"];
+        }
+        updateContactRow(m_editingRow, fields);
+        emit contactUpdated(fields);
+        exitEditMode();
+    } else {
+        QDateTime utcNow = QDateTime::currentDateTimeUtc();
+        fields["date_utc"] = utcNow.toString("yyyyMMdd");
+        fields["time_utc"] = utcNow.toString("hhmmss");
+        addContactRow(fields);
+        emit contactLogged(fields);
+    }
     onClear();
 }
 
 void LogPanel::onClear() {
+    exitEditMode();
     m_callEntry->clear();
     m_rsReceived->clear();
     m_rsSent->clear();
@@ -277,13 +352,13 @@ void LogPanel::onClear() {
 }
 
 void LogPanel::addContactRow(const QVariantMap& fields) {
-    // Most recent at top
     m_contactTable->insertRow(0);
 
-    auto* timeItem = new QTableWidgetItem(fields["time_utc"].toString());
-    auto* callItem = new QTableWidgetItem(fields["their_callsign"].toString());
-    auto* rsrItem  = new QTableWidgetItem(fields["rs_received"].toString());
-    auto* rssItem  = new QTableWidgetItem(fields["rs_sent"].toString());
+    // Fix 13: frequency column at index 2, all others shifted +1
+    QString freqStr;
+    uint64_t hz = fields["frequency_hz"].toULongLong();
+    if (hz > 0)
+        freqStr = QString::number(static_cast<double>(hz) / 1.0e6, 'f', 3);
 
     QString activity;
     QStringList parks = fields["their_pota_refs"].toStringList();
@@ -294,27 +369,61 @@ void LogPanel::addContactRow(const QVariantMap& fields) {
     QString fd = fields["their_fd"].toString();
     if (!fd.isEmpty()) activity = fd;
 
+    auto* timeItem = new QTableWidgetItem(fields["time_utc"].toString());
+    auto* callItem = new QTableWidgetItem(fields["their_callsign"].toString());
+    auto* freqItem = new QTableWidgetItem(freqStr);
+    freqItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    auto* rsrItem  = new QTableWidgetItem(fields["rs_received"].toString());
+    auto* rssItem  = new QTableWidgetItem(fields["rs_sent"].toString());
     auto* actItem  = new QTableWidgetItem(activity);
     auto* gridItem = new QTableWidgetItem(fields["their_grid"].toString());
     auto* noteItem = new QTableWidgetItem(fields["notes"].toString());
 
     m_contactTable->setItem(0, 0, timeItem);
     m_contactTable->setItem(0, 1, callItem);
-    m_contactTable->setItem(0, 2, rsrItem);
-    m_contactTable->setItem(0, 3, rssItem);
-    m_contactTable->setItem(0, 4, actItem);
-    m_contactTable->setItem(0, 5, gridItem);
-    m_contactTable->setItem(0, 6, noteItem);
+    m_contactTable->setItem(0, 2, freqItem);
+    m_contactTable->setItem(0, 3, rsrItem);
+    m_contactTable->setItem(0, 4, rssItem);
+    m_contactTable->setItem(0, 5, actItem);
+    m_contactTable->setItem(0, 6, gridItem);
+    m_contactTable->setItem(0, 7, noteItem);
 
-    // Store full fields on the time cell for re-population on click
     m_contactTable->item(0, 0)->setData(Qt::UserRole, fields);
 
-    // Keep scroll history bounded
     while (m_contactTable->rowCount() > MAX_VISIBLE_ROWS * 3)
         m_contactTable->removeRow(m_contactTable->rowCount() - 1);
 }
 
+void LogPanel::updateContactRow(int row, const QVariantMap& fields) {
+    if (row < 0 || row >= m_contactTable->rowCount()) return;
+
+    QString freqStr;
+    uint64_t hz = fields["frequency_hz"].toULongLong();
+    if (hz > 0)
+        freqStr = QString::number(static_cast<double>(hz) / 1.0e6, 'f', 3);
+
+    QString activity;
+    QStringList parks = fields["their_pota_refs"].toStringList();
+    if (!parks.isEmpty()) activity = parks.join(" ");
+    QString sota = fields["their_sota_ref"].toString();
+    if (!sota.isEmpty())
+        activity += (activity.isEmpty() ? "" : " ") + sota;
+    QString fd = fields["their_fd"].toString();
+    if (!fd.isEmpty()) activity = fd;
+
+    m_contactTable->item(row, 0)->setText(fields["time_utc"].toString());
+    m_contactTable->item(row, 1)->setText(fields["their_callsign"].toString());
+    m_contactTable->item(row, 2)->setText(freqStr);
+    m_contactTable->item(row, 3)->setText(fields["rs_received"].toString());
+    m_contactTable->item(row, 4)->setText(fields["rs_sent"].toString());
+    m_contactTable->item(row, 5)->setText(activity);
+    m_contactTable->item(row, 6)->setText(fields["their_grid"].toString());
+    m_contactTable->item(row, 7)->setText(fields["notes"].toString());
+    m_contactTable->item(row, 0)->setData(Qt::UserRole, fields);
+}
+
 void LogPanel::onContactRowClicked(int row, int col) {
+    // Single click: populate fields (no edit mode)
     Q_UNUSED(col)
     QVariant data = m_contactTable->item(row, 0)->data(Qt::UserRole);
     if (!data.isValid()) return;
@@ -332,7 +441,14 @@ void LogPanel::onContactRowClicked(int row, int col) {
     m_notes->setText(fields["notes"].toString());
 }
 
-QString LogPanel::formatFrequency(uint64_t hz) const {
-    return QString("%1 MHz")
-        .arg(static_cast<double>(hz) / 1e6, 0, 'f', 6);
+void LogPanel::onContactRowDoubleClicked(int row, int col) {
+    // Fix 12: double-click enters edit mode
+    onContactRowClicked(row, col);  // populate first
+
+    m_editingRow = row;
+    m_logButton->setText("Update");
+    m_logButton->setStyleSheet(
+        "QPushButton { background: #1a4a2a; color: #88cc88; "
+        "border: 1px solid #336633; }");
+    m_clearButton->setText("Cancel Edit");
 }

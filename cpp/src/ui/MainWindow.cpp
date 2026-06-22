@@ -5,6 +5,7 @@
 #include "LogPanel.h"
 #include "MacroPanel.h"
 #include "ExportDialog.h"
+#include "RadioConfigDialog.h"
 #include "WaterfallWidget.h"
 #include "FrequencyControl.h"
 #include "../log/LogManager.h"
@@ -77,14 +78,40 @@ void MainWindow::setupMenu() {
     m_exportAction = new QAction("&Export Log...", this);
     m_exportAction->setShortcut(Qt::CTRL | Qt::Key_E);
     fileMenu->addAction(m_exportAction);
+
+    // Fix 12E: View Log menu item
+    auto* viewLogAction = new QAction("&View Log...", this);
+    viewLogAction->setShortcut(Qt::CTRL | Qt::Key_L);
+    connect(viewLogAction, &QAction::triggered, this, [this]() {
+        if (m_logManager && m_logManager->isOpen()) {
+            QString today = QDateTime::currentDateTimeUtc()
+                                .toString("yyyyMMdd");
+            auto contacts = m_logManager->contactsForDate(today);
+            QMessageBox::information(this, "Log",
+                QString("%1 contacts logged today (UTC).\n"
+                        "Use File → Export Log to export.")
+                .arg(contacts.size()));
+        }
+    });
+    fileMenu->addAction(viewLogAction);
+
     fileMenu->addSeparator();
     auto* quitAction = new QAction("&Quit", this);
     quitAction->setShortcut(Qt::CTRL | Qt::Key_Q);
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
     fileMenu->addAction(quitAction);
 
-    // Radio menu
-    QMenu* radioMenu      = menuBar()->addMenu("&Radio");
+    // Fix 1: Radio menu with Configure... action
+    QMenu* radioMenu = menuBar()->addMenu("&Radio");
+    auto* configAction = new QAction("&Configure...", this);
+    connect(configAction, &QAction::triggered, this, [this]() {
+        RadioConfigDialog dlg(this);
+        connect(&dlg, &RadioConfigDialog::configChanged,
+                this, &MainWindow::startRadio);
+        dlg.exec();
+    });
+    radioMenu->addAction(configAction);
+    radioMenu->addSeparator();
     m_connectRigAction    = new QAction("&Connect Rig", this);
     m_disconnectRigAction = new QAction("&Disconnect Rig", this);
     m_disconnectRigAction->setEnabled(false);
@@ -302,9 +329,12 @@ void MainWindow::setupConnections() {
                 }
             });
 
-    // FrequencyControl → radio
+    // Fix 11: FrequencyControl — always update display and log panel;
+    // only send to radio if rig is connected
     connect(m_freqControl, &FrequencyControl::frequencyRequested,
             this, [this](uint64_t hz) {
+                m_freqControl->setFrequency(hz);
+                if (m_logPanel) m_logPanel->setFrequency(hz);
                 if (m_radio && m_radio->isConnected())
                     m_radio->setFrequency(hz);
             });
@@ -334,6 +364,16 @@ void MainWindow::setupConnections() {
     // LogPanel → session log
     connect(m_logPanel, &LogPanel::contactLogged,
             this, &MainWindow::onContactLogged);
+
+    // Fix 12D: log panel edit → database update
+    connect(m_logPanel, &LogPanel::contactUpdated,
+            this, [this](const QVariantMap& fields) {
+                if (m_logManager && m_logManager->isOpen()) {
+                    int dbId = fields["db_id"].toInt();
+                    if (dbId > 0)
+                        m_logManager->updateContact(dbId, fields);
+                }
+            });
 }
 
 void MainWindow::startAudio() {

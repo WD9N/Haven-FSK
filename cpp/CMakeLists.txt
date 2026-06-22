@@ -59,6 +59,7 @@ set(SOURCES
     src/radio/PTTManager.cpp
     src/ui/MainWindow.cpp
     src/ui/SettingsDialog.cpp
+    src/ui/RadioConfigDialog.cpp
     src/ui/RxDisplay.cpp
     src/ui/LogPanel.cpp
     src/ui/MacroPanel.cpp
@@ -87,6 +88,7 @@ set(HEADERS
     src/radio/RadioSettings.h
     src/ui/MainWindow.h
     src/ui/SettingsDialog.h
+    src/ui/RadioConfigDialog.h
     src/ui/StationInfoWidget.h
     src/ui/RxDisplay.h
     src/ui/LogPanel.h
