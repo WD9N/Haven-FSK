@@ -12,59 +12,75 @@ It delivers ~62 bps net throughput in 500 Hz bandwidth with LDPC forward
 error correction — 50% faster than Olivia 16/500 and twice as fast as
 PSK31, while matching Olivia's occupied bandwidth exactly.
 
-| Mode          | Net bps  | ~WPM     | Weak Signal | Free Text | FEC |
-|---------------|----------|----------|-------------|-----------|-----|
-| FT8           | ~10 bps  | ~15 WPM  | Excellent   | No        | Yes |
-| PSK31         | ~31 bps  | ~47 WPM  | Poor        | Yes       | No  |
-| Olivia 16/500 | ~42 bps  | ~63 WPM  | Good        | Yes       | Yes |
-| **HAVEN-FSK** | **~62 bps** | **~94 WPM** | **Good** | **Yes** | **Yes** |
+| Mode          | Net bps      | ~WPM        | Weak Signal | Free Text | FEC |
+|---------------|--------------|-------------|-------------|-----------|-----|
+| FT8           | ~10 bps      | ~15 WPM     | Excellent   | No        | Yes |
+| PSK31         | ~31 bps      | ~47 WPM     | Poor        | Yes       | No  |
+| Olivia 16/500 | ~42 bps      | ~63 WPM     | Good        | Yes       | Yes |
+| **HAVEN-FSK** | **~62 bps**  | **~94 WPM** | **Good**    | **Yes**   | **Yes** |
 
 ---
 
-## Key Features
+## Current Version
+
+**v0.2.0 — C++ / Qt6 rewrite (cpp-rewrite branch)**  
+Pre-release development. Published for FCC Part 97 §97.309 disclosure.
+Not yet tested on the air.
+
+The v0.2.0 rewrite is a complete reimplementation in C++17 / Qt6 with no
+Python dependency. See [CHANGELOG.md](CHANGELOG.md) for the full feature list.
+
+---
+
+## Key Features (v0.2.0)
 
 - **16-tone MFSK** — 500 Hz bandwidth, 500–968.75 Hz audio range
-- **LDPC(192,96) FEC** — rate 1/2 forward error correction
-- **CRC-16** — frame integrity verification
-- **Free text** — type anything, no rigid exchange format
-- **Conversational pace** — ~94 WPM, suitable for ragchew and nets
-- **Preamble sync** — 512ms preamble for reliable frame detection
-- **DCD + backoff** — collision avoidance on busy channels
-- **TCI support** — direct integration with Thetis/HPSDR (PTT + frequency display)
-- **Mousewheel VFO tuning** — click any frequency digit, scroll to tune
-- **Hamlib/rigctld** — works with virtually any radio (planned)
-- **POTA/SOTA/Field Day** — activity-aware logging with ADIF and Cabrillo export
-- **Macro system** — customisable quick-send buttons with variable substitution
-- **UDP broadcast** — real-time QSO broadcast to N1MM, Log4OM, Ham Radio Deluxe
+- **LDPC(192,96) FEC** — rate 1/2 forward error correction, CRC-16 verification
+- **Free text** — type anything, no rigid exchange format required
+- **Waterfall display** — four color palettes, adjustable speed and range, 120-row history
+- **AFC** — digital RX-only NCO correction ±75 Hz; VFO and TX frequency never move
+- **Clickable RX display** — callsigns and structured tags (POTA/SOTA/grid/RS/name)
+  are clickable and auto-populate log entry fields
+- **TX in RX window** — transmitted messages shown in amber for conversation continuity
+- **RS signal reports** — computed from FEC convergence and DCD SNR, not conventional 599
+- **rigctld** — Hamlib server support for IC-705, IC-7300, TS-590SG, FT-891, G90,
+  and most HF radios
+- **TCI WebSocket** — direct integration with Thetis, ExpertSDR, HPSDR (PTT + VFO)
+- **Three-tier TX backoff** — CQ/Activator/Standard delays, DCD gating, 120-sec watchdog
+- **POTA / SOTA / Field Day** — activity-aware logging with correct ADIF export per program
+- **SQLite log** — WAL crash-safe, written immediately on Log It, no contacts lost
+- **Inline log edit** — double-click any logged QSO to edit or delete in place
+- **Macro system** — 2 banks × 8 buttons with variable tags; `<TX>` for auto-transmit
+- **FCC Part 97 compliance** — TX blocked until callsign entered; cites §97.119
 
 ---
 
-## Quick Start
+## Quick Start (v0.2.0 — Windows)
 
 **Requirements:**
-- Windows, Linux, or macOS
-- Python 3.8+
-- An SSB radio with audio interface (USB audio, SignaLink, VAC)
+- Windows 10/11 64-bit
+- An SSB radio with USB audio interface or VAC
+- Optionally: Hamlib rigctld running, or Thetis/HPSDR with TCI enabled
 
-**Installation:**
-
+**Build from source:**
 ```
-1. Download all files to a folder
-2. Double-click install_and_run.py
-3. Follow the prompts
-4. Use the launcher for your OS:
-   - Windows: double-click `Launch HAVEN-FSK.bat`
-   - Linux: run `./launch_haven_fsk.sh`
-   - macOS: double-click `launch_haven_fsk.command`
+git clone https://github.com/WD9N/Haven-FSK.git
+git checkout cpp-rewrite
+cd cpp
+mkdir build && cd build
+cmake .. -G Ninja -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/mingw_64
+cmake --build . --config Release
 ```
 
-**First time setup:**
-1. Enter your callsign in the **Call** field in the station bar
-2. Select your audio input (from radio) and output (to radio) devices
-3. Set your radio to USB or DIGU mode
-4. Tune to a HAVEN-FSK frequency (see suggested frequencies below)
-5. For POTA activations enter your park reference(s) in the **Park** field
-6. For SOTA activations enter your summit reference in the **Summit** field
+Qt 6.11 with MinGW 13 is required. See `cpp/DECISIONS.md` for build notes.
+
+**First-time setup:**
+1. Launch `HavenFSK.exe`
+2. Click **Radio** on the menu bar → enter your radio control method and connect
+3. Open **File → Settings** → enter your callsign, grid square, and state/county
+4. For POTA activations: add your park reference(s) in XX-NNNN format
+5. Select your audio devices in Settings → Audio
+6. Set radio to USB or DIGU mode; tune to a HAVEN-FSK frequency
 
 ---
 
@@ -83,226 +99,191 @@ PSK31, while matching Olivia's occupied bandwidth exactly.
 
 Signal appears 500–968 Hz above the dial frequency.
 
-> **⚠️ Monitor before transmitting.** Always listen on the frequency
-> before transmitting. 3.590 MHz (80m) and 7.040 MHz (40m) are
-> established RTTY DX calling frequencies — never use these.
-> See [BAND_PLAN.md](BAND_PLAN.md) for full frequency guidance.
+> **⚠️ Monitor before transmitting.** Always listen before transmitting.
+> 3.590 MHz (80m) and 7.040 MHz (40m) are established RTTY DX calling
+> frequencies — never use these. See [BAND_PLAN.md](BAND_PLAN.md).
 
 ---
 
-## Activity Support
+## UI Layout (v0.2.0)
 
-HAVEN-FSK automatically detects your operating context from the station bar:
+```
+┌─────────────────────────────────────────────────┐
+│ File  Radio  Operating  Help                    │  Menu bar
+├─────────────────────────────────────────────────┤
+│ [WD9N  DN31  IL]  [POTA: US-1234]  [ACTIVATOR] │  Station info
+├──────────────────────────────────────┬──────────┤
+│                                      │  Splitter│
+│  Waterfall (120 rows, Earth palette) │  (drag-  │
+│  -- gray passband markers --         │  gable)  │
+│  -- green AFC tracking lines --      │          │
+├──────────────────────────────────────┤          │
+│  Received (RX decoded messages)      │          │
+│  [14:23] W1XXX: CQ POTA DE W1XXX... │          │
+│  [14:23][TX] WD9N: W1XXX DE WD9N.. │          │
+├──────────────────────────────────────┤          │
+│ Log  [Time][Call][Freq][RS-R][RS-S] │          │
+│      [Parks/SOTA][Grid][Notes]       │          │
+│ [Their Call][RS-R][RS-S][Parks]      │          │
+│ [Grid][Name][QTH][Notes]    [Log It] │          │
+└──────────────────────────────────────┘          │
+│ Macros: [A][B]  [CQ POTA][Stn Info][TU 73]...  │  Macro panel
+├─────────────────────────────────────────────────┤
+│ Transmit: [________________text___________][TX] │  TX input
+├─────────────────────────────────────────────────┤
+│ DCD:--  Idle  14.090000 MHz  No rig  RX:[====]  │  Status bar
+└─────────────────────────────────────────────────┘
+```
 
-| Station bar fields filled | Detected activity        | Export generated              |
-|---------------------------|--------------------------|-------------------------------|
-| Park field only           | POTA Activation          | Per-park ADIF (one file each) |
-| Summit field only         | SOTA Activation          | ADIF with MY\_SOTA\_REF       |
-| Both Park and Summit      | POTA + SOTA combo        | Both files simultaneously     |
-| FD class + section        | Field Day                | ADIF + Cabrillo (.log)        |
-| Park + FD class           | POTA activation + FD     | Both files simultaneously     |
-| Nothing filled            | General Chat             | Single ADIF log               |
+Splitter dividers between waterfall, RX window, and log panel are draggable.
+Positions are saved and restored between sessions.
 
-Multi-park activation (two-fer, three-fer): enter parks comma-separated
-in the Park field — `US-1234, US-5678`. One ADIF file per park is exported,
-each containing all QSOs. P2P contacts with multi-park activators are
-duplicated once per their park within each file, as required by POTA rules.
+---
+
+## Activity Support and ADIF Export
+
+| Station info fields set   | Activity detected  | ADIF file(s) generated              |
+|---------------------------|--------------------|-------------------------------------|
+| POTA reference(s) only    | POTA Activation    | One `.adi` per park                 |
+| SOTA reference only       | SOTA Activation    | `CALL-SUMMIT-DATE.adi`              |
+| Both POTA + SOTA          | POTA/SOTA combo    | POTA files include MY_SOTA_REF      |
+| FD class + section        | Field Day          | `CALL-DATE.adi` (general)           |
+| Nothing                   | General            | `CALL-DATE.adi`                     |
+
+General ADIF always generated alongside any activity-specific files.
+
+POTA filename: `{CALL}@{PARK}-{YYYYMMDD}.adi` — per park, for upload to pota.app  
+SOTA filename: `{CALL}-{SUMMIT-SANITIZED}-{YYYYMMDD}.adi`
 
 ---
 
 ## Logging
 
-HAVEN-FSK includes an integrated QSO logger. Each logged contact is saved
-to a session file in the `Logs/` subfolder and can be exported to ADIF or
-Cabrillo (Field Day) at any time.
+**SQLite database** at `%APPDATA%\WD9N\HAVEN-FSK\haven_fsk_log.db` (Windows).
+WAL mode — each contact safe the moment you click Log It.
 
-### Important — Use a Primary Logger
+**Log panel workflow:**
+- Single-click a completed contact row: fills entry strip for reference
+- Double-click a completed contact row: enters edit mode (Log It → Update)
+- Delete button appears in edit mode with confirmation dialog (default No)
+- RS-S field is auto-computed from signal measurements — read-only (grey)
 
-> **⚠️ Strong recommendation: always log every contact in your primary
-> station logging software (Log4OM, N1MM Logger+, Ham Radio Deluxe, DX4WIN,
-> etc.) in addition to the HAVEN-FSK built-in log.**
->
-> HAVEN-FSK is a new, pre-release application. Its built-in logger is
-> functional but has not been tested at scale. Your primary logger is your
-> authoritative record for LOTW, eQSL, DXCC, and any award program.
-> The HAVEN-FSK log should be treated as a supplementary reference, not
-> your station log of record.
->
-> For POTA and SOTA activations especially, confirm your ADIF upload to
-> pota.app or the SOTA database from a verified ADIF file — open it in a
-> text editor and check that MY\_SIG\_INFO, TIME\_ON, and CALL fields look
-> correct before submitting.
+**POTA reference format:** XX-NNNN (e.g. US-1234, CA-0001). The software
+auto-corrects missing hyphens ("US1234" → "US-1234") in all entry points.
 
-### UDP Broadcast to External Loggers
+**RS reports:** R from FEC convergence/iterations; S from SNR in dB.
+Cached per station for 10 minutes. Clicking a callsign in the RX window
+auto-populates RS-S in the log entry and `<rstSent>` in macros.
 
-Enable **Settings → External Logger** to broadcast each logged QSO
-automatically to your primary logging software via UDP. This is the
-recommended workflow — log in HAVEN-FSK and have contacts appear
-simultaneously in your main logger without double-entry.
-
-Compatible with any logger that accepts WSJT-X UDP broadcasts:
-- **N1MM Logger+** — receives automatically on port 2333
-- **Log4OM** — enable WSJT-X integration in preferences
-- **Ham Radio Deluxe** — DM780 UDP logging listener
-- **Any ADIF-UDP compatible logger**
-
-### Contact Logging
-
-The recent log panel (below the chat window) contains inline entry fields:
-
-- **Call** — auto-filled when a callsign is detected in a received message, or click any recent QSO row to copy it
-- **Band** — auto-populated from TCI frequency; stays set between contacts
-- **RST sent / RST rcvd** — defaults to 599/599
-- **P2P Park(s)** — for park-to-park contacts; comma-separated for multi-park activators
-- **S2S Summit** — for summit-to-summit contacts
-- **Notes** — free text; used as the Field Day exchange field in FD mode
-
-Click **Log QSO** or press Enter in the Call field to log. The Call, P2P, Summit, and Notes fields clear after each log; Band and RST stay set for rapid logging.
-
-**Editing a logged QSO:** right-click any row in the recent QSO list to open the edit dialog. All fields are editable. Delete requires an explicit confirmation before removing the entry.
-
-### ADIF Export
-
-Click **Export...** in the recent log panel header. For POTA/SOTA/Field Day activations, choose a folder and all required files are written automatically. For General Chat, choose a filename for a single ADIF file.
-
-| Activity        | File(s) created                              |
-|-----------------|----------------------------------------------|
-| General Chat    | `WD9N_LOG_20260620.adi`                      |
-| POTA (single)   | `WD9N@US-1234-20260620-IN.adi`               |
-| POTA (two-fer)  | `WD9N@US-1234-20260620-IN.adi` + `WD9N@US-5678-20260620-IN.adi` |
-| SOTA            | `WD9N-SOTA-W9-IN-001-20260620.adi`           |
-| Field Day       | `WD9N_FieldDay_20260620.adi` + `WD9N.log`   |
+> **Use a primary logger.** HAVEN-FSK is pre-release. Log every contact
+> in your primary station logging software (Log4OM, N1MM, Ham Radio Deluxe,
+> etc.) as your authoritative record. Verify ADIF files before submitting
+> to pota.app or the SOTA database.
 
 ---
 
-## UI Layout
+## Macro System
 
-From top to bottom:
+Two banks (A and B) of 8 buttons each. Switch banks manually. Right-click
+any button to open the editor. Macros with `<TX>` auto-transmit; without
+`<TX>`, text is placed in the TX input for review.
 
-```
-1. Menu bar          — Settings | Activity
-2. Status toolbar    — DCD / TX / TCI LEDs, mode info, frequency (mousewheel to tune)
-3. Station bar       — Call, Park, Summit, FD class/section (inline editable)
-4. Device bar        — RX and TX audio device selection
-5. Waterfall         — scrolling spectrum display with bandwidth slider
-6. Chat log          — received messages
-7. Recent log panel  — last 8 QSOs + inline contact entry fields
-8. Macro buttons     — quick-send buttons with variable tags
-9. Message input     — free-text entry + Send
-10. Level meters     — RX and TX with gain faders
-11. Status bar
-```
+| Tag            | Expands to                              |
+|----------------|-----------------------------------------|
+| `<myCall>`     | Your callsign                           |
+| `<myParks>`    | POTA references, space-separated        |
+| `<mySOTA>`     | SOTA summit reference                   |
+| `<myGrid>`     | Grid square                             |
+| `<myName>`     | Operator name                           |
+| `<myQTH>`      | Operator name (QTH alias)               |
+| `<myState>`    | State or province                       |
+| `<myCounty>`   | County                                  |
+| `<myFD>`       | Field Day class + section               |
+| `<theirCall>`  | Callsign from log entry (when clicked)  |
+| `<rstSent>`    | Auto-computed RS report                 |
+| `<TX>`         | Triggers automatic transmission         |
 
-**LEDs:** DCD (green = signal present), TX (red = transmitting), TCI (green = Thetis connected).
-
----
-
-## Macros
-
-Quick-send macro buttons appear between the recent log panel and the message
-input window. Click any button to transmit immediately. Right-click any button
-to open the editor.
-
-### Available tags
-
-| Tag             | Expands to                          |
-|-----------------|-------------------------------------|
-| `<CALL>`        | Your callsign                       |
-| `<PARK>`        | First park reference                |
-| `<PARKS>`       | All parks, comma-separated          |
-| `<SUMMIT>`      | SOTA summit reference               |
-| `<GRID>`        | Grid square                         |
-| `<STATE>`       | State/province code                 |
-| `<FDCLASS>`     | Field Day class (e.g. 1E)           |
-| `<FDSECTION>`   | Field Day section                   |
-| `<FDEXCHANGE>`  | Full FD exchange (class + section)  |
-| `<POWER>`       | TX power in watts                   |
-| `<THEIRCALL>`   | Last detected contact callsign      |
-| `<THEIRPARK>`   | Their park reference (P2P)          |
-| `<THEIRSUMMIT>` | Their summit reference (S2S)        |
-| `<BAND>`        | Current band                        |
-| `<FREQ>`        | Current frequency in MHz            |
-| `<DATE>`        | UTC date (YYYYMMDD)                 |
-| `<TIME>`        | UTC time (HHMM)                     |
-
-The macro editor (right-click any button) provides one-click tag insertion
-and a live preview showing the expanded text with your current station values.
-
----
-
-## FCC Regulatory Compliance
-
-HAVEN-FSK is authorized for use by licensed amateur radio operators 
-under FCC Part 97.
-
-- **Emission designator:** 500HJ2D
-- **Bandwidth:** 500 Hz (within the 2.8 kHz HF limit)
-- **Disclosure:** The complete technical specification is published in
-  [HAVEN-FSK_Specification.md](HAVEN-FSK_Specification.md) as required
-  by FCC Part 97 §97.309 for unspecified digital codes.
-
----
-
-## Technical Specification
-
-See **[HAVEN-FSK_Specification.md](HAVEN-FSK_Specification.md)** for the 
-complete technical specification including:
-
-- Tone frequencies and modulation parameters
-- Frame format and header definition
-- LDPC parity check matrix generation
-- CRC-16 parameters
-- Preamble sequence
-- Performance characteristics
-
-The mode specification is placed in the public domain. Anyone may 
-implement a compatible encoder or decoder.
+**Default Bank A** (activating): CQ POTA, Stn Info, TU 73, QRZ?, AGN?, QSL  
+**Default Bank B** (chasing/general): CQ, Stn Info, TU 73, AGN?
 
 ---
 
 ## Radio Interface Support
 
-| Interface     | Status      | Radios                              |
-|---------------|-------------|-------------------------------------|
-| TCI WebSocket | Implemented | Thetis, ExpertSDR (HPSDR)          |
-| Hamlib/rigctld| Planned     | IC-705, IC-7300, TS-590SG, FT-891, G90, most HF radios |
-| VOX           | Supported   | Any radio                           |
-| Manual PTT    | Supported   | Any radio                           |
+| Interface      | Status      | Notes                                          |
+|----------------|-------------|------------------------------------------------|
+| TCI WebSocket  | Implemented | Thetis, ExpertSDR, all HPSDR — PTT + VFO       |
+| Hamlib/rigctld | Implemented | IC-705, IC-7300, TS-590SG, FT-891, G90, most radios |
+| VOX            | Supported   | No rig control needed — audio level drives PTT  |
 
 ---
 
-## Status
+## AFC (Automatic Frequency Correction)
 
-**Version 0.1.1-alpha — Pre-release development**
+HAVEN-FSK AFC corrects for inter-station frequency calibration differences
+and thermal VFO drift — without ever moving the radio's VFO.
 
-This mode is under active development. It has not yet been tested 
-on the air. The specification and software are published to satisfy 
-FCC Part 97 disclosure requirements prior to on-air testing.
+- **Range:** ±75 Hz
+- **Hard lock:** direct centroid measurement on preamble detection
+- **Slow tracking:** α=0.02 exponential average during frame (~1.6 sec)
+- **Partial reset:** offset × 0.5 on DCD drop — head start for next station
+- **Waterfall:** gray markers show where signal should be; green markers
+  float with AFC offset (hidden when offset < 0.5 Hz)
+- **Toggle:** Operating → AFC — Auto Frequency Correct
 
-On-air performance data will be added to the specification as testing 
-progresses.
+Why TX never moves: if AFC moved the VFO, two stations would mutually
+chase each other's corrections and drift up-band together.
 
-### Changelog
+---
 
-**0.1.1-alpha** *(current)*
-- Inline station info bar: Call, Park, Summit, FD class/section editable directly in toolbar — no dialog to open
-- Activity auto-detection: POTA/SOTA/Field Day inferred from station bar fields
-- ADIF export: per-park POTA files (one per park), SOTA with MY\_SOTA\_REF, Field Day ADIF + Cabrillo
-- Multi-park activation (two-fer/three-fer): comma-separated park entry, one file per park exported
-- P2P and S2S contact logging with correct ADIF fields (SIG\_INFO, SOTA\_REF)
-- Inline contact entry fields in log panel — Call, Band, RST, P2P Park, S2S Summit, Notes, Log QSO button
-- Right-click any logged QSO to open edit dialog with all fields; Delete requires confirmation
-- Macro system: 17 variable tags, live preview in editor, per-category tag-insertion buttons
-- Recent QSO panel: adaptive header and Info column per activity; dupe detection for Field Day
-- UDP broadcast to external loggers via Settings → External Logger (WSJT-X format or plain ADIF)
-- Mousewheel VFO tuning on frequency display — per-digit, 1 Hz resolution
-- Session log saved to `Logs/` subfolder; resume session on restart
-- Performance: waterfall rate-limited to 10 fps; single master UI tick loop; treeview incremental update; all dialogs use transient() instead of grab_set() for responsive click handling
-- TX LED is red during transmission
-- Fixed: export dialog no longer freezes on Windows; launcher bat file uses relative paths; macros positioned between log panel and message input
+## Structured Field Tags
 
-**0.1.0-alpha**
-- Initial release for FCC Part 97 disclosure
+HAVEN-FSK messages support optional structured tags for machine-parseable
+data. Receiving operators can click any tag value to populate their log entry.
+
+| Tag        | Format                  | Example                  |
+|------------|-------------------------|--------------------------|
+| `NAME:`    | Free text               | `NAME:David`             |
+| `QTH:`     | Free text               | `QTH:Illinois`           |
+| `GRID:`    | Maidenhead              | `GRID:EN52`              |
+| `RS:`      | Two digits              | `RS:57`                  |
+| `POTA:`    | XX-NNNN space-separated | `POTA:US-1234 US-5678`   |
+| `SOTA:`    | XX/XX-NNN               | `SOTA:W7W/SE-001`        |
+| `FD:`      | Class + section         | `FD:2A MWA`              |
+
+Tags are opt-in and transmit as plain text — operators who don't use them
+see normal readable messages.
+
+---
+
+## FCC Regulatory Compliance
+
+HAVEN-FSK is authorized for use by licensed amateur radio operators
+under FCC Part 97.
+
+- **Emission designator:** 500HJ2D
+- **Bandwidth:** 500 Hz (within the 2.8 kHz HF limit)
+- **Identification:** Software blocks all TX until callsign is entered,
+  citing FCC Part 97.119
+- **Disclosure:** Complete technical specification published in
+  [HAVEN-FSK_Specification.md](HAVEN-FSK_Specification.md) as required
+  by FCC Part 97 §97.309 for unspecified digital codes
+
+---
+
+## Technical Specification
+
+See **[HAVEN-FSK_Specification.md](HAVEN-FSK_Specification.md)** for:
+
+- Tone frequencies and modulation parameters
+- Frame format and header definition
+- LDPC parity check matrix generation (PEG algorithm, seed 1234)
+- CRC-16/CCITT-FALSE parameters
+- Preamble sequence
+- Performance characteristics
+
+The mode specification is placed in the public domain. Anyone may
+implement a compatible encoder or decoder without restriction.
 
 ---
 
@@ -310,11 +291,8 @@ progresses.
 
 Copyright (C) 2026 WD9N
 
-This software is licensed under the **GNU General Public License v3**.
-See the [LICENSE](LICENSE) file for full terms.
-
+This software is licensed under the **GNU General Public License v3**.  
 The HAVEN-FSK **mode specification** is released to the public domain.
-Anyone may implement a compatible encoder or decoder without restriction.
 
 Commercial use of the software requires written permission from the author.
 
@@ -323,6 +301,6 @@ Commercial use of the software requires written permission from the author.
 ## Author
 
 **WD9N**  
-Developed with assistance from Claude (Anthropic)  
+Developed with assistance from Claude (Anthropic)
 
 *"HAVEN — a reliable place in noisy conditions"*
