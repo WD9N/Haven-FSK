@@ -86,6 +86,8 @@ bool LogManager::createSchema() {
             my_fd_class     TEXT,
             my_fd_section   TEXT,
             my_op_name      TEXT,
+            my_state        TEXT,
+            my_county       TEXT,
             created_at      TEXT DEFAULT (datetime('now'))
         )
     )");
@@ -101,6 +103,12 @@ bool LogManager::createSchema() {
            "ON contacts(date_utc)");
     q.exec("CREATE INDEX IF NOT EXISTS idx_my_pota "
            "ON contacts(date_utc, my_pota_refs)");
+
+    // Migrations for columns added after initial schema
+    QSqlQuery mig(m_db);
+    mig.exec("ALTER TABLE contacts ADD COLUMN my_state TEXT");
+    mig.exec("ALTER TABLE contacts ADD COLUMN my_county TEXT");
+    // Fail silently if columns already exist — that's expected
 
     return true;
 }
@@ -137,7 +145,8 @@ bool LogManager::logContact(const QVariantMap& fields) {
             their_grid, their_name, their_qth, their_fd,
             frequency_hz, band, mode, submode, notes,
             my_callsign, my_grid, my_pota_refs, my_sota_ref,
-            my_fd_class, my_fd_section, my_op_name
+            my_fd_class, my_fd_section, my_op_name,
+            my_state, my_county
         ) VALUES (
             :date_utc, :time_utc, :their_callsign,
             :rs_received, :rs_sent,
@@ -145,7 +154,8 @@ bool LogManager::logContact(const QVariantMap& fields) {
             :their_grid, :their_name, :their_qth, :their_fd,
             :frequency_hz, :band, :mode, :submode, :notes,
             :my_callsign, :my_grid, :my_pota_refs, :my_sota_ref,
-            :my_fd_class, :my_fd_section, :my_op_name
+            :my_fd_class, :my_fd_section, :my_op_name,
+            :my_state, :my_county
         )
     )");
 
@@ -172,6 +182,8 @@ bool LogManager::logContact(const QVariantMap& fields) {
     q.bindValue(":my_fd_class",     fields["my_fd_class"].toString().toUpper());
     q.bindValue(":my_fd_section",   fields["my_fd_section"].toString().toUpper());
     q.bindValue(":my_op_name",      fields["my_op_name"].toString());
+    q.bindValue(":my_state",        fields["my_state"].toString());
+    q.bindValue(":my_county",       fields["my_county"].toString());
 
     if (!q.exec()) {
         QString err = q.lastError().text();
@@ -361,4 +373,18 @@ int LogManager::contactCountForDate(const QString& date) const {
     q.exec();
     if (q.next()) return q.value(0).toInt();
     return 0;
+}
+
+bool LogManager::deleteContact(int dbId) {
+    if (!m_open || dbId <= 0) return false;
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM contacts WHERE id = :id");
+    q.bindValue(":id", dbId);
+    if (!q.exec()) {
+        qWarning() << "LogManager: delete failed:" << q.lastError().text();
+        emit logError("Failed to delete contact: " + q.lastError().text());
+        return false;
+    }
+    qDebug() << "LogManager: deleted contact id" << dbId;
+    return true;
 }

@@ -33,8 +33,8 @@ public:
 
     bool logContact(const QVariantMap& fields);
 
-    // Update an existing contact by database ID (Fix 12B)
     bool updateContact(int dbId, const QVariantMap& fields);
+    bool deleteContact(int dbId);
 
     QList<QVariantMap> contactsForDate(const QString& date) const;
     QList<QVariantMap> contactsForDateAndPark(const QString& date,

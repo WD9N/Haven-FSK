@@ -46,6 +46,8 @@ private:
     QPushButton* m_potaAdd     {nullptr};
     QPushButton* m_potaRemove  {nullptr};
 
+    QLineEdit*   m_state       {nullptr};
+    QLineEdit*   m_county      {nullptr};
     QLineEdit*   m_sotaRef     {nullptr};
     QLineEdit*   m_fdClass     {nullptr};
     QLineEdit*   m_fdSection   {nullptr};

@@ -38,11 +38,13 @@ public:
 signals:
     void contactLogged(const QVariantMap& fields);
     void contactUpdated(const QVariantMap& fields);
+    void contactDeleted(int dbId);
     void entryCleared();
 
 private slots:
     void onLogIt();
     void onClear();
+    void onDeleteEntry();
     void onContactRowClicked(int row, int col);
     void onContactRowDoubleClicked(int row, int col);
 
@@ -67,6 +69,7 @@ private:
     QLineEdit*   m_notes       {nullptr};
     QPushButton* m_logButton   {nullptr};
     QPushButton* m_clearButton {nullptr};
+    QPushButton* m_deleteButton{nullptr};
 
     QLabel* m_parksLabel {nullptr};
     QLabel* m_sotaLabel  {nullptr};
@@ -80,7 +83,7 @@ private:
 
     bool     m_fdMode      {false};
     uint64_t m_frequency   {0};
-    int      m_editingRow  {-1};   // -1 = new entry, >= 0 = editing row
+    int      m_editingRow  {-1};
 
     static constexpr int MAX_VISIBLE_ROWS = 10;
 };

@@ -66,6 +66,10 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     rec += field("QTH",              c["their_qth"].toString());
     rec += field("COMMENT",          c["notes"].toString());
     rec += field("MY_GRIDSQUARE",    c["my_grid"].toString());
+    rec += field("MY_STATE",         c["my_state"].toString());
+    QString county = c["my_county"].toString();
+    if (!county.isEmpty())
+        rec += field("APP_HAVEN_MY_COUNTY", county);
 
     if (!myPotaRef.isEmpty()) {
         rec += field("MY_SIG",      "POTA");

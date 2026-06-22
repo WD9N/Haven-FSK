@@ -24,6 +24,9 @@ public:
                        bool crcOk,
                        bool converged);
 
+    // Append a transmitted message in amber [TX] styling
+    void appendTxMessage(const QString& text, const QString& myCallsign);
+
     void clearMessages();
 
 signals:

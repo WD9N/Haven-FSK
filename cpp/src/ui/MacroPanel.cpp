@@ -170,6 +170,7 @@ void MacroPanel::onMacroRightClicked(int bank, int index) {
     auto* hint = new QLabel(
         "Tags: &lt;myCall&gt; &lt;myParks&gt; &lt;mySOTA&gt; "
         "&lt;myGrid&gt; &lt;myName&gt; &lt;myQTH&gt; "
+        "&lt;myState&gt; &lt;myCounty&gt; "
         "&lt;theirCall&gt; &lt;rstSent&gt; &lt;TX&gt;<br>"
         "&lt;TX&gt; at end triggers automatic transmission.");
     hint->setWordWrap(true);
@@ -209,8 +210,10 @@ QString MacroPanel::expandMacro(const QString& text) const {
     result.replace("<myFD>",
         info.fdClass + (info.fdSection.isEmpty() ? "" : " " + info.fdSection),
         Qt::CaseInsensitive);
-    result.replace("<theirCall>", m_theirCall,     Qt::CaseInsensitive);
-    result.replace("<rstSent>",   m_rsSent,        Qt::CaseInsensitive);
+    result.replace("<myState>",   info.state,       Qt::CaseInsensitive);
+    result.replace("<myCounty>",  info.county,      Qt::CaseInsensitive);
+    result.replace("<theirCall>", m_theirCall,      Qt::CaseInsensitive);
+    result.replace("<rstSent>",   m_rsSent,         Qt::CaseInsensitive);
 
     return result;
 }

@@ -86,6 +86,9 @@ signals:
     // Emitted when AFC offset changes — connected to WaterfallWidget
     void afcOffsetChanged(float hz);
 
+    // Emitted just before transmission begins — connected to RxDisplay
+    void messageTransmitted(const QString& text);
+
 private:
     // ── DSP objects ───────────────────────────────────────────────────────
     Modulator   m_modulator;

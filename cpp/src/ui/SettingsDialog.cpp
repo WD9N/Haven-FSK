@@ -100,6 +100,14 @@ void SettingsDialog::setupStationTab() {
     m_opName->setPlaceholderText("e.g. John");
     idForm->addRow("Operator Name:", m_opName);
 
+    m_state = new QLineEdit;
+    m_state->setPlaceholderText("e.g. Illinois");
+    idForm->addRow("State/Province:", m_state);
+
+    m_county = new QLineEdit;
+    m_county->setPlaceholderText("e.g. Cook");
+    idForm->addRow("County:", m_county);
+
     layout->addWidget(idGroup);
 
     // POTA group — dynamic unbounded list
@@ -258,6 +266,8 @@ void SettingsDialog::loadSettings() {
         if (!ref.isEmpty())
             m_potaList->addItem(ref);
 
+    m_state->setText(info.state);
+    m_county->setText(info.county);
     m_sotaRef->setText(info.sotaRef);
     m_fdClass->setText(info.fdClass);
     m_fdSection->setText(info.fdSection);
@@ -274,6 +284,8 @@ void SettingsDialog::saveSettings() {
     info.callsign  = m_callsign->text().trimmed().toUpper();
     info.grid      = m_grid->text().trimmed().toUpper();
     info.opName    = m_opName->text().trimmed();
+    info.state     = m_state->text().trimmed();
+    info.county    = m_county->text().trimmed();
     info.sotaRef   = m_sotaRef->text().trimmed().toUpper();
     info.fdClass   = m_fdClass->text().trimmed().toUpper();
     info.fdSection = m_fdSection->text().trimmed().toUpper();

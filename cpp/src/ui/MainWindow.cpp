@@ -361,9 +361,26 @@ void MainWindow::setupConnections() {
     connect(m_macroPanel, &MacroPanel::macroTriggered,
             this, &MainWindow::onMacroTriggered);
 
+    // TX message → RxDisplay (amber [TX] styling)
+    connect(m_pipeline,
+            &HavenFSK::DspPipeline::messageTransmitted,
+            this, [this](const QString& text) {
+                HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
+                m_rxDisplay->appendTxMessage(text, info.callsign);
+            });
+
     // LogPanel → session log
     connect(m_logPanel, &LogPanel::contactLogged,
             this, &MainWindow::onContactLogged);
+
+    // Delete contact → database
+    connect(m_logPanel, &LogPanel::contactDeleted,
+            this, [this](int dbId) {
+                if (m_logManager && m_logManager->isOpen()) {
+                    m_logManager->deleteContact(dbId);
+                    m_statusLabel->setText("Contact deleted");
+                }
+            });
 
     // Fix 12D: log panel edit → database update
     connect(m_logPanel, &LogPanel::contactUpdated,

@@ -6,9 +6,10 @@
 #include <QMessageBox>
 #include <QFrame>
 #include <QFont>
+#include <QSizePolicy>
 #include <QRegularExpression>
 
-// Auto-correct POTA ref to canonical XX-NNNN format (Fix 3)
+// Auto-correct POTA ref to canonical XX-NNNN format
 static QString fixPotaRef(const QString& raw) {
     QString s = raw.trimmed().toUpper();
     static QRegularExpression correct("^[A-Z]{2}-[0-9]+$");
@@ -29,7 +30,7 @@ LogPanel::LogPanel(QWidget* parent)
     setupEntryStrip();
     setupContactTable();
 
-    // Fix 2: updateFieldVisibility called after all widgets created
+    // updateFieldVisibility called after all widgets are created
     updateFieldVisibility();
 }
 
@@ -43,7 +44,7 @@ void LogPanel::setupEntryStrip() {
 
     QFont mono("Courier New", 10);
 
-    // Fix 4: auto-uppercase helper
+    // Fix 4: auto-uppercase
     auto forceUpper = [](QLineEdit* edit) {
         QObject::connect(edit, &QLineEdit::textEdited,
                          edit, [edit](const QString& text) {
@@ -53,31 +54,35 @@ void LogPanel::setupEntryStrip() {
                          });
     };
 
-    // Row 1: Callsign, RS-R/S pairs (Fix 8/9), Parks, SOTA, FD, Log/Clear
+    // ── Row 1 ─────────────────────────────────────────────────────────────
+    // LOGPANEL_FIX: use direct addWidget with addSpacing(8) and
+    // setFixedWidth so Qt layout engine cannot separate label from field.
+
     m_callEntry = new QLineEdit;
     m_callEntry->setPlaceholderText("Their Call");
     m_callEntry->setFont(mono);
     m_callEntry->setMaximumWidth(100);
-    forceUpper(m_callEntry);  // Fix 4
-    row1->addWidget(m_callEntry);
+    forceUpper(m_callEntry);
+    row1->addWidget(m_callEntry, 0);
 
-    // Fix 8/9: tight label-field pairs via nested QHBoxLayouts
-    auto* rsrPair = new QHBoxLayout;
-    rsrPair->setSpacing(2);
-    rsrPair->addWidget(new QLabel("RS-R:"));
+    // RS-R: label immediately followed by field, no gap
+    row1->addSpacing(8);
+    auto* rsrLabel = new QLabel("RS-R:");
+    rsrLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    row1->addWidget(rsrLabel);
     m_rsReceived = new QLineEdit;
-    m_rsReceived->setMaximumWidth(38);
+    m_rsReceived->setFixedWidth(38);
     m_rsReceived->setFont(mono);
     m_rsReceived->setPlaceholderText("--");
-    rsrPair->addWidget(m_rsReceived);
-    row1->addLayout(rsrPair);
+    row1->addWidget(m_rsReceived);
 
-    // Fix 8/9/10: RS-S visually distinct as read-only
-    auto* rssPair = new QHBoxLayout;
-    rssPair->setSpacing(2);
-    rssPair->addWidget(new QLabel("RS-S:"));
+    // RS-S: label immediately followed by field, visually read-only
+    row1->addSpacing(8);
+    auto* rssLabel = new QLabel("RS-S:");
+    rssLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    row1->addWidget(rssLabel);
     m_rsSent = new QLineEdit;
-    m_rsSent->setMaximumWidth(38);
+    m_rsSent->setFixedWidth(38);
     m_rsSent->setFont(mono);
     m_rsSent->setPlaceholderText("--");
     m_rsSent->setReadOnly(true);
@@ -85,24 +90,24 @@ void LogPanel::setupEntryStrip() {
     m_rsSent->setStyleSheet(
         "QLineEdit { background: #1a1a1a; color: #888; "
         "border: 1px solid #2a2a2a; }");
-    rssPair->addWidget(m_rsSent);
-    row1->addLayout(rssPair);
+    row1->addWidget(m_rsSent);
 
+    row1->addSpacing(8);
     m_parksLabel = new QLabel("Parks:");
     row1->addWidget(m_parksLabel);
     m_theirParks = new QLineEdit;
     m_theirParks->setPlaceholderText("US-XXXX ...");
     m_theirParks->setFont(mono);
     m_theirParks->setMinimumWidth(120);
-    forceUpper(m_theirParks);  // Fix 4
-    row1->addWidget(m_theirParks, 1);
+    forceUpper(m_theirParks);
+    row1->addWidget(m_theirParks, 1);  // stretch factor 1 — fills middle
 
     m_sotaLabel = new QLabel("SOTA:");
     row1->addWidget(m_sotaLabel);
     m_theirSota = new QLineEdit;
     m_theirSota->setMaximumWidth(100);
     m_theirSota->setFont(mono);
-    forceUpper(m_theirSota);  // Fix 4
+    forceUpper(m_theirSota);
     row1->addWidget(m_theirSota);
 
     m_fdLabel = new QLabel("FD Exch:");
@@ -113,6 +118,25 @@ void LogPanel::setupEntryStrip() {
     m_fdExchange->setPlaceholderText("2A MWA");
     row1->addWidget(m_fdExchange);
 
+    // LOGPANEL_FIX: double-click hint label before buttons
+    auto* editHint = new QLabel("Double-click row to edit");
+    editHint->setStyleSheet(
+        "color: #555; font-size: 8pt; font-style: italic;");
+    editHint->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    row1->addWidget(editHint);
+
+    // DELETE_LOG: Delete button, hidden until edit mode
+    m_deleteButton = new QPushButton("Delete");
+    m_deleteButton->setStyleSheet(
+        "QPushButton {"
+        "  background: #3a0a0a; color: #cc4444;"
+        "  border: 1px solid #662222; padding: 4px 10px;"
+        "}"
+        "QPushButton:hover { background: #5a1a1a; }");
+    m_deleteButton->setVisible(false);
+    m_deleteButton->setToolTip("Delete this log entry (with confirmation)");
+    row1->addWidget(m_deleteButton);
+
     m_logButton   = new QPushButton("Log It");
     m_clearButton = new QPushButton("Clear");
     m_logButton->setMinimumWidth(70);
@@ -120,13 +144,13 @@ void LogPanel::setupEntryStrip() {
     row1->addWidget(m_logButton);
     row1->addWidget(m_clearButton);
 
-    // Row 2: Grid, Name, QTH, Notes
+    // ── Row 2 ─────────────────────────────────────────────────────────────
     m_gridLabel = new QLabel("Grid:");
     row2->addWidget(m_gridLabel);
     m_theirGrid = new QLineEdit;
     m_theirGrid->setMaximumWidth(70);
     m_theirGrid->setFont(mono);
-    forceUpper(m_theirGrid);  // Fix 4
+    forceUpper(m_theirGrid);
     row2->addWidget(m_theirGrid);
 
     m_nameLabel = new QLabel("Name:");
@@ -158,13 +182,13 @@ void LogPanel::setupEntryStrip() {
     line->setFrameShadow(QFrame::Sunken);
     static_cast<QVBoxLayout*>(layout())->addWidget(line);
 
-    connect(m_logButton,   &QPushButton::clicked, this, &LogPanel::onLogIt);
-    connect(m_clearButton, &QPushButton::clicked, this, &LogPanel::onClear);
+    connect(m_logButton,    &QPushButton::clicked, this, &LogPanel::onLogIt);
+    connect(m_clearButton,  &QPushButton::clicked, this, &LogPanel::onClear);
+    connect(m_deleteButton, &QPushButton::clicked, this, &LogPanel::onDeleteEntry);
     connect(m_callEntry, &QLineEdit::returnPressed, this, &LogPanel::onLogIt);
 }
 
 void LogPanel::setupContactTable() {
-    // Fix 13: 8 columns with Freq MHz added
     m_contactTable = new QTableWidget(0, 8, this);
     m_contactTable->setHorizontalHeaderLabels({
         "Time", "Callsign", "Freq MHz",
@@ -178,14 +202,13 @@ void LogPanel::setupContactTable() {
     m_contactTable->verticalHeader()->setVisible(false);
     m_contactTable->setMinimumHeight(80);
 
-    m_contactTable->setColumnWidth(0, 65);   // Time
-    m_contactTable->setColumnWidth(1, 90);   // Callsign
-    m_contactTable->setColumnWidth(2, 90);   // Freq MHz
-    m_contactTable->setColumnWidth(3, 45);   // RS-R
-    m_contactTable->setColumnWidth(4, 45);   // RS-S
-    m_contactTable->setColumnWidth(5, 140);  // Parks/SOTA
-    m_contactTable->setColumnWidth(6, 60);   // Grid
-    // Notes: stretch last section
+    m_contactTable->setColumnWidth(0, 65);
+    m_contactTable->setColumnWidth(1, 90);
+    m_contactTable->setColumnWidth(2, 90);
+    m_contactTable->setColumnWidth(3, 45);
+    m_contactTable->setColumnWidth(4, 45);
+    m_contactTable->setColumnWidth(5, 140);
+    m_contactTable->setColumnWidth(6, 60);
 
     static_cast<QVBoxLayout*>(layout())->addWidget(m_contactTable);
 
@@ -241,7 +264,6 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
         m_callEntry->setText(value.toUpper());
     }
     else if (scheme == "pota") {
-        // Fix 3: auto-correct each ref when populating from RX
         QString existing = m_theirParks->text().trimmed();
         for (const QString& park : value.split(' ', Qt::SkipEmptyParts)) {
             QString fixed = fixPotaRef(park);
@@ -250,27 +272,23 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
         }
         m_theirParks->setText(existing);
     }
-    else if (scheme == "sota")     m_theirSota->setText(value.toUpper());
-    else if (scheme == "grid")     m_theirGrid->setText(value.toUpper());
-    else if (scheme == "rs")       m_rsReceived->setText(value);
-    else if (scheme == "name")     m_theirName->setText(value);
-    else if (scheme == "qth")      m_theirQth->setText(value);
-    else if (scheme == "fd")       m_fdExchange->setText(value.toUpper());
+    else if (scheme == "sota")  m_theirSota->setText(value.toUpper());
+    else if (scheme == "grid")  m_theirGrid->setText(value.toUpper());
+    else if (scheme == "rs")    m_rsReceived->setText(value);
+    else if (scheme == "name")  m_theirName->setText(value);
+    else if (scheme == "qth")   m_theirQth->setText(value);
+    else if (scheme == "fd")    m_fdExchange->setText(value.toUpper());
 }
 
-void LogPanel::setRsSent(const QString& rs) {
-    m_rsSent->setText(rs);
-}
-
-void LogPanel::setFrequency(uint64_t hz) {
-    m_frequency = hz;
-}
+void LogPanel::setRsSent(const QString& rs)    { m_rsSent->setText(rs); }
+void LogPanel::setFrequency(uint64_t hz)        { m_frequency = hz; }
 
 void LogPanel::exitEditMode() {
     m_editingRow = -1;
     m_logButton->setText("Log It");
     m_logButton->setStyleSheet("");
     m_clearButton->setText("Clear");
+    m_deleteButton->setVisible(false);
 }
 
 void LogPanel::onLogIt() {
@@ -288,7 +306,6 @@ void LogPanel::onLogIt() {
     fields["rs_received"]     = m_rsReceived->text().trimmed();
     fields["rs_sent"]         = m_rsSent->text().trimmed();
 
-    // Fix 3: auto-correct POTA refs before logging
     QStringList rawParks = m_theirParks->text().trimmed()
                                .split(' ', Qt::SkipEmptyParts);
     QStringList fixedParks;
@@ -312,9 +329,11 @@ void LogPanel::onLogIt() {
     fields["my_fd_class"]     = myInfo.fdClass;
     fields["my_fd_section"]   = myInfo.fdSection;
     fields["my_op_name"]      = myInfo.opName;
+    fields["my_state"]        = myInfo.state;    // STATION_FIELDS
+    fields["my_county"]       = myInfo.county;   // STATION_FIELDS
 
     if (m_editingRow >= 0) {
-        // Fix 12: update existing entry — preserve original date/time and db_id
+        // Edit mode: update existing entry, preserve original date/time and db_id
         QVariant origData = m_contactTable->item(m_editingRow, 0)
                                 ->data(Qt::UserRole);
         if (origData.isValid()) {
@@ -351,10 +370,42 @@ void LogPanel::onClear() {
     emit entryCleared();
 }
 
+void LogPanel::onDeleteEntry() {
+    if (m_editingRow < 0) return;
+
+    QString call = m_callEntry->text().trimmed();
+    if (call.isEmpty()) {
+        QVariant data = m_contactTable->item(m_editingRow, 0)
+                            ->data(Qt::UserRole);
+        if (data.isValid())
+            call = data.toMap()["their_callsign"].toString();
+    }
+
+    auto reply = QMessageBox::warning(
+        this, "Delete Log Entry",
+        QString("Delete contact with %1?\n\nThis cannot be undone.")
+        .arg(call.isEmpty() ? "this station" : call),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);  // No is default — safer
+
+    if (reply != QMessageBox::Yes) return;
+
+    QVariant data = m_contactTable->item(m_editingRow, 0)->data(Qt::UserRole);
+    int dbId = 0;
+    if (data.isValid())
+        dbId = data.toMap()["db_id"].toInt();
+
+    m_contactTable->removeRow(m_editingRow);
+    exitEditMode();
+    onClear();
+
+    if (dbId > 0)
+        emit contactDeleted(dbId);
+}
+
 void LogPanel::addContactRow(const QVariantMap& fields) {
     m_contactTable->insertRow(0);
 
-    // Fix 13: frequency column at index 2, all others shifted +1
     QString freqStr;
     uint64_t hz = fields["frequency_hz"].toULongLong();
     if (hz > 0)
@@ -423,7 +474,6 @@ void LogPanel::updateContactRow(int row, const QVariantMap& fields) {
 }
 
 void LogPanel::onContactRowClicked(int row, int col) {
-    // Single click: populate fields (no edit mode)
     Q_UNUSED(col)
     QVariant data = m_contactTable->item(row, 0)->data(Qt::UserRole);
     if (!data.isValid()) return;
@@ -442,8 +492,7 @@ void LogPanel::onContactRowClicked(int row, int col) {
 }
 
 void LogPanel::onContactRowDoubleClicked(int row, int col) {
-    // Fix 12: double-click enters edit mode
-    onContactRowClicked(row, col);  // populate first
+    onContactRowClicked(row, col);
 
     m_editingRow = row;
     m_logButton->setText("Update");
@@ -451,4 +500,5 @@ void LogPanel::onContactRowDoubleClicked(int row, int col) {
         "QPushButton { background: #1a4a2a; color: #88cc88; "
         "border: 1px solid #336633; }");
     m_clearButton->setText("Cancel Edit");
+    m_deleteButton->setVisible(true);
 }

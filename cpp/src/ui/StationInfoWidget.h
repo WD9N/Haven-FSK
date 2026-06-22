@@ -72,9 +72,14 @@ public slots:
                 "font-weight: bold;");
         }
 
-        // Grid
-        m_gridLabel->setText(
-            info.grid.isEmpty() ? "No grid set" : info.grid);
+        // Grid + state/county context
+        QString gridLine = info.grid.isEmpty() ? "No grid set" : info.grid;
+        if (!info.state.isEmpty()) {
+            gridLine += "  " + info.state;
+            if (!info.county.isEmpty())
+                gridLine += " / " + info.county;
+        }
+        m_gridLabel->setText(gridLine);
 
         // Activity references
         QStringList activity;

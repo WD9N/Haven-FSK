@@ -55,6 +55,33 @@ void RxDisplay::clearMessages() {
     m_messageCount = 0;
 }
 
+void RxDisplay::appendTxMessage(const QString& text,
+                                 const QString& myCallsign)
+{
+    if (text.trimmed().isEmpty()) return;
+
+    QString ts     = QDateTime::currentDateTimeUtc().toString("hh:mm:ss");
+    QString caller = myCallsign.isEmpty() ? "TX" : myCallsign.toUpper();
+
+    QString html = QString(
+        "<span style='color:gray'>[%1]</span> "
+        "<span style='color:#C8860A'>"
+        "<b>[TX] %2:</b> %3"
+        "</span><br>")
+        .arg(ts)
+        .arg(caller.toHtmlEscaped())
+        .arg(text.toHtmlEscaped());
+
+    QTextCursor c = textCursor();
+    c.movePosition(QTextCursor::End);
+    c.insertHtml(html);
+
+    verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+
+    if (m_messageCount < MAX_MESSAGES)
+        m_messageCount++;
+}
+
 void RxDisplay::onAnchorClicked(const QUrl& url) {
     if (url.scheme() != "haven") return;
     QString scheme = url.host();
