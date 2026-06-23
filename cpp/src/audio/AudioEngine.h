@@ -1,13 +1,14 @@
 #pragma once
 #include <QObject>
 #include <QAudioSource>
-#include <QAudioSink>
 #include <QAudioFormat>
 #include <QAudioDevice>
 #include <QIODevice>
 #include <QBuffer>
 #include <QStringList>
 #include <QByteArray>
+#include <QMediaPlayer>
+#include <QAudioOutput>
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -28,9 +29,8 @@ public:
     bool startRx(const QString& deviceName = QString());
 
     // ── TX ────────────────────────────────────────────────────────────────
-    // Play the given samples through the named output device.
-    // Uses QAudioSink pull mode — passes QBuffer to sink, Qt handles chunking.
-    // Emits txComplete() when QBuffer is genuinely exhausted (all audio played).
+    // Convert samples to an in-memory WAV file and play via QMediaPlayer.
+    // StoppedState signals genuine playback completion on all platforms.
     bool startTx(const QString& deviceName,
                  const std::vector<float>& samples);
 
@@ -50,7 +50,7 @@ signals:
 
 private slots:
     void onRxDataAvailable();
-    void onTxStateChanged(QAudio::State state);
+    void onTxPlaybackStateChanged(QMediaPlayer::PlaybackState state);
 
 private:
     // ── RX members ────────────────────────────────────────────────────────
@@ -58,12 +58,11 @@ private:
     QIODevice*                    m_rxDevice = nullptr;
     QByteArray                    m_rxBuffer;
 
-    // ── TX members (pull mode) ────────────────────────────────────────────
-    // QBuffer pull mode: Qt reads from m_txQBuffer as backend needs data.
-    // Both m_txPcmBuffer and m_txQBuffer are members — must outlive the sink.
-    std::unique_ptr<QAudioSink> m_txSink;
-    QByteArray                  m_txPcmBuffer;         // complete PCM data
-    QBuffer*                    m_txQBuffer {nullptr}; // wraps m_txPcmBuffer
+    // ── TX members (QMediaPlayer) ─────────────────────────────────────────
+    QMediaPlayer*     m_txPlayer    {nullptr};
+    QAudioOutput*     m_txAudioOut  {nullptr};
+    QBuffer*          m_txWavBuffer {nullptr};
+    QByteArray        m_txWavData;   // WAV header + PCM data — must outlive player
 
     // ── State ─────────────────────────────────────────────────────────────
     std::atomic<bool> m_receiving    {false};
@@ -72,7 +71,9 @@ private:
     // ── Helpers ───────────────────────────────────────────────────────────
     static QAudioFormat havenFormat();
     static QAudioDevice findInputDevice(const QString& name);
-    static QAudioDevice findOutputDevice(const QString& name);
     static std::vector<float> pcmToFloat(const QByteArray& pcm);
     static float computeRms(const std::vector<float>& samples);
+
+    // Build a complete WAV file in memory from float32 samples
+    QByteArray buildWav(const std::vector<float>& samples) const;
 };

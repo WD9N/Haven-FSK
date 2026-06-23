@@ -1260,3 +1260,26 @@ are members (not locals) ensuring they remain valid for the entire
 playback duration. Platform backend selection ensures each OS uses
 its most capable audio subsystem without any platform-specific
 code in AudioEngine itself.
+
+## ADR-072 — REVISED: AudioEngine TX uses QMediaPlayer with in-memory WAV
+
+**Status:** Decided (supersedes previous ADR-072)
+**Date:** June 2026
+
+**Decision:** AudioEngine TX uses QMediaPlayer with QAudioOutput
+to play pre-computed audio. PCM samples are converted to a valid
+WAV file in memory (QByteArray with 44-byte header + int16 PCM),
+wrapped in a QBuffer, and played via QMediaPlayer::setSourceDevice().
+Completion is signaled by QMediaPlayer::playbackStateChanged(
+StoppedState) which fires when playback genuinely finishes.
+
+**Reasoning:** QAudioSink proved unsuitable for one-shot playback
+of a pre-computed buffer. Qt6.11 uses the FFmpeg multimedia backend
+on Windows which signals IdleState immediately after handing data
+to the hardware driver regardless of pull/push mode or buffer size.
+Duration timers are fragile and platform-dependent. QMediaPlayer
+is the correct Qt6 API for playing a complete audio buffer — it
+handles all platform audio complexity internally and provides a
+reliable StoppedState signal when playback genuinely finishes.
+WAV format is natively supported by Qt6 on all platforms with no
+additional dependencies.
