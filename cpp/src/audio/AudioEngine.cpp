@@ -193,9 +193,27 @@ bool AudioEngine::startTx(const QString& deviceName,
              << samples.size() << "samples ="
              << (samples.size() / 48000.0) << "sec";
 
-    qint64 written = m_txDevice->write(m_txBuffer);
-    if (written < m_txBuffer.size())
-        m_txOffset = static_cast<int>(written);
+    // Write initial chunk — WASAPI/VAC buffers are typically limited to
+    // ~500ms. bytesFree() tells us how much fits right now; the write timer
+    // (onWriteMore) keeps feeding the rest as the driver drains the buffer.
+    m_txOffset = 0;
+    qint64 canWrite = m_txSink->bytesFree();
+    if (canWrite <= 0) canWrite = m_txBuffer.size(); // fallback: try all
+    qint64 toWrite  = std::min(canWrite, static_cast<qint64>(m_txBuffer.size()));
+    qint64 written  = m_txDevice->write(m_txBuffer.constData(), toWrite);
+    if (written > 0) m_txOffset = static_cast<int>(written);
+    qDebug() << "AudioEngine: initial write" << written << "/"
+             << m_txBuffer.size() << "bytes";
+
+    // Start progressive write timer if data remains
+    if (m_txOffset < m_txBuffer.size()) {
+        if (m_writeTimer) { m_writeTimer->stop(); m_writeTimer->deleteLater(); }
+        m_writeTimer = new QTimer(this);
+        m_writeTimer->setInterval(20); // 20ms — well inside any driver period
+        connect(m_writeTimer, &QTimer::timeout,
+                this, &AudioEngine::onWriteMore);
+        m_writeTimer->start();
+    }
 
     m_transmitting = true;
 
@@ -217,6 +235,11 @@ bool AudioEngine::startTx(const QString& deviceName,
     connect(m_txTimer, &QTimer::timeout, this, [this]() {
         m_txTimer = nullptr;
         if (!m_transmitting) return;
+        if (m_writeTimer) {
+            m_writeTimer->stop();
+            m_writeTimer->deleteLater();
+            m_writeTimer = nullptr;
+        }
         m_transmitting = false;
         if (m_txSink) m_txSink->stop();
         m_txSink.reset();
@@ -260,6 +283,11 @@ void AudioEngine::onTxStateChanged(QAudio::State state) {
 }
 
 void AudioEngine::stopTx() {
+    if (m_writeTimer) {
+        m_writeTimer->stop();
+        m_writeTimer->deleteLater();
+        m_writeTimer = nullptr;
+    }
     if (m_txTimer) {
         m_txTimer->stop();
         m_txTimer->deleteLater();
@@ -309,6 +337,33 @@ QByteArray AudioEngine::floatToPcm(const std::vector<float>& samples) {
         dst[i] = static_cast<int16_t>(clamped * 32767.0f);
     }
     return pcm;
+}
+
+void AudioEngine::onWriteMore() {
+    if (!m_txDevice || !m_transmitting || m_txOffset >= m_txBuffer.size()) {
+        if (m_writeTimer) m_writeTimer->stop();
+        return;
+    }
+
+    qint64 free      = m_txSink ? m_txSink->bytesFree() : 0;
+    if (free <= 0) return;
+
+    qint64 remaining = static_cast<qint64>(m_txBuffer.size()) - m_txOffset;
+    qint64 toWrite   = std::min(free, remaining);
+
+    qint64 written = m_txDevice->write(
+        m_txBuffer.constData() + m_txOffset, toWrite);
+    if (written > 0) {
+        m_txOffset += static_cast<int>(written);
+        qDebug() << "AudioEngine: write chunk" << written
+                 << "bytes," << (m_txBuffer.size() - m_txOffset)
+                 << "remaining";
+    }
+
+    if (m_txOffset >= m_txBuffer.size()) {
+        if (m_writeTimer) m_writeTimer->stop();
+        qDebug() << "AudioEngine: all TX data written to driver buffer";
+    }
 }
 
 float AudioEngine::computeRms(const std::vector<float>& samples) {

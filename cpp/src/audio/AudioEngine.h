@@ -77,6 +77,7 @@ signals:
 private slots:
     void onRxDataAvailable();
     void onTxStateChanged(QAudio::State state);
+    void onWriteMore();  // progressive TX buffer feed
 
 private:
     // ── RX members ────────────────────────────────────────────────────────
@@ -92,6 +93,9 @@ private:
     // Timer-based TX completion — WASAPI signals IdleState immediately after
     // writing to the driver buffer, not after hardware finishes playback.
     QTimer*                       m_txTimer   = nullptr;
+    // Progressive write timer — feeds the driver buffer in chunks as it drains.
+    // WASAPI/VAC only accept ~500ms at a time; we must keep writing until done.
+    QTimer*                       m_writeTimer = nullptr;
 
     // ── State ─────────────────────────────────────────────────────────────
     std::atomic<bool> m_receiving    {false};
