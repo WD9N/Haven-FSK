@@ -1283,3 +1283,133 @@ handles all platform audio complexity internally and provides a
 reliable StoppedState signal when playback genuinely finishes.
 WAV format is natively supported by Qt6 on all platforms with no
 additional dependencies.
+
+## ADR-059 — Radio menu is a direct action, not a submenu
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Clicking "Radio" on the main menu bar immediately
+opens RadioConfigDialog. No submenu. Connect and Disconnect
+buttons live inside the dialog alongside method selector,
+connection fields, and TX sequencing timing controls.
+
+**Reasoning:** First-run testing revealed Radio → Configure...
+required two clicks. Direct menu bar action is one click faster
+and more intuitive for field operators.
+
+## ADR-060 — POTA settings box compact with no instructional text
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** POTA References group in Settings → Station Info
+shows only list widget, entry field, and Add/Remove buttons.
+No instructional text. List starts at minimum height (40px)
+and expands up to 200px as references are added.
+
+**Reasoning:** Instructional text is unnecessary hand-holding.
+Operators know what to do. Clean UI reduces visual noise.
+
+## ADR-061 — State and County added to station information
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** State/Province and County fields added to Station
+Information. Stored in QSettings, snapshotted per QSO in log
+database, exported as MY_STATE (standard ADIF) and
+APP_HAVEN_MY_COUNTY (custom APP_ field). Available as
+<myState> and <myCounty> macro tags. SQLite migration uses
+ALTER TABLE ADD COLUMN which fails silently if column exists.
+
+## ADR-062 — Log entry delete with confirmation, default No
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Delete button visible only in edit mode (after
+double-clicking a completed contact row). Confirmation dialog
+shows contacted station callsign. Default button is No.
+Database DELETE uses db_id to target exact record.
+
+**Reasoning:** Deletion is irreversible. Default No prevents
+accidental deletion via Enter key. Hidden in normal mode
+prevents accidental activation during operating.
+
+## ADR-063 — RS label-field pairs use fixed widths
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** RS-R and RS-S labels and fields use setFixedWidth()
+on fields and QSizePolicy::Fixed on labels, with addSpacing()
+between groups. Only Parks field receives stretch factor 1.
+
+**Reasoning:** Qt layout engine expands widgets to fill space
+unless explicitly constrained. Fixed widths prevent label/field
+separation regardless of available space.
+
+## ADR-064 — TX messages shown in RX display in amber
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Transmitted messages appear in RxDisplay in amber
+(#C8860A) with [TX] prefix and UTC timestamp. Signal emitted
+from DspPipeline::transmit() before frame assembly.
+
+**Reasoning:** Operators need conversation continuity — referring
+back to sent messages is essential when a contact asks for
+clarification. Amber matches application accent color.
+
+## ADR-067 — TCI m_ready flag set when ready message received
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** TCIClient parseTCIMessage() sets m_ready = true
+when the "ready" message is received from Thetis. m_ready is
+reset to false on disconnect so re-handshake is required.
+setPTT() and sendTCI() guard on both m_connected and m_ready.
+
+**Reasoning:** m_ready was never set to true — every setPTT call
+was silently blocked. Root cause identified via debug console
+output showing "connected=true ready=false" on every TX attempt.
+
+## ADR-068 — AudioEngine stopTx() disconnects signals before destroy
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** stopTx() calls disconnect(sink, nullptr, this, nullptr)
+before stopping and resetting QAudioSink/QMediaPlayer, preventing
+stale state change signals from firing during teardown.
+
+## ADR-069 — onSettingsChanged() does not restart radio
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** onSettingsChanged() restarts audio only. It does
+not call startRadio(). Radio reconnects only when the operator
+explicitly uses Radio → Configure... → Connect.
+
+**Reasoning:** Every settings save was disconnecting TCI causing
+10-second reconnect delays and WebSocket errors in the log.
+Settings dialog has no radio tab — calling startRadio() on
+station info or audio changes was always wrong.
+
+## ADR-073 — RX audio source destroyed before TX starts
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** AudioEngine::stopRx() destroys QAudioSource
+(calls reset()) rather than just stopping it, fully releasing
+the audio device before TX begins. TX therefore always finds
+the device available.
+
+**Reasoning:** RX QAudioSource holding the VAC device while TX
+attempted to use the same device caused audio interference and
+clicking/pulsing artifacts in transmitted signal.

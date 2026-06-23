@@ -7,6 +7,46 @@
 Complete rewrite in C++17 / Qt6. This is a ground-up reimplementation
 replacing the Python/tkinter prototype. No Python dependency.
 
+### Phase 8 Fixes (June 2026)
+
+**UI and Settings**
+- Radio configuration moved to Radio menu — single click, no submenu; Connect/Disconnect inside dialog
+- POTA reference list compact with dynamic height, no instructional text
+- State/Province and County fields added to Station Information
+- Callsign placeholder changed from "e.g. WD9N" to "Your callsign"
+- All station info fields auto-uppercase as operator types
+- POTA references auto-corrected to XX-NNNN format on entry
+- FD Exchange fields hidden when Field Day mode is inactive
+- Empty macro buttons right-clickable to open editor
+
+**Log Panel**
+- RS-R and RS-S labels immediately adjacent to their fields (fixed widths)
+- RS-S field visually greyed as read-only (auto-computed)
+- "Double-click row to edit" hint label in entry strip
+- Frequency column added to recent contacts table
+- Inline log edit mode: double-click row → Update mode
+- Delete button in edit mode with confirmation (default No)
+- Log database UPDATE wired to inline edit; DELETE wired to delete button
+
+**TX/RX Display**
+- Transmitted messages shown in RX window in amber with [TX] prefix
+
+**Frequency Control**
+- Always editable — amber when rig-controlled, grey for manual entry
+- "Enter MHz" placeholder when no rig connected
+- Manual frequency entry updates log panel without requiring rig
+
+**Radio Control and Audio**
+- PTTManager wired into TX sequence (was missing entirely — radio never received PTT)
+- TCI m_ready flag now set correctly on "ready;" message — fixes silent PTT blocking
+- TCI setPTT guards on both connected and ready state
+- TCI setFrequency guards and explicit integer Hz format
+- TX sequencing: configurable PTT lead (150ms default) and tail (200ms default)
+- AudioEngine TX uses QMediaPlayer with in-memory WAV — eliminates WASAPI buffer truncation
+- Settings change no longer disconnects active TCI connection
+
+---
+
 ### Architecture
 
 - **C++17 / Qt6** — native binary, no interpreter
