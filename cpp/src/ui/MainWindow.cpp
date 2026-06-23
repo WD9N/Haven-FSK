@@ -24,6 +24,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QDateTime>
+#include <QTimer>
 #include <QFont>
 #include <QSettings>
 #include <QVariantMap>
@@ -281,8 +282,8 @@ void MainWindow::setupConnections() {
             m_pipeline, &HavenFSK::DspPipeline::onAudioChunk);
     connect(m_audio, &AudioEngine::txComplete,
             this, &MainWindow::onTxComplete);
-    connect(m_audio, &AudioEngine::txComplete,
-            m_pipeline, &HavenFSK::DspPipeline::onTxComplete);
+    // Note: m_pipeline->onTxComplete() is called inside onTxComplete()
+    // after the TX tail delay — NOT directly here.
     connect(m_audio, &AudioEngine::audioError,
             this, &MainWindow::onAudioError);
     connect(m_audio, &AudioEngine::rxLevelChanged,
@@ -342,30 +343,38 @@ void MainWindow::setupConnections() {
                     m_radio->setFrequency(hz);
             });
 
-    // DspPipeline → AudioEngine (TX audio) — with PTT and diagnostics
+    // DspPipeline → AudioEngine (TX audio) — PTT lead then audio
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
             this, [this](const std::vector<float>& samples) {
                 QString outDev = HavenFSK::savedOutputDevice();
                 qDebug() << "txAudioReady:" << samples.size()
-                         << "samples =" << (samples.size() / 48000.0) << "sec"
-                         << "device:" << outDev;
+                         << "samples on" << outDev;
 
-                // Fix 1: key PTT via PTTManager before playing audio
                 bool isCQ      = m_pipeline->lastTxWasCQ();
                 bool dcdActive = m_pipeline->dcdActive();
-                if (m_pttManager && m_radio && m_radio->isConnected()) {
-                    m_pttManager->requestTX(isCQ, dcdActive);
-                } else {
-                    qDebug() << "No rig connected — playing audio (VOX/no-PTT mode)";
-                }
 
-                bool ok = m_audio->startTx(outDev, samples);
-                qDebug() << "startTx returned:" << ok;
-                if (!ok) {
-                    qWarning() << "startTx failed — aborting TX";
-                    m_pipeline->onTxComplete();
-                    onTxComplete();
-                    if (m_pttManager) m_pttManager->txOff();
+                if (m_pttManager && m_radio && m_radio->isConnected()) {
+                    int leadMs = HavenFSK::pttLeadMs();
+                    // Assert PTT immediately
+                    m_pttManager->requestTX(isCQ, dcdActive);
+                    qDebug() << "TX: PTT asserted, waiting"
+                             << leadMs << "ms lead time";
+                    // Delay audio start by PTT lead time
+                    QTimer::singleShot(leadMs, this,
+                        [this, samples, outDev]() {
+                            qDebug() << "TX: lead time elapsed, starting audio";
+                            bool ok = m_audio->startTx(outDev, samples);
+                            if (!ok) {
+                                qWarning() << "startTx failed — aborting TX";
+                                m_pipeline->onTxComplete();
+                                onTxComplete();
+                                if (m_pttManager) m_pttManager->txOff();
+                            }
+                        });
+                } else {
+                    // No rig control — play audio immediately (VOX mode)
+                    qDebug() << "TX: no rig control — VOX mode";
+                    m_audio->startTx(outDev, samples);
                 }
             });
 
@@ -570,14 +579,23 @@ void MainWindow::onTransmit() {
 }
 
 void MainWindow::onTxComplete() {
-    qDebug() << "=== TX COMPLETE === unkeying PTT";
-    // Fix 1: unkey PTT after audio finishes
-    if (m_pttManager) m_pttManager->txOff();
+    int tailMs = HavenFSK::txTailMs();
+    qDebug() << "TX: audio complete, waiting" << tailMs << "ms tail before PTT off";
+
+    // Re-enable UI immediately so operator can prepare next message
     m_txButton->setEnabled(true);
     m_txInput->setEnabled(true);
     m_txInput->clear();
-    m_statusLabel->setText("Listening...");
-    m_audio->startRx(HavenFSK::savedInputDevice());
+    m_statusLabel->setText("TX tail — releasing PTT...");
+
+    // Wait tail time, then release PTT and restart RX
+    QTimer::singleShot(tailMs, this, [this]() {
+        qDebug() << "TX: tail elapsed — releasing PTT";
+        if (m_pttManager) m_pttManager->txOff();
+        m_statusLabel->setText("Listening...");
+        m_audio->startRx(HavenFSK::savedInputDevice());
+        m_pipeline->onTxComplete();
+    });
 }
 
 void MainWindow::onMessageReceived(const HavenFSK::RxMessage& msg) {

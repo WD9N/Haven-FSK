@@ -15,6 +15,9 @@ namespace RadioSettingsKeys {
 
     static constexpr const char* TCI_HOST     = "radio/tci/host";
     static constexpr const char* TCI_PORT     = "radio/tci/port";
+
+    static constexpr const char* PTT_LEAD_MS = "radio/ptt_lead_ms";
+    static constexpr const char* TX_TAIL_MS  = "radio/tx_tail_ms";
 }
 
 // Station information keys
@@ -83,6 +86,16 @@ inline void saveStationInfo(const StationInfo& info) {
     s.setValue(StationKeys::COUNTY,     info.county);
 
     s.setValue(StationKeys::POTA_REFS, info.potaRefs);
+}
+
+// TX sequencing timing
+inline int pttLeadMs() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::PTT_LEAD_MS, 150).toInt();
+}
+inline int txTailMs() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::TX_TAIL_MS, 200).toInt();
 }
 
 // Rigctld connection settings

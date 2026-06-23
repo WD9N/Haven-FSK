@@ -201,11 +201,12 @@ bool AudioEngine::startTx(const QString& deviceName,
 
     // WASAPI on Windows signals IdleState as soon as data reaches the driver
     // buffer — not when the hardware finishes playing. Use a timer for actual
-    // TX duration so PTT stays keyed and txComplete fires at the right time.
+    // TX duration so txComplete fires at the right time.
+    // TX tail (PTT release delay) is handled in MainWindow::onTxComplete().
     int durationMs = static_cast<int>(
         static_cast<double>(samples.size()) / HavenFSK::SAMPLE_RATE * 1000.0);
-    // Add 100ms for driver startup latency so end of transmission isn't clipped
-    durationMs += 100;
+    // 50ms pad for WASAPI buffer acceptance latency only
+    durationMs += 50;
 
     if (m_txTimer) {
         m_txTimer->stop();

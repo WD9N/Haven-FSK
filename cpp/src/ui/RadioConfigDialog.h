@@ -46,6 +46,9 @@ private:
     QLineEdit*  m_tciHost      {nullptr};
     QSpinBox*   m_tciPort      {nullptr};
 
+    QSpinBox*    m_pttLeadMs    {nullptr};
+    QSpinBox*    m_txTailMs    {nullptr};
+
     QPushButton* m_connectBtn    {nullptr};
     QPushButton* m_disconnectBtn {nullptr};
 

@@ -1202,3 +1202,34 @@ disabled by defining QT_NO_DEBUG_OUTPUT in release builds.
 **Reasoning:** First-run testing revealed TX completing instantly
 without audio playing. Systematic debug logging throughout the
 pipeline is the fastest path to diagnosing where the failure occurs.
+
+## ADR-071 — TX sequencing: configurable PTT lead and tail times
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** TX sequence adds two configurable delays:
+- PTT lead time (default 150ms): delay from PTT assert to audio
+  start, giving radio time to switch from RX to TX
+- TX tail time (default 200ms): delay from audio end to PTT
+  release, ensuring audio drains from hardware buffer before
+  radio switches back to RX
+
+Both are configurable in Radio → Configure... TX Sequencing.
+PTT lead is implemented via QTimer::singleShot() in the
+txAudioReady handler. TX tail is implemented via QTimer::singleShot()
+in onTxComplete(). The AudioEngine TX timer covers audio duration
+only (plus 50ms WASAPI acceptance latency).
+
+**Reasoning:** Different radios require different lead times —
+SDR/TCI (50-150ms), modern CAT (100-200ms), older relay-switched
+radios (200-500ms). A fixed hardcoded delay would be wrong for
+many operators. Configurable values let each operator tune for
+their specific radio. The TX tail ensures the last part of audio
+is not cut off when the radio switches back to RX before the
+hardware buffer drains.
+
+**Default values:** 150ms lead and 200ms tail were chosen as
+conservative defaults that work correctly for HL2/Thetis TCI
+(the primary development platform) while being acceptable for
+most other radios without operator intervention.

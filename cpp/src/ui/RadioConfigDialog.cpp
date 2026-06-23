@@ -75,6 +75,42 @@ void RadioConfigDialog::setupUi() {
     tciForm->addRow("", tciNote);
     layout->addWidget(m_tciGroup);
 
+    // TX sequencing timing
+    auto* timingGroup = new QGroupBox("TX Sequencing Timing");
+    auto* timingForm  = new QFormLayout(timingGroup);
+
+    m_pttLeadMs = new QSpinBox;
+    m_pttLeadMs->setRange(0, 2000);
+    m_pttLeadMs->setSuffix(" ms");
+    m_pttLeadMs->setValue(150);
+    m_pttLeadMs->setToolTip(
+        "Delay from PTT assert to audio start.\n"
+        "Allows radio time to switch from RX to TX.\n"
+        "HL2/TCI: 50–150ms  Modern CAT: 100–200ms\n"
+        "Older relay-switched radios: 200–500ms");
+    timingForm->addRow("PTT Lead Time:", m_pttLeadMs);
+
+    m_txTailMs = new QSpinBox;
+    m_txTailMs->setRange(0, 2000);
+    m_txTailMs->setSuffix(" ms");
+    m_txTailMs->setValue(200);
+    m_txTailMs->setToolTip(
+        "Delay from audio end to PTT release.\n"
+        "Allows audio hardware buffer to drain\n"
+        "and last audio to fully transmit.\n"
+        "Recommended: 150–300ms");
+    timingForm->addRow("TX Tail Time:", m_txTailMs);
+
+    auto* timingNote = new QLabel(
+        "Total TX hold = PTT lead + audio + TX tail.\n"
+        "Increase PTT lead if audio starts before radio is in TX.\n"
+        "Increase TX tail if last part of audio is cut off.");
+    timingNote->setStyleSheet("color: gray; font-size: 8pt;");
+    timingNote->setWordWrap(true);
+    timingForm->addRow("", timingNote);
+
+    layout->addWidget(timingGroup);
+
     // Button row: [Connect Rig] [Disconnect Rig] <stretch> [Save] [Close]
     auto* btnLayout = new QHBoxLayout;
 
@@ -135,6 +171,8 @@ void RadioConfigDialog::loadSettings() {
     m_rigctldPort->setValue(HavenFSK::rigctldPort());
     m_tciHost->setText(HavenFSK::tciHost());
     m_tciPort->setValue(HavenFSK::tciPort());
+    m_pttLeadMs->setValue(HavenFSK::pttLeadMs());
+    m_txTailMs->setValue(HavenFSK::txTailMs());
     onMethodChanged();
 }
 
@@ -152,6 +190,10 @@ void RadioConfigDialog::saveSettings() {
                m_tciHost->text().trimmed());
     s.setValue(HavenFSK::RadioSettingsKeys::TCI_PORT,
                m_tciPort->value());
+    s.setValue(HavenFSK::RadioSettingsKeys::PTT_LEAD_MS,
+               m_pttLeadMs->value());
+    s.setValue(HavenFSK::RadioSettingsKeys::TX_TAIL_MS,
+               m_txTailMs->value());
 }
 
 void RadioConfigDialog::setConnected(bool connected) {
