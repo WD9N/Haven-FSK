@@ -128,6 +128,7 @@ std::vector<float> Frame::assemble(const std::string& text) const {
     // 6. Modulate each section
     Preamble preamble;
     Modulator mod;
+    mod.resetPhase();  // ensure clean phase start for this transmission
 
     std::vector<float> preambleAudio = preamble.generate();
 

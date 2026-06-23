@@ -17,6 +17,8 @@ Modulator::Modulator()
 
 void Modulator::buildToneTable()
 {
+    // Pre-build tone table for reference; TX generation now uses the
+    // continuous phase accumulator instead of this table.
     for (int i = 0; i < NUM_TONES; ++i) {
         double f = BASE_FREQ + i * SYMBOL_RATE;
         for (int t = 0; t < SAMPLES_PER_SYMBOL; ++t) {
@@ -29,13 +31,14 @@ void Modulator::buildToneTable()
 void Modulator::buildRamps()
 {
     for (int i = 0; i < RAMP_SAMPLES; ++i)
-        m_rampUp[i] = static_cast<float>(std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
-    // m_rampUp must be fully populated before m_rampDown reads it
+        m_rampUp[i] = static_cast<float>(
+            std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
     for (int i = 0; i < RAMP_SAMPLES; ++i)
         m_rampDown[i] = m_rampUp[RAMP_SAMPLES - 1 - i];
 }
 
-std::vector<int> Modulator::bytesToSymbols(const std::vector<uint8_t>& data) const
+std::vector<int> Modulator::bytesToSymbols(
+    const std::vector<uint8_t>& data) const
 {
     std::vector<int> symbols;
     symbols.reserve(data.size() * 2);
@@ -46,18 +49,53 @@ std::vector<int> Modulator::bytesToSymbols(const std::vector<uint8_t>& data) con
     return symbols;
 }
 
-std::vector<float> Modulator::symbolToSamples(int symbol) const
+void Modulator::applyRamps(std::vector<float>& samples)
 {
-    std::vector<float> samples(m_toneTable[symbol],
-                               m_toneTable[symbol] + SAMPLES_PER_SYMBOL);
-    for (int i = 0; i < RAMP_SAMPLES; ++i) {
-        samples[i]                              *= m_rampUp[i];
-        samples[SAMPLES_PER_SYMBOL - 1 - i]    *= m_rampDown[i];
+    int n       = static_cast<int>(samples.size());
+    int rampLen = RAMP_SAMPLES;
+
+    for (int i = 0; i < rampLen && i < n; i++)
+        samples[i] *= m_rampUp[i];
+
+    for (int i = 0; i < rampLen && i < n; i++)
+        samples[n - 1 - i] *= m_rampDown[i];
+}
+
+std::vector<float> Modulator::symbolToSamples(int symbol)
+{
+    if (symbol < 0 || symbol >= NUM_TONES)
+        symbol = 0;
+
+    // Tone frequency for this symbol
+    double freq = BASE_FREQ + symbol * SYMBOL_RATE;
+
+    // Phase increment per sample for this tone
+    double phaseInc = 2.0 * M_PI * freq
+                    / static_cast<double>(SAMPLE_RATE);
+
+    std::vector<float> samples(SAMPLES_PER_SYMBOL);
+
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        // Generate sample from continuous phase accumulator
+        samples[i] = static_cast<float>(std::sin(m_txPhase));
+
+        // Advance phase — carries across symbol boundaries
+        m_txPhase += phaseInc;
+
+        // Wrap to [-π, π] to prevent float precision drift over long TX
+        if (m_txPhase > M_PI)
+            m_txPhase -= 2.0 * M_PI;
     }
+
+    // Raised cosine amplitude ramp at symbol edges.
+    // With continuous phase this is a refinement, not a band-aid —
+    // it smooths the amplitude envelope without hiding phase jumps.
+    applyRamps(samples);
+
     return samples;
 }
 
-std::vector<float> Modulator::modulate(const std::vector<uint8_t>& data) const
+std::vector<float> Modulator::modulate(const std::vector<uint8_t>& data)
 {
     if (data.empty()) return {};
 
@@ -84,7 +122,7 @@ std::vector<float> Modulator::modulate(const std::vector<uint8_t>& data) const
     return output;
 }
 
-std::vector<float> Modulator::modulateText(const std::string& text) const
+std::vector<float> Modulator::modulateText(const std::string& text)
 {
     std::vector<uint8_t> bytes(text.begin(), text.end());
     return modulate(bytes);

@@ -1413,3 +1413,30 @@ the device available.
 **Reasoning:** RX QAudioSource holding the VAC device while TX
 attempted to use the same device caused audio interference and
 clicking/pulsing artifacts in transmitted signal.
+
+## ADR-074 — Modulator uses continuous phase accumulator (CPFSK)
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Modulator::symbolToSamples() replaced the pre-built
+tone table lookup with a continuous phase accumulator (m_txPhase)
+that carries phase across all symbol boundaries. Each sample is
+computed as sin(m_txPhase) where m_txPhase advances by 2π×f/Fs
+per sample and wraps to [-π, π] to prevent float drift over long
+transmissions. Phase is reset to 0.0 via resetPhase() at the
+start of each Frame::assemble() call (also reset by the Modulator
+constructor which is called fresh per transmission).
+
+**Reasoning:** The pre-built tone table always started at t=0
+(phase=0) for each symbol. When the previous symbol ended at
+phase X and the next symbol started at phase 0, the discontinuity
+produced an audible click at every symbol boundary (31.25 per
+second at the symbol rate). The raised cosine amplitude ramps
+reduced but did not eliminate the clicks. Continuous phase FSK
+(CPFSK) is the correct implementation — frequency changes at
+symbol boundaries but phase continues uninterrupted, producing
+a clean signal with no discontinuities. The demodulator is
+unaffected as FFT energy detection is phase-independent. The
+single Modulator instance in Frame::assemble() carries phase
+continuously across header, CRC, and payload sections.
