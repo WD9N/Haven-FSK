@@ -1463,3 +1463,50 @@ discontinuities: within the preamble (16 resets at symbol rate)
 and at the preamble→header boundary. This fix eliminates all
 remaining discontinuities by applying the same CPFSK approach to
 the preamble and propagating its final phase to the Modulator.
+
+## ADR-070 — AudioEngine TX uses QMediaPlayer with in-memory WAV
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** AudioEngine TX uses QMediaPlayer with QAudioOutput
+to play pre-computed audio. PCM samples converted to WAV file
+in memory (44-byte header + int16 PCM), wrapped in QBuffer,
+played via QMediaPlayer::setSourceDevice(). Completion signaled
+by playbackStateChanged(StoppedState).
+
+**Memory impact:** ~361 KB peak per transmission, freed after TX.
+
+**Reasoning:** QAudioSink proved unsuitable for one-shot playback.
+Qt6.11 uses FFmpeg multimedia backend on Windows which signals
+IdleState immediately after handing data to hardware driver
+regardless of pull/push mode or buffer size. QMediaPlayer is
+the correct Qt6 API for playing a complete pre-computed audio
+buffer — same API used by music players on all platforms.
+
+## ADR-076 — Raised cosine amplitude ramps removed from CPFSK
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Raised cosine amplitude ramps (153 samples = 3.2ms)
+removed from both Modulator::symbolToSamples() and
+Preamble::generate(). The quarter-sine ramp tables are retained
+in the code but no longer applied.
+
+**Root cause of final artifact:** With continuous phase the ramps
+had no phase discontinuities to soften. Instead they created a
+guaranteed amplitude dip at every symbol boundary — the end-ramp
+of symbol N and start-ramp of symbol N+1 both applied at the
+same point, reducing amplitude across 20% of each 32ms symbol
+period. At 31.25 symbols/second this produced exactly the
+pulsing/buzzing artifact heard in testing.
+
+**Verified:** Audacity waveform analysis confirmed clean
+constant-envelope continuous sinusoidal waveform after ramp
+removal. Audio described as smooth, clean tones.
+
+**Note:** Ramps only have value when phase discontinuities exist.
+With CPFSK they are harmful, not helpful. They should be removed
+permanently rather than retained as dead code if a future cleanup
+pass is made.

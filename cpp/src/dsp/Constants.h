@@ -88,7 +88,7 @@ constexpr int    AUDIO_CHANNELS      = 1;    // mono
 
 // ── Application ────────────────────────────────────────────────
 constexpr const char* APP_NAME       = "HAVEN-FSK";
-constexpr const char* APP_VERSION    = "0.2.0";
+constexpr const char* APP_VERSION    = "0.2.0-beta";
 constexpr const char* EMISSION_DESIG = "500HJ2D";
 constexpr const char* SPEC_URL       =
     "https://github.com/WD9N/Haven-FSK";

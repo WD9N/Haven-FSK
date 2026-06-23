@@ -3,36 +3,55 @@
 ## Current Status — June 2026
 
 **Branch:** cpp-rewrite
-**Version:** v0.2.0-beta (pending on-air verification)
+**Version:** v0.2.0-beta (pending on-air QSO verification)
 **Build:** Clean, zero errors, all self-tests passing
+**Audio:** Clean CPFSK tones verified in Audacity — ready for air
 
 ### Completed Phases
-- Phase 1: Project infrastructure, CMakeLists.txt
-- Phase 2: DSP layer (Modulator, Demodulator, DCD, Preamble)
+- Phase 1: Project infrastructure, CMakeLists.txt, Constants.h
+- Phase 2: DSP — Modulator (CPFSK), Demodulator, DCD, Preamble
 - Phase 3A: LDPC(192,96) FEC encoder and BP decoder
 - Phase 3B: Frame assembly, parsing, CRC-16
-- Phase 4: AudioEngine — Qt6 Multimedia RX/TX
+- Phase 4: AudioEngine — Qt6 QMediaPlayer TX, QAudioSource RX
 - Phase 5A: DspPipeline — RX state machine, TX path
 - Phase 5B: Radio control — RigctldClient, TCIClient, PTTManager
 - Phase 5C: Settings dialog, StationInfoWidget, FCC guard
-- Phase 5D: RxDisplay clickable elements, LogPanel, MacroPanel, RS measurement cache, AFC, WaterfallWidget placeholder
+- Phase 5D: RxDisplay, LogPanel, MacroPanel, RS cache, Waterfall
 - Phase 6: SQLite log, LogManager, ADIF export, ExportDialog
 - Phase 7: WaterfallWidget, AFC digital correction, FrequencyControl
-- Phase 8: UI fixes, PTT wiring, audio engine, TCI debugging
+- Phase 8: UI fixes, PTT wiring, CPFSK modulator, audio engine
+
+### Key Technical Decisions (ADR-001 through ADR-076)
+Full architecture decision log in cpp/DECISIONS.md
 
 ### Pending On-Air Verification
 - RX decode of real HAVEN-FSK signals
 - Click-to-populate from decoded messages
-- AFC locking on real signals
+- AFC locking and tracking on real signals
 - Full QSO logging from live contact
-- TCI frequency set to Thetis (fix implemented, needs test)
-- Clean TX audio via QMediaPlayer (fix implemented, needs test)
+- TCI frequency set bidirectional (implemented, needs air test)
 
-### Next After On-Air Test
+### Known Remaining Work
 - Move icon files to resources/, update haven_fsk.qrc
 - Restore WIN32_EXECUTABLE in CMakeLists.txt
-- Write PHASE8B.md: Windows installer, Linux .desktop, Pi .deb
-- Tag v0.2.0-beta
+- PHASE8B: Windows installer (NSIS), Linux .desktop, Pi .deb
+- Tag v0.2.0-beta after on-air verification
+
+### Audio Architecture Note
+Qt6.11 on Windows uses FFmpeg multimedia backend regardless of
+backend preference settings. QAudioSink IdleState fires before
+hardware playback completes in the FFmpeg backend. TX uses
+QMediaPlayer which correctly signals StoppedState on completion.
+RX uses QAudioSource which works correctly for streaming input.
+
+### Modulator Architecture Note
+HAVEN-FSK uses Continuous Phase FSK (CPFSK). The phase accumulator
+carries continuously across all symbol boundaries — preamble, header,
+CRC, and payload are one uninterrupted phase-continuous signal. Raised
+cosine amplitude ramps were removed as they caused amplitude modulation
+artifacts (pulsing at 31.25 Hz) with CPFSK. The demodulator uses FFT
+energy detection which is phase-independent and unaffected by the
+modulator change.
 
 ---
 

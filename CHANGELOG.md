@@ -7,43 +7,62 @@
 Complete rewrite in C++17 / Qt6. This is a ground-up reimplementation
 replacing the Python/tkinter prototype. No Python dependency.
 
-### Phase 8 Fixes (June 2026)
+### Phase 8 — Pre-Release Fixes and Debugging (June 2026)
 
-**UI and Settings**
-- Radio configuration moved to Radio menu — single click, no submenu; Connect/Disconnect inside dialog
-- POTA reference list compact with dynamic height, no instructional text
-- State/Province and County fields added to Station Information
-- Callsign placeholder changed from "e.g. WD9N" to "Your callsign"
-- All station info fields auto-uppercase as operator types
-- POTA references auto-corrected to XX-NNNN format on entry
-- FD Exchange fields hidden when Field Day mode is inactive
-- Empty macro buttons right-clickable to open editor
+**Critical DSP Fix — CPFSK Modulation**
+- Root cause of TX audio artifacts identified: pre-built tone table reset
+  phase to zero at each symbol boundary, creating 31.25 phase
+  discontinuities per second audible as clicking/pulsing
+- Modulator replaced with continuous phase accumulator (CPFSK) — phase
+  advances continuously across all symbol boundaries
+- Preamble given same continuous phase treatment; final phase seeded to
+  Modulator so preamble→header boundary is seamless
+- Raised cosine amplitude ramps removed — with CPFSK they created amplitude
+  dips at symbol rate (31.25 Hz) rather than smoothing anything
+- Result: clean, smooth HAVEN-FSK tones verified in Audacity waveform analysis
+- Root cause of Python vs C++ difference: Python NumPy used continuous time
+  array naturally maintaining phase; C++ tone table optimization inadvertently
+  broke phase continuity
 
-**Log Panel**
-- RS-R and RS-S labels immediately adjacent to their fields (fixed widths)
-- RS-S field visually greyed as read-only (auto-computed)
-- "Double-click row to edit" hint label in entry strip
-- Frequency column added to recent contacts table
-- Inline log edit mode: double-click row → Update mode
-- Delete button in edit mode with confirmation (default No)
-- Log database UPDATE wired to inline edit; DELETE wired to delete button
-
-**TX/RX Display**
-- Transmitted messages shown in RX window in amber with [TX] prefix
-
-**Frequency Control**
-- Always editable — amber when rig-controlled, grey for manual entry
-- "Enter MHz" placeholder when no rig connected
-- Manual frequency entry updates log panel without requiring rig
-
-**Radio Control and Audio**
-- PTTManager wired into TX sequence (was missing entirely — radio never received PTT)
-- TCI m_ready flag now set correctly on "ready;" message — fixes silent PTT blocking
-- TCI setPTT guards on both connected and ready state
-- TCI setFrequency guards and explicit integer Hz format
-- TX sequencing: configurable PTT lead (150ms default) and tail (200ms default)
-- AudioEngine TX uses QMediaPlayer with in-memory WAV — eliminates WASAPI buffer truncation
+**Radio Control**
+- PTTManager wired into TX sequence (was missing entirely — radio never
+  received PTT commands in the initial build)
+- TCI m_ready detection changed to startsWith — fixes Thetis compatibility
+  where exact string match failed due to encoding artifacts
+- TCI setPTT and setFrequency guard on both connected and ready state
+- TX sequencing: configurable PTT lead (default 150ms) and TX tail
+  (default 200ms) in Radio → Configure...
 - Settings change no longer disconnects active TCI connection
+- Radio → Configure... opens directly from menu bar (one click)
+
+**Audio Engine**
+- TX uses QMediaPlayer with in-memory WAV — correct Qt6 API for one-shot
+  pre-computed audio playback on all platforms
+- Qt6.11 FFmpeg backend identified as root cause of QAudioSink IdleState
+  premature firing — QMediaPlayer bypasses this
+- RX audio source fully destroyed before TX to prevent device conflict
+- Platform audio backend selection in main.cpp: WMF on Windows, ALSA on Pi
+
+**UI Fixes**
+- RS-R and RS-S labels immediately adjacent to fields (fixed width)
+- RS-S field visually greyed as read-only (auto-computed)
+- Double-click log row enters edit mode (Log It → Update)
+- Delete button in edit mode with confirmation dialog (default No)
+- Frequency column added to recent contacts log table
+- TX messages shown in RX window in amber with [TX] prefix and callsign
+- Empty macro buttons right-clickable to open editor
+- FD Exchange fields hidden when Field Day mode inactive
+- POTA references auto-corrected to XX-NNNN format
+- All station info fields auto-uppercase as operator types
+- State/Province and County added to station information
+- ADIF export includes MY_STATE and APP_HAVEN_MY_COUNTY
+- FrequencyControl always editable — amber (rig) or grey (manual entry)
+
+**Log System**
+- Log database UPDATE wired to inline edit mode
+- Log database DELETE wired to delete button with confirmation
+- db_id stored in table row for accurate record targeting
+- Frequency column in contact table (3 decimal places)
 
 ---
 
