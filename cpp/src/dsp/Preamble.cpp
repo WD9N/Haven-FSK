@@ -15,15 +15,6 @@ Preamble::Preamble()
 
 std::vector<float> Preamble::generate()
 {
-    // Build raised cosine ramp tables
-    float rampUp[RAMP_SAMPLES];
-    float rampDown[RAMP_SAMPLES];
-    for (int i = 0; i < RAMP_SAMPLES; ++i)
-        rampUp[i] = static_cast<float>(
-            std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
-    for (int i = 0; i < RAMP_SAMPLES; ++i)
-        rampDown[i] = rampUp[RAMP_SAMPLES - 1 - i];
-
     std::vector<float> audio;
     audio.reserve(PREAMBLE_LENGTH * SAMPLES_PER_SYMBOL);
 
@@ -45,12 +36,8 @@ std::vector<float> Preamble::generate()
             if (phase < -M_PI) phase += 2.0 * M_PI;
         }
 
-        // Apply raised cosine amplitude shaping
-        for (int i = 0; i < RAMP_SAMPLES; i++) {
-            block[i]                          *= rampUp[i];
-            block[SAMPLES_PER_SYMBOL - 1 - i] *= rampDown[i];
-        }
-
+        // Ramps removed: CPFSK has no phase discontinuities — ramps
+        // would create amplitude dips at 31.25 Hz (the pulsing artifact).
         audio.insert(audio.end(), block.begin(), block.end());
     }
 

@@ -87,10 +87,9 @@ std::vector<float> Modulator::symbolToSamples(int symbol)
             m_txPhase -= 2.0 * M_PI;
     }
 
-    // Raised cosine amplitude ramp at symbol edges.
-    // With continuous phase this is a refinement, not a band-aid —
-    // it smooths the amplitude envelope without hiding phase jumps.
-    applyRamps(samples);
+    // Ramps removed: with continuous phase (CPFSK) there are no phase
+    // discontinuities to mask. Ramps at 31.25 symbols/sec created
+    // periodic amplitude dips that caused the pulsing artifact.
 
     return samples;
 }
