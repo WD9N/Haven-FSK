@@ -1233,3 +1233,30 @@ hardware buffer drains.
 conservative defaults that work correctly for HL2/Thetis TCI
 (the primary development platform) while being acceptable for
 most other radios without operator intervention.
+
+## ADR-072 — AudioEngine TX uses QBuffer pull mode (platform-correct)
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** AudioEngine TX uses QAudioSink in pull mode.
+PCM data is stored in a QByteArray member (m_txPcmBuffer),
+wrapped in a QBuffer member (m_txQBuffer), and passed to
+QAudioSink::start(QIODevice*). Qt6 pulls data from the buffer
+as the platform audio backend needs it. IdleState in pull mode
+correctly signals buffer exhaustion (genuine playback complete).
+
+**Platform backend selection in main.cpp:**
+- Windows: QT_MULTIMEDIA_PREFERRED_PLUGINS=windowsmediafoundation
+- Raspberry Pi (ARM Linux): QT_MULTIMEDIA_PREFERRED_PLUGINS=alsa
+- Linux desktop: Qt auto-selects PulseAudio or PipeWire
+
+**Reasoning:** Push mode write() on Windows WASAPI silently
+discards audio beyond the backend's internal buffer size (~500ms),
+causing only 500ms of a 3.84 second transmission to play. Pull
+mode is the correct Qt6 approach for raw PCM playback — Qt handles
+the backend-specific chunking internally. The QByteArray and QBuffer
+are members (not locals) ensuring they remain valid for the entire
+playback duration. Platform backend selection ensures each OS uses
+its most capable audio subsystem without any platform-specific
+code in AudioEngine itself.

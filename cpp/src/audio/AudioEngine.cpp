@@ -10,19 +10,12 @@
 
 // ── Audio format ──────────────────────────────────────────────────────────
 // HAVEN-FSK requires 48000 Hz, mono, signed 16-bit PCM.
-// 48000 Hz is fixed by the published specification — do not make this
-// configurable. Changing the sample rate would require publishing a new
-// specification and a new FCC emission designator.
-//
-// We use Int16 PCM rather than Float32 because Qt6 Multimedia's
-// platform backends (WASAPI on Windows, ALSA on Linux, CoreAudio on macOS)
-// have the widest device compatibility with Int16. We convert to/from
-// float32 at the AudioEngine boundary so the DSP layer always sees floats.
+// 48000 Hz is fixed by the published specification — do not make configurable.
 
 QAudioFormat AudioEngine::havenFormat() {
     QAudioFormat fmt;
-    fmt.setSampleRate(HavenFSK::SAMPLE_RATE);        // 48000 Hz
-    fmt.setChannelCount(HavenFSK::AUDIO_CHANNELS);   // 1 (mono)
+    fmt.setSampleRate(HavenFSK::SAMPLE_RATE);
+    fmt.setChannelCount(HavenFSK::AUDIO_CHANNELS);
     fmt.setSampleFormat(QAudioFormat::Int16);
     return fmt;
 }
@@ -92,9 +85,6 @@ bool AudioEngine::startRx(const QString& deviceName) {
     }
 
     m_rxSource = std::make_unique<QAudioSource>(dev, fmt, this);
-
-    // Set buffer size to hold ~4 chunks for smooth streaming
-    // 4 * AUDIO_CHUNK_SAMPLES * 2 bytes (int16) * 1 channel
     m_rxSource->setBufferSize(
         HavenFSK::AUDIO_CHUNK_SAMPLES * 4 * static_cast<int>(sizeof(int16_t)));
 
@@ -128,7 +118,6 @@ void AudioEngine::onRxDataAvailable() {
         m_rxBuffer.remove(0, chunkBytes);
 
         std::vector<float> samples = pcmToFloat(chunk);
-
         emit rxLevelChanged(computeRms(samples));
         emit rxDataReady(samples);
     }
@@ -148,7 +137,15 @@ bool AudioEngine::isReceiving() const {
     return m_receiving.load();
 }
 
-// ── TX ────────────────────────────────────────────────────────────────────
+// ── TX (QBuffer pull mode) ────────────────────────────────────────────────
+//
+// QAudioSink pull mode: we pass a QBuffer wrapping the complete PCM data.
+// Qt6 reads from the buffer as the platform backend needs it — handles all
+// backend-specific chunking internally (WMF, ALSA, PulseAudio).
+//
+// In pull mode, IdleState fires when the QBuffer is genuinely exhausted
+// (all data consumed and played) — the correct completion signal.
+// This differs from push mode where IdleState fires prematurely on WASAPI.
 
 bool AudioEngine::startTx(const QString& deviceName,
                            const std::vector<float>& samples)
@@ -156,151 +153,139 @@ bool AudioEngine::startTx(const QString& deviceName,
     stopTx();
 
     if (samples.empty()) {
-        emit audioError("TX called with empty sample buffer");
+        qWarning() << "AudioEngine::startTx: empty samples";
         return false;
     }
 
-    QAudioDevice dev = findOutputDevice(deviceName);
+    // Find requested output device
+    QAudioDevice dev;
+    for (const auto& d : QMediaDevices::audioOutputs()) {
+        if (d.description() == deviceName) {
+            dev = d;
+            break;
+        }
+    }
+    if (dev.isNull()) {
+        dev = QMediaDevices::defaultAudioOutput();
+        qWarning() << "AudioEngine: TX device not found:" << deviceName
+                   << "falling back to:" << dev.description();
+    }
+
+    qDebug() << "AudioEngine: TX using device:" << dev.description()
+             << "samples:" << samples.size()
+             << "duration:" << (samples.size() / 48000.0) << "sec";
+
     QAudioFormat fmt = havenFormat();
-
     if (!dev.isFormatSupported(fmt)) {
-        QString msg = QString("Output device '%1' does not support "
-                              "48000 Hz mono. Please select a different "
-                              "audio device.").arg(dev.description());
-        emit audioError(msg);
+        qWarning() << "AudioEngine: TX format not supported on device:"
+                   << dev.description();
+        emit audioError(QString("Output device '%1' does not support "
+                                "48000 Hz mono.").arg(dev.description()));
         return false;
     }
 
-    m_txBuffer = floatToPcm(samples);
-    m_txOffset = 0;
+    // Convert float32 → int16 PCM into member buffer
+    // m_txPcmBuffer is a member — stays alive for entire playback duration
+    m_txPcmBuffer.resize(static_cast<int>(samples.size() * sizeof(int16_t)));
+    int16_t* dst = reinterpret_cast<int16_t*>(m_txPcmBuffer.data());
+    for (size_t i = 0; i < samples.size(); i++) {
+        float s = std::max(-1.0f, std::min(1.0f, samples[i]));
+        dst[i] = static_cast<int16_t>(s * 32767.0f);
+    }
+
+    // Wrap in QBuffer for pull mode
+    // m_txQBuffer is a member — must outlive the sink
+    m_txQBuffer = new QBuffer(&m_txPcmBuffer, this);
+    if (!m_txQBuffer->open(QIODevice::ReadOnly)) {
+        qWarning() << "AudioEngine: failed to open TX QBuffer";
+        delete m_txQBuffer;
+        m_txQBuffer = nullptr;
+        m_txPcmBuffer.clear();
+        return false;
+    }
 
     m_txSink = std::make_unique<QAudioSink>(dev, fmt, this);
-
     connect(m_txSink.get(), &QAudioSink::stateChanged,
             this, &AudioEngine::onTxStateChanged);
 
-    m_txDevice = m_txSink->start();
-    if (!m_txDevice) {
-        emit audioError(QString("Failed to open output device '%1'")
-                        .arg(dev.description()));
-        m_txSink.reset();
-        m_txBuffer.clear();
-        return false;
-    }
-
-    qDebug() << "AudioEngine::startTx using device:" << dev.description()
-             << "(requested:" << deviceName << ")"
-             << samples.size() << "samples ="
-             << (samples.size() / 48000.0) << "sec";
-
-    // Write initial chunk — WASAPI/VAC buffers are typically limited to
-    // ~500ms. bytesFree() tells us how much fits right now; the write timer
-    // (onWriteMore) keeps feeding the rest as the driver drains the buffer.
-    m_txOffset = 0;
-    qint64 canWrite = m_txSink->bytesFree();
-    if (canWrite <= 0) canWrite = m_txBuffer.size(); // fallback: try all
-    qint64 toWrite  = std::min(canWrite, static_cast<qint64>(m_txBuffer.size()));
-    qint64 written  = m_txDevice->write(m_txBuffer.constData(), toWrite);
-    if (written > 0) m_txOffset = static_cast<int>(written);
-    qDebug() << "AudioEngine: initial write" << written << "/"
-             << m_txBuffer.size() << "bytes";
-
-    // Start progressive write timer if data remains
-    if (m_txOffset < m_txBuffer.size()) {
-        if (m_writeTimer) { m_writeTimer->stop(); m_writeTimer->deleteLater(); }
-        m_writeTimer = new QTimer(this);
-        m_writeTimer->setInterval(20); // 20ms — well inside any driver period
-        connect(m_writeTimer, &QTimer::timeout,
-                this, &AudioEngine::onWriteMore);
-        m_writeTimer->start();
-    }
-
     m_transmitting = true;
 
-    // WASAPI on Windows signals IdleState as soon as data reaches the driver
-    // buffer — not when the hardware finishes playing. Use a timer for actual
-    // TX duration so txComplete fires at the right time.
-    // TX tail (PTT release delay) is handled in MainWindow::onTxComplete().
-    int durationMs = static_cast<int>(
-        static_cast<double>(samples.size()) / HavenFSK::SAMPLE_RATE * 1000.0);
-    // 50ms pad for WASAPI buffer acceptance latency only
-    durationMs += 50;
+    // Pull mode: Qt reads from QBuffer as backend needs data
+    m_txSink->start(m_txQBuffer);
 
-    if (m_txTimer) {
-        m_txTimer->stop();
-        m_txTimer->deleteLater();
-    }
-    m_txTimer = new QTimer(this);
-    m_txTimer->setSingleShot(true);
-    connect(m_txTimer, &QTimer::timeout, this, [this]() {
-        m_txTimer = nullptr;
-        if (!m_transmitting) return;
-        if (m_writeTimer) {
-            m_writeTimer->stop();
-            m_writeTimer->deleteLater();
-            m_writeTimer = nullptr;
-        }
-        m_transmitting = false;
-        if (m_txSink) m_txSink->stop();
-        m_txSink.reset();
-        m_txDevice = nullptr;
-        m_txBuffer.clear();
-        m_txOffset = 0;
-        qDebug() << "AudioEngine: TX complete (timer)";
-        emit txComplete();
-    });
-    m_txTimer->start(durationMs);
+    qDebug() << "AudioEngine: TX pull mode started —"
+             << m_txPcmBuffer.size() << "bytes";
 
     return true;
 }
 
 void AudioEngine::onTxStateChanged(QAudio::State state) {
-    qDebug() << "AudioEngine::onTxStateChanged state=" << state
-             << "error=" << (m_txSink ? static_cast<int>(m_txSink->error()) : -1);
+    qDebug() << "AudioEngine: TX state" << state
+             << "error=" << (m_txSink ? static_cast<int>(m_txSink->error()) : -1)
+             << "transmitting=" << m_transmitting.load();
 
-    // IdleState fires immediately on Windows/WASAPI as soon as data reaches
-    // the driver buffer — NOT when hardware finishes playback. Completion is
-    // handled by m_txTimer instead. Log it for diagnostics only.
-    if (state == QAudio::IdleState) {
-        qDebug() << "AudioEngine: IdleState (data in driver buffer,"
-                 << "timer handles actual completion)";
+    if (!m_transmitting) {
+        qDebug() << "AudioEngine: stale state change — ignored";
         return;
     }
 
-    // StoppedState with error = real failure; cancel timer and signal error
-    if (state == QAudio::StoppedState) {
-        if (m_txSink && m_txSink->error() != QAudio::NoError) {
-            qWarning() << "AudioEngine: TX error:" << m_txSink->error();
-            if (m_txTimer) { m_txTimer->stop(); m_txTimer->deleteLater(); m_txTimer = nullptr; }
-            emit audioError(QString("TX audio error: %1")
-                            .arg(static_cast<int>(m_txSink->error())));
-            if (m_transmitting) {
-                m_transmitting = false;
-                emit txComplete();
+    if (state == QAudio::IdleState) {
+        // Pull mode: IdleState = QBuffer exhausted = all audio played.
+        // This IS the correct completion signal in pull mode.
+        qDebug() << "AudioEngine: TX complete (QBuffer exhausted)";
+        m_transmitting = false;
+
+        if (m_txSink) {
+            disconnect(m_txSink.get(), nullptr, this, nullptr);
+            m_txSink->stop();
+            m_txSink.reset();
+        }
+        if (m_txQBuffer) {
+            m_txQBuffer->close();
+            delete m_txQBuffer;
+            m_txQBuffer = nullptr;
+        }
+        m_txPcmBuffer.clear();
+
+        emit txComplete();
+    }
+    else if (state == QAudio::StoppedState) {
+        auto err = m_txSink ? m_txSink->error() : QAudio::NoError;
+        if (err != QAudio::NoError) {
+            qWarning() << "AudioEngine: TX error" << err;
+            m_transmitting = false;
+            if (m_txSink) {
+                disconnect(m_txSink.get(), nullptr, this, nullptr);
+                m_txSink->stop();
+                m_txSink.reset();
             }
+            if (m_txQBuffer) {
+                m_txQBuffer->close();
+                delete m_txQBuffer;
+                m_txQBuffer = nullptr;
+            }
+            m_txPcmBuffer.clear();
+            emit audioError(QString("TX audio error: %1")
+                            .arg(static_cast<int>(err)));
+            emit txComplete();
         }
     }
 }
 
 void AudioEngine::stopTx() {
-    if (m_writeTimer) {
-        m_writeTimer->stop();
-        m_writeTimer->deleteLater();
-        m_writeTimer = nullptr;
-    }
-    if (m_txTimer) {
-        m_txTimer->stop();
-        m_txTimer->deleteLater();
-        m_txTimer = nullptr;
-    }
+    m_transmitting = false;
+
     if (m_txSink) {
+        disconnect(m_txSink.get(), nullptr, this, nullptr);
         m_txSink->stop();
         m_txSink.reset();
-        m_txDevice = nullptr;
     }
-    m_txBuffer.clear();
-    m_txOffset = 0;
-    m_transmitting = false;
+    if (m_txQBuffer) {
+        m_txQBuffer->close();
+        delete m_txQBuffer;
+        m_txQBuffer = nullptr;
+    }
+    m_txPcmBuffer.clear();
 }
 
 bool AudioEngine::isTransmitting() const {
@@ -315,9 +300,6 @@ void AudioEngine::stop() {
 }
 
 // ── PCM ↔ float conversion ────────────────────────────────────────────────
-// Int16 range: -32768 to +32767 → float range: -1.0 to +1.0
-// Division by 32768.0f (not 32767) is standard practice — produces
-// symmetric range and avoids special-casing INT16_MIN.
 
 std::vector<float> AudioEngine::pcmToFloat(const QByteArray& pcm) {
     int nSamples = pcm.size() / static_cast<int>(sizeof(int16_t));
@@ -326,44 +308,6 @@ std::vector<float> AudioEngine::pcmToFloat(const QByteArray& pcm) {
     for (int i = 0; i < nSamples; i++)
         out[i] = static_cast<float>(src[i]) / 32768.0f;
     return out;
-}
-
-QByteArray AudioEngine::floatToPcm(const std::vector<float>& samples) {
-    QByteArray pcm(
-        static_cast<int>(samples.size() * sizeof(int16_t)), Qt::Uninitialized);
-    int16_t* dst = reinterpret_cast<int16_t*>(pcm.data());
-    for (int i = 0; i < (int)samples.size(); i++) {
-        float clamped = std::max(-1.0f, std::min(1.0f, samples[i]));
-        dst[i] = static_cast<int16_t>(clamped * 32767.0f);
-    }
-    return pcm;
-}
-
-void AudioEngine::onWriteMore() {
-    if (!m_txDevice || !m_transmitting || m_txOffset >= m_txBuffer.size()) {
-        if (m_writeTimer) m_writeTimer->stop();
-        return;
-    }
-
-    qint64 free      = m_txSink ? m_txSink->bytesFree() : 0;
-    if (free <= 0) return;
-
-    qint64 remaining = static_cast<qint64>(m_txBuffer.size()) - m_txOffset;
-    qint64 toWrite   = std::min(free, remaining);
-
-    qint64 written = m_txDevice->write(
-        m_txBuffer.constData() + m_txOffset, toWrite);
-    if (written > 0) {
-        m_txOffset += static_cast<int>(written);
-        qDebug() << "AudioEngine: write chunk" << written
-                 << "bytes," << (m_txBuffer.size() - m_txOffset)
-                 << "remaining";
-    }
-
-    if (m_txOffset >= m_txBuffer.size()) {
-        if (m_writeTimer) m_writeTimer->stop();
-        qDebug() << "AudioEngine: all TX data written to driver buffer";
-    }
 }
 
 float AudioEngine::computeRms(const std::vector<float>& samples) {

@@ -282,8 +282,11 @@ void MainWindow::setupConnections() {
             m_pipeline, &HavenFSK::DspPipeline::onAudioChunk);
     connect(m_audio, &AudioEngine::txComplete,
             this, &MainWindow::onTxComplete);
-    // Note: m_pipeline->onTxComplete() is called inside onTxComplete()
-    // after the TX tail delay — NOT directly here.
+    // Pipeline clears its transmitting flag when audio finishes.
+    // This fires before the tail delay — m_pipeline is ready for
+    // the next transmit while we wait for PTT to release.
+    connect(m_audio, &AudioEngine::txComplete,
+            m_pipeline, &HavenFSK::DspPipeline::onTxComplete);
     connect(m_audio, &AudioEngine::audioError,
             this, &MainWindow::onAudioError);
     connect(m_audio, &AudioEngine::rxLevelChanged,
@@ -580,7 +583,7 @@ void MainWindow::onTransmit() {
 
 void MainWindow::onTxComplete() {
     int tailMs = HavenFSK::txTailMs();
-    qDebug() << "TX: audio complete, waiting" << tailMs << "ms tail before PTT off";
+    qDebug() << "TX: audio complete — starting" << tailMs << "ms tail timer";
 
     // Re-enable UI immediately so operator can prepare next message
     m_txButton->setEnabled(true);
@@ -588,13 +591,14 @@ void MainWindow::onTxComplete() {
     m_txInput->clear();
     m_statusLabel->setText("TX tail — releasing PTT...");
 
-    // Wait tail time, then release PTT and restart RX
+    // Wait tail time, then release PTT and restart RX.
+    // m_pipeline->onTxComplete() is called via the direct signal connection
+    // in setupConnections() — do NOT call it here or it fires twice.
     QTimer::singleShot(tailMs, this, [this]() {
-        qDebug() << "TX: tail elapsed — releasing PTT";
+        qDebug() << "TX: tail complete — releasing PTT";
         if (m_pttManager) m_pttManager->txOff();
         m_statusLabel->setText("Listening...");
         m_audio->startRx(HavenFSK::savedInputDevice());
-        m_pipeline->onTxComplete();
     });
 }
 

@@ -9,6 +9,18 @@
 #endif
 
 int main(int argc, char* argv[]) {
+    // Select best audio backend per platform BEFORE QApplication.
+    // Must precede any Qt object construction.
+#ifdef Q_OS_WIN
+    // Windows Media Foundation gives better large-buffer management than
+    // raw WASAPI for 3-4 second TX audio (handles QBuffer pull mode cleanly)
+    qputenv("QT_MULTIMEDIA_PREFERRED_PLUGINS", "windowsmediafoundation");
+#elif defined(Q_OS_LINUX) && defined(__arm__)
+    // Raspberry Pi: force ALSA for direct hardware access
+    qputenv("QT_MULTIMEDIA_PREFERRED_PLUGINS", "alsa");
+#endif
+// Linux desktop: no override — Qt auto-selects PulseAudio/PipeWire
+
     QApplication app(argc, argv);
 
     QApplication::setOrganizationName("WD9N");
