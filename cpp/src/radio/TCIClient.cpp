@@ -99,12 +99,36 @@ void TCIClient::parseTCIMessage(const QString& msg) {
             qDebug() << "TCIClient: device:" << m_deviceName;
         } else if (msg == "ready") {
             m_inInit    = false;
-            m_ready     = true;   // BUGFIX: was never set — setPTT blocked every TX
+            m_ready     = true;
             m_connected = true;
             m_reconnTimer->stop();
             qDebug() << "TCIClient: ready — connected to"
                      << m_deviceName << "protocol" << m_protocolVer;
             emit connected();
+            // Request current state — Thetis pushes vfo:/modulation: during
+            // the init block but those arrive while m_inInit=true and fall
+            // through here. Sending explicit requests ensures we get the
+            // current values now that we're ready to process them.
+            // TCI 2.0: "vfo:0,0;" requests current VFO A frequency
+            m_socket->sendTextMessage("vfo:0,0;");
+        } else if (msg.startsWith("vfo:")) {
+            // Frequency push during init block — process it now
+            // Thetis sends current state during handshake; capture it
+            QStringList parts = msg.mid(4).split(',');
+            if (parts.size() >= 3 && parts[0] == "0" && parts[1] == "0") {
+                bool ok = false;
+                uint64_t hz = parts[2].toULongLong(&ok);
+                if (ok) {
+                    m_frequency = hz;
+                    qDebug() << "TCIClient: init frequency:" << hz << "Hz";
+                    // Don't emit frequencyChanged yet — not connected() yet
+                }
+            }
+        } else if (msg.startsWith("modulation:")) {
+            // Mode push during init block — capture it
+            QStringList parts = msg.mid(11).split(',');
+            if (parts.size() >= 2 && parts[0] == "0")
+                m_mode = parts[1];
         }
         return;
     }
