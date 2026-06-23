@@ -128,9 +128,13 @@ std::vector<float> Frame::assemble(const std::string& text) const {
     // 6. Modulate each section
     Preamble preamble;
     Modulator mod;
-    mod.resetPhase();  // ensure clean phase start for this transmission
 
+    // Generate preamble with continuous phase accumulator
     std::vector<float> preambleAudio = preamble.generate();
+
+    // Seed Modulator with preamble's final phase — header starts exactly
+    // where preamble left off. Zero discontinuity at preamble→header boundary.
+    mod.setPhase(preamble.finalPhase());
 
     std::vector<uint8_t> hdrVec(hdr.begin(), hdr.end());
     std::vector<float> headerAudio = mod.modulate(hdrVec);

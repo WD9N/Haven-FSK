@@ -1440,3 +1440,26 @@ a clean signal with no discontinuities. The demodulator is
 unaffected as FFT energy detection is phase-independent. The
 single Modulator instance in Frame::assemble() carries phase
 continuously across header, CRC, and payload sections.
+
+## ADR-075 — Preamble CPFSK + phase seeded to Modulator at preamble→header boundary
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Preamble::generate() uses a continuous phase
+accumulator (identical to Modulator fix in ADR-074). The final
+phase value is stored in m_finalPhase and exposed via finalPhase().
+Frame::assemble() calls mod.setPhase(preamble.finalPhase()) before
+the first mod.modulate() call, ensuring the header section starts
+with continuous phase from the end of the preamble.
+
+**Result:** The complete transmission — preamble through payload —
+is phase-continuous with zero discontinuities. The transmitted
+signal is clean CPFSK throughout.
+
+**Reasoning:** The Modulator CPFSK fix (ADR-074) eliminated phase
+resets in the header/CRC/payload sections but left two remaining
+discontinuities: within the preamble (16 resets at symbol rate)
+and at the preamble→header boundary. This fix eliminates all
+remaining discontinuities by applying the same CPFSK approach to
+the preamble and propagating its final phase to the Modulator.

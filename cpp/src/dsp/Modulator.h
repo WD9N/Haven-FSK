@@ -19,8 +19,12 @@ public:
     // Convenience: encode UTF-8 text to audio
     std::vector<float> modulateText(const std::string& text);
 
-    // Reset phase accumulator to 0.0 — call before start of each transmission
+    // Reset phase accumulator to 0.0
     void resetPhase() { m_txPhase = 0.0; }
+
+    // Set phase accumulator to a specific value.
+    // Used by Frame::assemble() to continue phase seamlessly from preamble.
+    void setPhase(double phase) { m_txPhase = phase; }
 
 private:
     // Pre-built tone table — kept for reference; not used for TX generation

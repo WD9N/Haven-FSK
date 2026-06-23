@@ -8,9 +8,15 @@ class Preamble {
 public:
     Preamble();
 
-    // Generate preamble audio for transmission
-    // Returns PREAMBLE_LENGTH * SAMPLES_PER_SYMBOL samples
-    std::vector<float> generate() const;
+    // Generate preamble audio using a continuous phase accumulator.
+    // Stores the final phase in m_finalPhase so Frame::assemble()
+    // can seed the Modulator for a seamless preamble→header transition.
+    std::vector<float> generate();
+
+    // Returns the phase at the end of the last generate() call.
+    // Frame::assemble() passes this to mod.setPhase() so the header
+    // starts with continuous phase from the preamble.
+    double finalPhase() const { return m_finalPhase; }
 
     // Feed a window of soft symbol energies (shape [N][NUM_TONES])
     // Returns true if preamble detected, sets score to correlation value
@@ -18,8 +24,7 @@ public:
                 float& score) const;
 
 private:
-    std::vector<float> m_preambleAudio;
-    void buildPreambleAudio();
+    double m_finalPhase {0.0};  // phase at end of last generate() call
 
     // Take hard decisions from soft energies, return symbol indices
     std::vector<int> hardDecisions(

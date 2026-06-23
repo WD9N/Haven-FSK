@@ -10,53 +10,63 @@ namespace HavenFSK {
 
 Preamble::Preamble()
 {
-    buildPreambleAudio();
+    // No pre-building — generate() computes fresh CPFSK audio on each call
 }
 
-void Preamble::buildPreambleAudio()
+std::vector<float> Preamble::generate()
 {
-    // Raised cosine ramps (same formula as Modulator)
+    // Build raised cosine ramp tables
     float rampUp[RAMP_SAMPLES];
     float rampDown[RAMP_SAMPLES];
     for (int i = 0; i < RAMP_SAMPLES; ++i)
-        rampUp[i] = static_cast<float>(std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
-    // rampUp must be fully populated before rampDown reads it
+        rampUp[i] = static_cast<float>(
+            std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
     for (int i = 0; i < RAMP_SAMPLES; ++i)
         rampDown[i] = rampUp[RAMP_SAMPLES - 1 - i];
 
-    m_preambleAudio.reserve(PREAMBLE_LENGTH * SAMPLES_PER_SYMBOL);
+    std::vector<float> audio;
+    audio.reserve(PREAMBLE_LENGTH * SAMPLES_PER_SYMBOL);
+
+    double phase = 0.0;  // continuous phase accumulator
 
     for (int s = 0; s < PREAMBLE_LENGTH; ++s) {
         int sym = PREAMBLE_SYMBOLS[s];
-        double f = BASE_FREQ + sym * SYMBOL_RATE;
+        double freq     = BASE_FREQ + sym * SYMBOL_RATE;
+        double phaseInc = 2.0 * M_PI * freq
+                        / static_cast<double>(SAMPLE_RATE);
 
         std::vector<float> block(SAMPLES_PER_SYMBOL);
-        for (int t = 0; t < SAMPLES_PER_SYMBOL; ++t)
-            block[t] = static_cast<float>(std::sin(2.0 * M_PI * f * t / SAMPLE_RATE));
 
-        // Apply raised cosine shaping
-        for (int i = 0; i < RAMP_SAMPLES; ++i) {
-            block[i]                           *= rampUp[i];
-            block[SAMPLES_PER_SYMBOL - 1 - i]  *= rampDown[i];
+        for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+            block[i] = static_cast<float>(std::sin(phase));
+            phase += phaseInc;
+            // Wrap to [-π, π] to prevent float drift over 16 symbols
+            if (phase >  M_PI) phase -= 2.0 * M_PI;
+            if (phase < -M_PI) phase += 2.0 * M_PI;
         }
 
-        m_preambleAudio.insert(m_preambleAudio.end(), block.begin(), block.end());
+        // Apply raised cosine amplitude shaping
+        for (int i = 0; i < RAMP_SAMPLES; i++) {
+            block[i]                          *= rampUp[i];
+            block[SAMPLES_PER_SYMBOL - 1 - i] *= rampDown[i];
+        }
+
+        audio.insert(audio.end(), block.begin(), block.end());
     }
+
+    // Store final phase — Frame::assemble() seeds the Modulator with this
+    // so the header section starts with continuous phase from the preamble
+    m_finalPhase = phase;
 
     // Normalize to TX_AMPLITUDE
     float peak = 0.0f;
-    for (float s : m_preambleAudio)
-        peak = std::max(peak, std::abs(s));
+    for (float s : audio) peak = std::max(peak, std::abs(s));
     if (peak > 0.0f) {
         float scale = static_cast<float>(TX_AMPLITUDE) / peak;
-        for (float& s : m_preambleAudio)
-            s *= scale;
+        for (float& s : audio) s *= scale;
     }
-}
 
-std::vector<float> Preamble::generate() const
-{
-    return m_preambleAudio;
+    return audio;
 }
 
 std::vector<int> Preamble::hardDecisions(
@@ -66,13 +76,15 @@ std::vector<int> Preamble::hardDecisions(
     decisions.reserve(softSymbols.size());
     for (const auto& energies : softSymbols) {
         int best = static_cast<int>(
-            std::max_element(energies.begin(), energies.end()) - energies.begin());
+            std::max_element(energies.begin(), energies.end())
+            - energies.begin());
         decisions.push_back(best);
     }
     return decisions;
 }
 
-float Preamble::correlate(const std::vector<int>& symbols, int offset) const
+float Preamble::correlate(
+    const std::vector<int>& symbols, int offset) const
 {
     int remaining = static_cast<int>(symbols.size()) - offset;
     if (remaining < PREAMBLE_LENGTH) return 0.0f;
@@ -85,8 +97,9 @@ float Preamble::correlate(const std::vector<int>& symbols, int offset) const
     return static_cast<float>(matches) / PREAMBLE_LENGTH;
 }
 
-bool Preamble::detect(const std::vector<std::vector<float>>& softSymbols,
-                      float& score) const
+bool Preamble::detect(
+    const std::vector<std::vector<float>>& softSymbols,
+    float& score) const
 {
     auto symbols = hardDecisions(softSymbols);
     score = 0.0f;
@@ -97,8 +110,8 @@ bool Preamble::detect(const std::vector<std::vector<float>>& softSymbols,
         if (c > score) score = c;
     }
 
-    // Normalized threshold: PREAMBLE_THRESHOLD (1.4 on 0-16 scale) / PREAMBLE_LENGTH
-    constexpr float threshold = static_cast<float>(PREAMBLE_THRESHOLD) / PREAMBLE_LENGTH;
+    constexpr float threshold =
+        static_cast<float>(PREAMBLE_THRESHOLD) / PREAMBLE_LENGTH;
     return score >= threshold;
 }
 
