@@ -89,6 +89,9 @@ private:
     QIODevice*                    m_txDevice  = nullptr;
     QByteArray                    m_txBuffer;
     int                           m_txOffset  = 0;
+    // Timer-based TX completion — WASAPI signals IdleState immediately after
+    // writing to the driver buffer, not after hardware finishes playback.
+    QTimer*                       m_txTimer   = nullptr;
 
     // ── State ─────────────────────────────────────────────────────────────
     std::atomic<bool> m_receiving    {false};

@@ -198,42 +198,72 @@ bool AudioEngine::startTx(const QString& deviceName,
         m_txOffset = static_cast<int>(written);
 
     m_transmitting = true;
+
+    // WASAPI on Windows signals IdleState as soon as data reaches the driver
+    // buffer — not when the hardware finishes playing. Use a timer for actual
+    // TX duration so PTT stays keyed and txComplete fires at the right time.
+    int durationMs = static_cast<int>(
+        static_cast<double>(samples.size()) / HavenFSK::SAMPLE_RATE * 1000.0);
+    // Add 100ms for driver startup latency so end of transmission isn't clipped
+    durationMs += 100;
+
+    if (m_txTimer) {
+        m_txTimer->stop();
+        m_txTimer->deleteLater();
+    }
+    m_txTimer = new QTimer(this);
+    m_txTimer->setSingleShot(true);
+    connect(m_txTimer, &QTimer::timeout, this, [this]() {
+        m_txTimer = nullptr;
+        if (!m_transmitting) return;
+        m_transmitting = false;
+        if (m_txSink) m_txSink->stop();
+        m_txSink.reset();
+        m_txDevice = nullptr;
+        m_txBuffer.clear();
+        m_txOffset = 0;
+        qDebug() << "AudioEngine: TX complete (timer)";
+        emit txComplete();
+    });
+    m_txTimer->start(durationMs);
+
     return true;
 }
 
 void AudioEngine::onTxStateChanged(QAudio::State state) {
     qDebug() << "AudioEngine::onTxStateChanged state=" << state
-             << "error=" << (m_txSink ? static_cast<int>(m_txSink->error()) : -1)
-             << "transmitting=" << m_transmitting.load();
+             << "error=" << (m_txSink ? static_cast<int>(m_txSink->error()) : -1);
 
-    if (state == QAudio::IdleState && m_transmitting) {
-        // Diagnostic: warn if TX completed in under 100ms (likely device issue)
-        if (m_txSink && m_txSink->processedUSecs() < 100000) {
-            qWarning() << "AudioEngine: TX completed in <100ms"
-                       << "— possible audio device problem."
-                       << "Processed:" << m_txSink->processedUSecs() << "us";
-        }
-        m_transmitting = false;
-        m_txSink.reset();
-        m_txDevice = nullptr;
-        m_txBuffer.clear();
-        m_txOffset = 0;
-        qDebug() << "AudioEngine: TX complete";
-        emit txComplete();
-    } else if (state == QAudio::StoppedState) {
+    // IdleState fires immediately on Windows/WASAPI as soon as data reaches
+    // the driver buffer — NOT when hardware finishes playback. Completion is
+    // handled by m_txTimer instead. Log it for diagnostics only.
+    if (state == QAudio::IdleState) {
+        qDebug() << "AudioEngine: IdleState (data in driver buffer,"
+                 << "timer handles actual completion)";
+        return;
+    }
+
+    // StoppedState with error = real failure; cancel timer and signal error
+    if (state == QAudio::StoppedState) {
         if (m_txSink && m_txSink->error() != QAudio::NoError) {
             qWarning() << "AudioEngine: TX error:" << m_txSink->error();
+            if (m_txTimer) { m_txTimer->stop(); m_txTimer->deleteLater(); m_txTimer = nullptr; }
             emit audioError(QString("TX audio error: %1")
                             .arg(static_cast<int>(m_txSink->error())));
-        }
-        if (m_transmitting) {
-            m_transmitting = false;
-            emit txComplete();
+            if (m_transmitting) {
+                m_transmitting = false;
+                emit txComplete();
+            }
         }
     }
 }
 
 void AudioEngine::stopTx() {
+    if (m_txTimer) {
+        m_txTimer->stop();
+        m_txTimer->deleteLater();
+        m_txTimer = nullptr;
+    }
     if (m_txSink) {
         m_txSink->stop();
         m_txSink.reset();
