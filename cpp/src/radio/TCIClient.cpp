@@ -150,9 +150,14 @@ void TCIClient::parseTCIMessage(const QString& msg) {
 
 void TCIClient::sendTCI(const QString& cmd) {
     if (!m_ready) {
-        qWarning() << "TCIClient: sendTCI called before ready:" << cmd;
+        qWarning() << "TCIClient::sendTCI: not ready, dropping:" << cmd;
         return;
     }
+    if (m_socket->state() != QAbstractSocket::ConnectedState) {
+        qWarning() << "TCIClient::sendTCI: socket not connected, dropping:" << cmd;
+        return;
+    }
+    qDebug() << "TCIClient: sending:" << cmd;
     m_socket->sendTextMessage(cmd);
 }
 
@@ -174,8 +179,15 @@ uint64_t TCIClient::getFrequency() {
 }
 
 bool TCIClient::setFrequency(uint64_t hz) {
-    if (!m_connected) return false;
-    sendTCI(QString("vfo:0,0,%1;").arg(hz));
+    if (!m_connected || !m_ready) {
+        qWarning() << "TCIClient::setFrequency: not ready"
+                   << "connected=" << m_connected << "ready=" << m_ready;
+        return false;
+    }
+    // TCI 2.0: vfo:{trx},{channel},{hz}; — integer Hz, no decimal
+    QString cmd = QString("vfo:0,0,%1;").arg(static_cast<qint64>(hz));
+    qDebug() << "TCIClient: setFrequency ->" << cmd;
+    m_socket->sendTextMessage(cmd);
     return true;
 }
 

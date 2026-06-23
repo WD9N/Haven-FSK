@@ -336,14 +336,17 @@ void MainWindow::setupConnections() {
                 }
             });
 
-    // Fix 11: FrequencyControl — always update display and log panel;
-    // only send to radio if rig is connected
+    // FrequencyControl — update display and log panel; send to radio if connected
     connect(m_freqControl, &FrequencyControl::frequencyRequested,
             this, [this](uint64_t hz) {
                 m_freqControl->setFrequency(hz);
                 if (m_logPanel) m_logPanel->setFrequency(hz);
-                if (m_radio && m_radio->isConnected())
+                if (m_radio && m_radio->isConnected()) {
+                    qDebug() << "MainWindow: sending frequency" << hz << "to radio";
                     m_radio->setFrequency(hz);
+                } else {
+                    qDebug() << "MainWindow: no radio connected for frequency set";
+                }
             });
 
     // DspPipeline → AudioEngine (TX audio) — PTT lead then audio
@@ -735,7 +738,10 @@ void MainWindow::onWaterfallTune(float audioHz) {
         return;
     }
     uint64_t dialHz = m_radio->getFrequency();
-    if (dialHz == 0) return;
+    if (dialHz == 0) {
+        qWarning() << "MainWindow::onWaterfallTune: getFrequency() returned 0";
+        return;
+    }
 
     // Place lowest HAVEN-FSK tone (BASE_FREQ) at the clicked audio position.
     // newDial = currentDial + (clickedAudioHz - BASE_FREQ)
@@ -743,6 +749,9 @@ void MainWindow::onWaterfallTune(float audioHz) {
                     - static_cast<int64_t>(HavenFSK::BASE_FREQ);
     uint64_t newHz  = static_cast<uint64_t>(
         static_cast<int64_t>(dialHz) + offset);
+
+    qDebug() << "MainWindow: waterfall tune" << audioHz
+             << "Hz audio ->" << newHz << "Hz dial";
 
     m_radio->setFrequency(newHz);
     m_freqControl->setFrequency(newHz);
