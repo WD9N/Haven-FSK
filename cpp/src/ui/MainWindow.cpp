@@ -525,9 +525,11 @@ void MainWindow::onSettingsChanged() {
             : HavenFSK::OperatingMode::Standard);
     }
 
+    // Restart audio only — radio reconnects only from RadioConfigDialog
+    // (onSettingsChanged has no radio tab; calling startRadio() here
+    // would tear down and recreate TCI on every settings save)
     m_audio->stop();
     startAudio();
-    startRadio();
 }
 
 void MainWindow::onTransmit() {

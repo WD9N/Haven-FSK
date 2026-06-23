@@ -55,7 +55,7 @@ void TCIClient::onConnected() {
 
 void TCIClient::onDisconnected() {
     m_connected = false;
-    m_ready     = false;
+    m_ready     = false;   // must re-handshake on reconnect
     qDebug() << "TCIClient: disconnected — will retry in"
              << RECONNECT_INTERVAL_MS / 1000 << "seconds";
     emit disconnected();
@@ -99,6 +99,7 @@ void TCIClient::parseTCIMessage(const QString& msg) {
             qDebug() << "TCIClient: device:" << m_deviceName;
         } else if (msg == "ready") {
             m_inInit    = false;
+            m_ready     = true;   // BUGFIX: was never set — setPTT blocked every TX
             m_connected = true;
             m_reconnTimer->stop();
             qDebug() << "TCIClient: ready — connected to"
