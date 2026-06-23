@@ -152,40 +152,25 @@ bool AudioEngine::startTx(const QString& deviceName,
 {
     stopTx();
 
-    if (samples.empty()) {
-        qWarning() << "AudioEngine::startTx: empty samples";
-        return false;
-    }
+    if (samples.empty()) return false;
 
-    // Find requested output device
+    // Find output device
     QAudioDevice dev;
     for (const auto& d : QMediaDevices::audioOutputs()) {
-        if (d.description() == deviceName) {
-            dev = d;
-            break;
-        }
+        if (d.description() == deviceName) { dev = d; break; }
     }
     if (dev.isNull()) {
         dev = QMediaDevices::defaultAudioOutput();
-        qWarning() << "AudioEngine: TX device not found:" << deviceName
-                   << "falling back to:" << dev.description();
+        qWarning() << "AudioEngine: TX device not found:"
+                   << deviceName << "using default:" << dev.description();
     }
 
-    qDebug() << "AudioEngine: TX using device:" << dev.description()
-             << "samples:" << samples.size()
-             << "duration:" << (samples.size() / 48000.0) << "sec";
-
-    QAudioFormat fmt = havenFormat();
-    if (!dev.isFormatSupported(fmt)) {
-        qWarning() << "AudioEngine: TX format not supported on device:"
-                   << dev.description();
-        emit audioError(QString("Output device '%1' does not support "
-                                "48000 Hz mono.").arg(dev.description()));
-        return false;
-    }
+    qDebug() << "AudioEngine: startTx device=" << dev.description()
+             << "samples=" << samples.size()
+             << "duration=" << (samples.size() / 48000.0) << "s";
 
     // Convert float32 → int16 PCM into member buffer
-    // m_txPcmBuffer is a member — stays alive for entire playback duration
+    // m_txPcmBuffer MUST be a member — must outlive this function
     m_txPcmBuffer.resize(static_cast<int>(samples.size() * sizeof(int16_t)));
     int16_t* dst = reinterpret_cast<int16_t*>(m_txPcmBuffer.data());
     for (size_t i = 0; i < samples.size(); i++) {
@@ -193,8 +178,12 @@ bool AudioEngine::startTx(const QString& deviceName,
         dst[i] = static_cast<int16_t>(s * 32767.0f);
     }
 
-    // Wrap in QBuffer for pull mode
-    // m_txQBuffer is a member — must outlive the sink
+    // Wrap in QBuffer — MUST be member, not local
+    if (m_txQBuffer) {
+        m_txQBuffer->close();
+        delete m_txQBuffer;
+        m_txQBuffer = nullptr;
+    }
     m_txQBuffer = new QBuffer(&m_txPcmBuffer, this);
     if (!m_txQBuffer->open(QIODevice::ReadOnly)) {
         qWarning() << "AudioEngine: failed to open TX QBuffer";
@@ -204,37 +193,41 @@ bool AudioEngine::startTx(const QString& deviceName,
         return false;
     }
 
+    // Create sink
+    QAudioFormat fmt;
+    fmt.setSampleRate(HavenFSK::SAMPLE_RATE);
+    fmt.setChannelCount(1);
+    fmt.setSampleFormat(QAudioFormat::Int16);
+
     m_txSink = std::make_unique<QAudioSink>(dev, fmt, this);
     connect(m_txSink.get(), &QAudioSink::stateChanged,
             this, &AudioEngine::onTxStateChanged);
 
     m_transmitting = true;
 
-    // Pull mode: Qt reads from QBuffer as backend needs data
+    // PULL MODE — pass QBuffer to sink
+    // Qt feeds the backend continuously with no gaps
+    // IdleState fires when QBuffer is genuinely exhausted
     m_txSink->start(m_txQBuffer);
 
-    qDebug() << "AudioEngine: TX pull mode started —"
+    qDebug() << "AudioEngine: TX pull mode active"
              << m_txPcmBuffer.size() << "bytes";
 
     return true;
 }
 
 void AudioEngine::onTxStateChanged(QAudio::State state) {
-    qDebug() << "AudioEngine: TX state" << state
-             << "error=" << (m_txSink ? static_cast<int>(m_txSink->error()) : -1)
+    qDebug() << "AudioEngine: TX state=" << state
+             << "error=" << (m_txSink ?
+                static_cast<int>(m_txSink->error()) : -1)
              << "transmitting=" << m_transmitting.load();
 
-    if (!m_transmitting) {
-        qDebug() << "AudioEngine: stale state change — ignored";
-        return;
-    }
+    if (!m_transmitting) return;  // stale signal, ignore
 
     if (state == QAudio::IdleState) {
-        // Pull mode: IdleState = QBuffer exhausted = all audio played.
-        // This IS the correct completion signal in pull mode.
-        qDebug() << "AudioEngine: TX complete (QBuffer exhausted)";
+        // PULL MODE: IdleState = QBuffer exhausted = done
+        qDebug() << "AudioEngine: TX complete (buffer exhausted)";
         m_transmitting = false;
-
         if (m_txSink) {
             disconnect(m_txSink.get(), nullptr, this, nullptr);
             m_txSink->stop();
@@ -246,11 +239,11 @@ void AudioEngine::onTxStateChanged(QAudio::State state) {
             m_txQBuffer = nullptr;
         }
         m_txPcmBuffer.clear();
-
         emit txComplete();
     }
     else if (state == QAudio::StoppedState) {
-        auto err = m_txSink ? m_txSink->error() : QAudio::NoError;
+        auto err = m_txSink ?
+            m_txSink->error() : QAudio::NoError;
         if (err != QAudio::NoError) {
             qWarning() << "AudioEngine: TX error" << err;
             m_transmitting = false;
@@ -265,8 +258,9 @@ void AudioEngine::onTxStateChanged(QAudio::State state) {
                 m_txQBuffer = nullptr;
             }
             m_txPcmBuffer.clear();
-            emit audioError(QString("TX audio error: %1")
-                            .arg(static_cast<int>(err)));
+            emit audioError(
+                QString("TX audio error: %1")
+                .arg(static_cast<int>(err)));
             emit txComplete();
         }
     }
