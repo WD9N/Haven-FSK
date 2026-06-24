@@ -32,8 +32,17 @@ void RxDisplay::appendMessage(const QString& text,
         m_messageCount++;
     }
 
-    QString ts       = timestamp.toUTC().toString("hh:mm:ss");
-    QString rendered = renderMessage(text, senderCallsign);
+    QString ts = timestamp.toUTC().toString("hh:mm:ss");
+
+    QStringList lines = text.split('\n');
+    QStringList renderedLines;
+    for (const QString& line : lines) {
+        if (line.trimmed().isEmpty())
+            renderedLines.append("&nbsp;");
+        else
+            renderedLines.append(renderMessage(line, senderCallsign));
+    }
+    QString rendered = renderedLines.join("<br>");
 
     QString flags;
     if (!crcOk)     flags += " <span style='color:red'>[CRC]</span>";
@@ -63,6 +72,8 @@ void RxDisplay::appendTxMessage(const QString& text,
     QString ts     = QDateTime::currentDateTimeUtc().toString("hh:mm:ss");
     QString caller = myCallsign.isEmpty() ? "TX" : myCallsign.toUpper();
 
+    QString displayText = text.toHtmlEscaped().replace('\n', "<br>");
+
     QString html = QString(
         "<span style='color:gray'>[%1]</span> "
         "<span style='color:#C8860A'>"
@@ -70,7 +81,7 @@ void RxDisplay::appendTxMessage(const QString& text,
         "</span><br>")
         .arg(ts)
         .arg(caller.toHtmlEscaped())
-        .arg(text.toHtmlEscaped());
+        .arg(displayText);
 
     QTextCursor c = textCursor();
     c.movePosition(QTextCursor::End);

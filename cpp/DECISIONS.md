@@ -1563,3 +1563,78 @@ Ctrl+Enter transmits.
 **Reasoning:** Station info macros with NAME:/GRID:/POTA: fields
 exceed a single line. Multi-line with scroll lets the operator see
 the entire message before transmitting.
+
+## ADR-081 — Macro panel shows both banks simultaneously
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** MacroPanel displays both Bank A and Bank B as two
+always-visible rows rather than a switchable single row. Bank
+label (A/B) on left of each row identifies the bank. No toggle
+button needed. 16 macro buttons always accessible.
+
+**Reasoning:** First-run testing showed large unused space above
+TX textarea. Showing both banks eliminates wasted space and removes
+the need to switch banks — all macros visible simultaneously.
+
+## ADR-082 — Macro buttons fixed width, left-aligned
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Macro buttons are fixed width (100px) with 4px
+spacing, left-aligned with a stretch at the end. Button positions
+are consistent regardless of window width.
+
+**Reasoning:** Stretching buttons to fill window width forces
+operators to hunt for button positions when the window is resized.
+Fixed positions build muscle memory — operators know where CQ POTA
+always is without looking.
+
+## ADR-083 — Multi-line message support via newline preservation
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** HAVEN-FSK transmits and displays multi-line messages.
+The TX QTextEdit allows newlines (Enter key). The frame encoder
+transmits \n (0x0A) as a valid byte — it is within the 7-bit ASCII
+range and handled correctly by LDPC encoding. RxDisplay converts
+\n bytes in decoded text to HTML <br> tags for display. TX echo
+in amber also renders \n as line breaks.
+
+**Reasoning:** Operators requested ability to send formatted
+multi-line messages — station info exchanges, structured field
+tag groups, and readback of longer messages all benefit from
+line breaks. The HAVEN-FSK frame format supports arbitrary byte
+content within the payload so no protocol change is needed.
+
+## ADR-084 — TX gain via GainedAudioDevice for real-time control
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** TX level control uses GainedAudioDevice — a custom
+QIODevice that wraps the WAV buffer and applies an atomic float
+gain multiplier to int16 PCM samples as QMediaPlayer reads them.
+
+The WAV header (44 bytes) passes through unchanged. PCM data
+has gain applied per-sample on each read cycle. The gain is
+std::atomic<float> — safe to update from the main thread while
+QMediaPlayer reads from its audio rendering thread. Changes take
+effect within one read cycle (~100-200ms).
+
+QAudioOutput::setVolume() is fixed at 1.0. QMediaPlayer receives
+GainedAudioDevice via setSourceDevice() instead of a plain QBuffer.
+
+**Real-time update path:**
+LevelPanel::txFaderChanged → MainWindow lambda →
+AudioEngine::setTxGain() → GainedAudioDevice::setGain() →
+atomic store → next PCM read applies new gain
+
+**Reasoning:** QAudioOutput::setVolume() is unreliable on the
+Windows FFmpeg backend. Pre-baking gain into PCM prevents
+mid-transmission adjustment. GainedAudioDevice applies gain at
+read time — the audio changes within ~200ms of a fader move,
+giving genuine real-time level control during live transmission.

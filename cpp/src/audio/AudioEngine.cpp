@@ -175,7 +175,8 @@ QByteArray AudioEngine::buildWav(const std::vector<float>& samples) const {
 }
 
 bool AudioEngine::startTx(const QString& deviceName,
-                           const std::vector<float>& samples)
+                           const std::vector<float>& samples,
+                           float initialGain)
 {
     stopTx();
 
@@ -186,19 +187,19 @@ bool AudioEngine::startTx(const QString& deviceName,
 
     qDebug() << "AudioEngine: startTx"
              << "samples=" << samples.size()
-             << "duration=" << (samples.size() / static_cast<double>(HavenFSK::SAMPLE_RATE)) << "s"
-             << "device=" << deviceName;
+             << "duration=" << (samples.size() /
+                static_cast<double>(HavenFSK::SAMPLE_RATE)) << "s"
+             << "gain=" << initialGain;
 
-    // Build WAV file in memory
+    // Build WAV at full scale — gain applied by GainedAudioDevice
     m_txWavData = buildWav(samples);
-    qDebug() << "AudioEngine: WAV built" << m_txWavData.size() << "bytes";
 
-    // Wrap in QBuffer for QMediaPlayer
-    m_txWavBuffer = new QBuffer(&m_txWavData, this);
-    if (!m_txWavBuffer->open(QIODevice::ReadOnly)) {
-        qWarning() << "AudioEngine: failed to open WAV buffer";
-        delete m_txWavBuffer;
-        m_txWavBuffer = nullptr;
+    m_txGainDevice = new GainedAudioDevice(m_txWavData, initialGain, this);
+    if (!m_txGainDevice->open(QIODevice::ReadOnly)) {
+        qWarning() << "AudioEngine: failed to open GainedAudioDevice";
+        delete m_txGainDevice;
+        m_txGainDevice = nullptr;
+        m_txWavData.clear();
         return false;
     }
 
@@ -206,25 +207,27 @@ bool AudioEngine::startTx(const QString& deviceName,
     QAudioDevice dev;
     for (const auto& d : QMediaDevices::audioOutputs())
         if (d.description() == deviceName) { dev = d; break; }
-    if (dev.isNull())
+    if (dev.isNull()) {
         dev = QMediaDevices::defaultAudioOutput();
+        qWarning() << "AudioEngine: TX device not found:" << deviceName
+                   << "using default:" << dev.description();
+    }
 
-    // Create QMediaPlayer + QAudioOutput
     m_txPlayer   = new QMediaPlayer(this);
     m_txAudioOut = new QAudioOutput(dev, this);
+    m_txAudioOut->setVolume(1.0f);  // full — gain lives in GainedAudioDevice
     m_txPlayer->setAudioOutput(m_txAudioOut);
-    m_txAudioOut->setVolume(1.0f);
 
     connect(m_txPlayer, &QMediaPlayer::playbackStateChanged,
             this, &AudioEngine::onTxPlaybackStateChanged);
 
-    // Set source to our in-memory WAV buffer
-    m_txPlayer->setSourceDevice(m_txWavBuffer, QUrl("audio/wav"));
+    m_txPlayer->setSourceDevice(m_txGainDevice, QUrl("audio/wav"));
 
     m_transmitting = true;
     m_txPlayer->play();
 
-    qDebug() << "AudioEngine: QMediaPlayer TX started";
+    qDebug() << "AudioEngine: TX started with real-time gain"
+             << initialGain << "(" << m_txWavData.size() << "bytes)";
     return true;
 }
 
@@ -246,10 +249,10 @@ void AudioEngine::onTxPlaybackStateChanged(
             delete m_txAudioOut;
             m_txAudioOut = nullptr;
         }
-        if (m_txWavBuffer) {
-            m_txWavBuffer->close();
-            delete m_txWavBuffer;
-            m_txWavBuffer = nullptr;
+        if (m_txGainDevice) {
+            m_txGainDevice->close();
+            delete m_txGainDevice;
+            m_txGainDevice = nullptr;
         }
         m_txWavData.clear();
 
@@ -268,10 +271,10 @@ void AudioEngine::stopTx() {
         delete m_txAudioOut;
         m_txAudioOut = nullptr;
     }
-    if (m_txWavBuffer) {
-        m_txWavBuffer->close();
-        delete m_txWavBuffer;
-        m_txWavBuffer = nullptr;
+    if (m_txGainDevice) {
+        m_txGainDevice->close();
+        delete m_txGainDevice;
+        m_txGainDevice = nullptr;
     }
     m_txWavData.clear();
 }

@@ -3,6 +3,7 @@
 #include <QPushButton>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QLabel>
 #include <QString>
 #include <QVector>
 
@@ -50,12 +51,6 @@ private:
     QString      m_macroLabel[NUM_BANKS][NUM_MACROS];
     QPushButton* m_buttons[NUM_BANKS][NUM_MACROS];
 
-    QPushButton* m_bankA {nullptr};
-    QPushButton* m_bankB {nullptr};
-
-    int     m_currentBank = 0;
     QString m_theirCall;
     QString m_rsSent;
-
-    QWidget* m_bankWidget[NUM_BANKS];
 };

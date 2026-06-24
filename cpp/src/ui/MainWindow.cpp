@@ -239,7 +239,7 @@ void MainWindow::setupUi() {
     txLayout->addLayout(txTopRow);
 
     m_txInput = new QTextEdit(txOuter);
-    m_txInput->setPlaceholderText("Type message — wraps automatically...");
+    m_txInput->setPlaceholderText("Type message — Enter for new line, Ctrl+Enter to send...");
     m_txInput->setFont(QFont("Courier New", 10));
     m_txInput->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
     m_txInput->setAcceptRichText(false);
@@ -405,36 +405,32 @@ void MainWindow::setupConnections() {
     // DspPipeline → AudioEngine (TX audio) — PTT lead then audio
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
             this, [this](const std::vector<float>& samples) {
-                QString outDev = HavenFSK::savedOutputDevice();
-                qDebug() << "txAudioReady:" << samples.size()
-                         << "samples on" << outDev;
+                QString outDev  = HavenFSK::savedOutputDevice();
+                bool isCQ       = m_pipeline->lastTxWasCQ();
+                bool dcdActive  = m_pipeline->dcdActive();
+                int  leadMs     = HavenFSK::pttLeadMs();
 
-                // TX meter: show peak level of generated audio
-                if (m_levelPanel && !samples.empty()) {
-                    float peak = 0.0f;
-                    for (float s : samples) peak = std::max(peak, std::abs(s));
-                    float dbFS = (peak > 1e-10f)
-                        ? 20.0f * std::log10(peak) : -96.0f;
-                    m_levelPanel->setTxLevel(dbFS);
+                // Compute initial gain from TX fader and show expected level
+                float initialGain = 1.0f;
+                if (m_levelPanel) {
+                    float dBFS  = m_levelPanel->txFaderDbFS();
+                    initialGain = std::max(0.0f,
+                                  std::min(1.0f,
+                                  std::pow(10.0f, dBFS / 20.0f)));
+                    qDebug() << "TX: initial gain" << initialGain
+                             << "(" << dBFS << "dBFS)";
+                    m_levelPanel->setTxLevel(dBFS);
                 }
 
-                bool isCQ      = m_pipeline->lastTxWasCQ();
-                bool dcdActive = m_pipeline->dcdActive();
-
                 if (m_pttManager && m_radio && m_radio->isConnected()) {
-                    int leadMs = HavenFSK::pttLeadMs();
                     m_pttManager->requestTX(isCQ, dcdActive);
                     qDebug() << "TX: PTT asserted, waiting"
                              << leadMs << "ms lead time";
                     QTimer::singleShot(leadMs, this,
-                        [this, samples, outDev]() {
+                        [this, samples, outDev, initialGain]() {
                             qDebug() << "TX: lead time elapsed, starting audio";
-                            bool ok = m_audio->startTx(outDev, samples);
-                            if (ok && m_levelPanel) {
-                                float vol = std::pow(
-                                    10.0f, m_levelPanel->txFaderDbFS() / 20.0f);
-                                m_audio->setTxVolume(vol);
-                            }
+                            bool ok = m_audio->startTx(
+                                outDev, samples, initialGain);
                             if (!ok) {
                                 qWarning() << "startTx failed — aborting TX";
                                 m_pipeline->onTxComplete();
@@ -443,14 +439,9 @@ void MainWindow::setupConnections() {
                             }
                         });
                 } else {
-                    // No rig control — play audio immediately (VOX mode)
+                    // No rig control — VOX mode
                     qDebug() << "TX: no rig control — VOX mode";
-                    bool ok = m_audio->startTx(outDev, samples);
-                    if (ok && m_levelPanel) {
-                        float vol = std::pow(
-                            10.0f, m_levelPanel->txFaderDbFS() / 20.0f);
-                        m_audio->setTxVolume(vol);
-                    }
+                    m_audio->startTx(outDev, samples, initialGain);
                 }
             });
 
@@ -496,13 +487,17 @@ void MainWindow::setupConnections() {
                 m_pipeline->setRxGain(gain);
             });
 
-    // TX fader → AudioEngine volume (real-time if transmitting)
+    // TX fader → GainedAudioDevice real-time gain (always, not only while TX)
     connect(m_levelPanel, &LevelPanel::txFaderChanged,
             this, [this](float dBu) {
-                if (m_audio && m_audio->isTransmitting()) {
-                    float vol = std::pow(10.0f, (dBu - 6.0f) / 20.0f);
-                    m_audio->setTxVolume(vol);
-                }
+                float dBFS = dBu - 6.0f;
+                float gain = std::max(0.0f,
+                             std::min(1.0f,
+                             std::pow(10.0f, dBFS / 20.0f)));
+                qDebug() << "TX fader: gain" << gain << "dBu=" << dBu;
+                m_audio->setTxGain(gain);
+                if (m_levelPanel && m_audio->isTransmitting())
+                    m_levelPanel->setTxLevel(dBFS);
             });
 
     // LogPanel → session log
@@ -684,6 +679,9 @@ void MainWindow::onTransmit() {
 void MainWindow::onTxComplete() {
     int tailMs = HavenFSK::txTailMs();
     qDebug() << "TX: audio complete — starting" << tailMs << "ms tail timer";
+
+    if (m_levelPanel)
+        m_levelPanel->setTxLevel(-96.0f);
 
     // Re-enable UI immediately so operator can prepare next message
     m_txButton->setEnabled(true);

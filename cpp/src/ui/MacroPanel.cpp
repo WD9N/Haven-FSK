@@ -8,7 +8,6 @@
 #include <QTextEdit>
 #include <QLabel>
 #include <QVBoxLayout>
-#include <QStackedWidget>
 #include <QFont>
 
 MacroPanel::MacroPanel(QWidget* parent)
@@ -23,33 +22,23 @@ void MacroPanel::setupUi() {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
 
-    // Bank selector row
-    auto* bankRow = new QHBoxLayout;
-    m_bankA = new QPushButton("A");
-    m_bankB = new QPushButton("B");
-    m_bankA->setMaximumWidth(30);
-    m_bankB->setMaximumWidth(30);
-    m_bankA->setCheckable(true);
-    m_bankB->setCheckable(true);
-    m_bankA->setChecked(true);
-    bankRow->addWidget(new QLabel("Macros:"));
-    bankRow->addWidget(m_bankA);
-    bankRow->addWidget(m_bankB);
-    bankRow->addStretch();
-    layout->addLayout(bankRow);
-
-    auto* stack = new QStackedWidget(this);
-
     for (int bank = 0; bank < NUM_BANKS; bank++) {
-        m_bankWidget[bank] = new QWidget;
-        auto* row = new QHBoxLayout(m_bankWidget[bank]);
+        auto* row = new QHBoxLayout;
         row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(3);
+        row->setSpacing(4);
+
+        auto* bankLabel = new QLabel(bank == 0 ? "A" : "B", this);
+        bankLabel->setFixedWidth(16);
+        bankLabel->setAlignment(Qt::AlignCenter);
+        bankLabel->setStyleSheet(
+            "font-family:'Courier New'; font-size:9px;"
+            "color:#555; border: 1px solid #2a2a2a;"
+            "border-radius: 2px; background: #161616;");
+        row->addWidget(bankLabel);
 
         for (int i = 0; i < NUM_MACROS; i++) {
-            m_buttons[bank][i] = new QPushButton;
-            m_buttons[bank][i]->setMinimumWidth(70);
-            m_buttons[bank][i]->setMaximumWidth(110);
+            m_buttons[bank][i] = new QPushButton(this);
+            m_buttons[bank][i]->setFixedWidth(100);
             m_buttons[bank][i]->setFont(QFont("Arial", 8));
             m_buttons[bank][i]->setToolTip(
                 "Left-click: send macro\nRight-click: edit macro");
@@ -67,22 +56,9 @@ void MacroPanel::setupUi() {
                     });
             row->addWidget(m_buttons[bank][i]);
         }
-        stack->addWidget(m_bankWidget[bank]);
+        row->addStretch();
+        layout->addLayout(row);
     }
-    layout->addWidget(stack);
-
-    connect(m_bankA, &QPushButton::clicked, this, [this, stack]() {
-        m_bankB->setChecked(false);
-        m_bankA->setChecked(true);
-        stack->setCurrentIndex(0);
-        m_currentBank = 0;
-    });
-    connect(m_bankB, &QPushButton::clicked, this, [this, stack]() {
-        m_bankA->setChecked(false);
-        m_bankB->setChecked(true);
-        stack->setCurrentIndex(1);
-        m_currentBank = 1;
-    });
 }
 
 void MacroPanel::loadMacros() {
