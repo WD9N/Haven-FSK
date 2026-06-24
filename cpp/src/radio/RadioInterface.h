@@ -30,6 +30,11 @@ public:
     // Set VFO A frequency in Hz. Returns false if not connected.
     virtual bool setFrequency(uint64_t hz) = 0;
 
+    // Request current frequency from radio — emits frequencyChanged().
+    // Default no-op; implementations query the radio and emit the signal.
+    // MainWindow calls this immediately after connection is established.
+    virtual void requestFrequency() {}
+
     // ── Mode ──────────────────────────────────────────────────────────────
     // Set operating mode (e.g. "USB", "LSB", "DIGU", "DIGL").
     virtual bool setMode(const QString& mode) = 0;

@@ -41,6 +41,7 @@ public:
     bool     setPTT(bool active)          override;
     uint64_t getFrequency()               override;
     bool     setFrequency(uint64_t hz)    override;
+    void     requestFrequency()           override;
     bool     setMode(const QString& mode) override;
     QString  getMode()                    override;
     bool     setSplit(bool enable, uint64_t txHz = 0) override;

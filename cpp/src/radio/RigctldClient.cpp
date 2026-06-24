@@ -57,6 +57,8 @@ void RigctldClient::onConnected() {
     m_pollTimer->start();
     qDebug() << "RigctldClient: connected to" << m_host << ":" << m_port;
     emit connected();
+    // Query immediately — don't wait for first poll timer tick (2s)
+    requestFrequency();
 }
 
 void RigctldClient::onDisconnected() {
@@ -108,6 +110,13 @@ uint64_t RigctldClient::getFrequency() {
     bool ok = false;
     uint64_t hz = resp.toULongLong(&ok);
     return ok ? hz : 0;
+}
+
+void RigctldClient::requestFrequency() {
+    if (!m_connected) return;
+    qDebug() << "RigctldClient: requestFrequency";
+    uint64_t hz = getFrequency();
+    if (hz > 0) emit frequencyChanged(hz);
 }
 
 bool RigctldClient::setFrequency(uint64_t hz) {

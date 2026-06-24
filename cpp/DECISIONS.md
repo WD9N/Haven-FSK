@@ -1510,3 +1510,22 @@ removal. Audio described as smooth, clean tones.
 With CPFSK they are harmful, not helpful. They should be removed
 permanently rather than retained as dead code if a future cleanup
 pass is made.
+
+## ADR-077 — Radio frequency queried immediately on connection
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** RadioInterface gains a virtual requestFrequency()
+method (default no-op). TCIClient and RigctldClient implement it.
+MainWindow::onRadioConnected() calls requestFrequency() after a
+200ms settling delay. RigctldClient also calls requestFrequency()
+directly in onConnected() before the first poll timer fires.
+
+**Reasoning:** First-run testing showed frequency display remained
+blank at startup until the operator manually tuned the radio.
+TCI was discarding vfo: messages received during handshake
+(fixed separately). rigctld poll timer interval (2 seconds) caused
+a delay before first frequency update. Immediate query on connection
+ensures the FrequencyControl widget is populated as soon as the
+rig control link is established, regardless of connection method.

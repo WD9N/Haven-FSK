@@ -202,6 +202,12 @@ uint64_t TCIClient::getFrequency() {
     return m_frequency;  // Returns last value from server push
 }
 
+void TCIClient::requestFrequency() {
+    if (!m_connected || !m_ready) return;
+    m_socket->sendTextMessage("vfo:0,0;");
+    qDebug() << "TCIClient: requestFrequency sent";
+}
+
 bool TCIClient::setFrequency(uint64_t hz) {
     if (!m_connected || !m_ready) {
         qWarning() << "TCIClient::setFrequency: not ready"

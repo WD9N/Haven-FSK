@@ -649,6 +649,14 @@ void MainWindow::onRadioConnected() {
     QString name = m_radio ? m_radio->rigName() : "Rig";
     m_rigLabel->setText(name + "  ✓");
     m_rigLabel->setStyleSheet("color: green;");
+
+    // Request current frequency after a short settling delay.
+    // Ensures FrequencyControl shows the rig's actual frequency
+    // immediately on connection without waiting for a poll or tune.
+    QTimer::singleShot(200, this, [this]() {
+        if (m_radio && m_radio->isConnected())
+            m_radio->requestFrequency();
+    });
 }
 
 void MainWindow::onRadioDisconnected() {
