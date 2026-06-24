@@ -57,6 +57,11 @@ public:
     bool    dcdActive()      const { return m_dcdActive; }
     bool    isTransmitting() const { return m_transmitting; }
 
+    // ── RX gain ───────────────────────────────────────────────────────────
+    // Applied to incoming audio before AFC and demodulation.
+    // 1.0 = unity, <1.0 = attenuate, >1.0 = boost.
+    void setRxGain(float linear) { m_rxGain = linear; }
+
     // ── AFC controls ──────────────────────────────────────────────────────
     void  setAfcEnabled(bool enabled) { m_afcEnabled = enabled; }
     bool  afcEnabled()      const     { return m_afcEnabled; }
@@ -111,6 +116,9 @@ private:
     std::vector<std::vector<float>> m_symbolAccum;
     std::vector<std::vector<float>> m_searchWindow;
     int m_expectedSymbols = 0;
+
+    // ── RX gain ───────────────────────────────────────────────────────────
+    float m_rxGain {1.0f};
 
     // ── TX state ──────────────────────────────────────────────────────────
     QString m_lastTxText;

@@ -1529,3 +1529,37 @@ TCI was discarding vfo: messages received during handshake
 a delay before first frequency update. Immediate query on connection
 ensures the FrequencyControl widget is populated as soon as the
 rig control link is established, regardless of connection method.
+
+## ADR-079 — LED meter panel with console-style faders in bottom left
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** LevelPanel widget placed in bottom left of main window
+as a fixed-size non-resizable panel. Contains TX and RX channel
+strips with 24-LED VU meters (8px round, dBu scale, 0dBu = -6dBFS)
+and console-style vertical faders. Fader travel = LED strip height
+exactly for 1:1 position-to-level mapping. dBu readout always grey.
+
+Color zones: green -34 to -6dBu, yellow -6 to 0dBu, red 0 to +6dBu.
+TX fader controls QAudioOutput volume in real time.
+RX fader applies linear gain multiplier before AFC and demodulation.
+TX meter shows peak of generated audio. RX meter shows incoming chunk peak.
+
+**Reasoning:** Real-time level control accessible during live
+transmission without opening any dialog. Console-style LED meters
+with faders are immediately intuitive to operators with audio
+backgrounds. Fixed panel preserves QSplitter resizability above.
+
+## ADR-080 — TX input is multi-line QTextEdit
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** TX input replaced with QTextEdit (multi-line,
+auto-wrap, scrollable, max height 120px). Plain Enter adds newline.
+Ctrl+Enter transmits.
+
+**Reasoning:** Station info macros with NAME:/GRID:/POTA: fields
+exceed a single line. Multi-line with scroll lets the operator see
+the entire message before transmitting.

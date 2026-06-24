@@ -45,9 +45,11 @@ void DspPipeline::onTxComplete() {
 // ── RX ────────────────────────────────────────────────────────────────────
 
 void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
-    // Make a corrected copy for DSP — waterfall gets raw audio separately
-    // via its own direct connection to AudioEngine::rxDataReady.
+    // Apply RX gain then AFC correction.
+    // Waterfall gets raw audio via its own direct connection (unaffected).
     std::vector<float> corrected = samples;
+    if (std::abs(m_rxGain - 1.0f) > 0.001f)
+        for (float& s : corrected) s *= m_rxGain;
     applyAfcCorrection(corrected);
 
     // ── DCD update ────────────────────────────────────────────────────────

@@ -95,6 +95,7 @@ set(HEADERS
     src/ui/MacroPanel.h
     src/ui/WaterfallWidget.h
     src/ui/FrequencyControl.h
+    src/ui/LevelPanel.h
     src/log/LogEntry.h
     src/log/LogManager.h
     src/log/AdifExporter.h
@@ -135,12 +136,13 @@ target_include_directories(HavenFSK PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Windows: hide console window for release builds
-if(WIN32)
-    set_target_properties(HavenFSK PROPERTIES
-        WIN32_EXECUTABLE TRUE
-    )
-endif()
+# DEBUG: temporarily disabled for console output
+# Restore before release packaging
+# if(WIN32)
+#     set_target_properties(HavenFSK PROPERTIES
+#         WIN32_EXECUTABLE TRUE
+#     )
+# endif()
 
 # Install rules
 install(TARGETS HavenFSK

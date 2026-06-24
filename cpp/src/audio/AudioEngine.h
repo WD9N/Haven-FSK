@@ -12,6 +12,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <algorithm>
 
 class AudioEngine : public QObject
 {
@@ -41,6 +42,13 @@ public:
 
     bool isReceiving() const;
     bool isTransmitting() const;
+
+    // Set TX volume on the active QAudioOutput (0.0–1.0 linear).
+    // No-op if not currently transmitting.
+    void setTxVolume(float linear) {
+        if (m_txAudioOut)
+            m_txAudioOut->setVolume(std::max(0.0f, std::min(1.0f, linear)));
+    }
 
 signals:
     void rxDataReady(const std::vector<float>& samples);

@@ -1,6 +1,6 @@
 #pragma once
 #include <QMainWindow>
-#include <QLineEdit>
+#include <QTextEdit>
 #include <QPushButton>
 #include <QLabel>
 #include <QProgressBar>
@@ -30,6 +30,7 @@ class ExportDialog;
 class WaterfallWidget;
 class FrequencyControl;
 class RadioConfigDialog;
+class LevelPanel;
 
 class MainWindow : public QMainWindow
 {
@@ -80,7 +81,8 @@ private:
     LogPanel*          m_logPanel     {nullptr};
     MacroPanel*        m_macroPanel   {nullptr};
     QSplitter*         m_splitter     {nullptr};
-    QLineEdit*         m_txInput      {nullptr};
+    QTextEdit*         m_txInput      {nullptr};
+    LevelPanel*        m_levelPanel   {nullptr};
     QPushButton*       m_txButton     {nullptr};
     QLabel*            m_dcdLabel     {nullptr};
     QLabel*            m_statusLabel  {nullptr};

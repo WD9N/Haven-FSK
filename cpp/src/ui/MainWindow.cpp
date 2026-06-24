@@ -8,6 +8,9 @@
 #include "RadioConfigDialog.h"
 #include "WaterfallWidget.h"
 #include "FrequencyControl.h"
+#include "LevelPanel.h"
+#include <QTextEdit>
+#include <QShortcut>
 #include "../log/LogManager.h"
 #include "../audio/AudioEngine.h"
 #include "../audio/AudioSettings.h"
@@ -208,18 +211,65 @@ void MainWindow::setupUi() {
     m_macroPanel = new MacroPanel(central);
     mainLayout->addWidget(m_macroPanel);
 
-    // TX input — fixed
-    auto* txGroup  = new QGroupBox("Transmit", central);
-    auto* txLayout = new QHBoxLayout(txGroup);
-    m_txInput = new QLineEdit(txGroup);
-    m_txInput->setPlaceholderText(
-        "Type message and press Transmit or Enter...");
+    // Bottom section: LevelPanel (fixed) + TX area (flexible)
+    auto* bottomSection = new QWidget(central);
+    auto* bottomLayout  = new QHBoxLayout(bottomSection);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    bottomLayout->setSpacing(0);
+
+    m_levelPanel = new LevelPanel(bottomSection);
+    bottomLayout->addWidget(m_levelPanel);
+
+    // TX area
+    auto* txOuter  = new QWidget(bottomSection);
+    auto* txLayout = new QVBoxLayout(txOuter);
+    txLayout->setContentsMargins(6, 6, 6, 6);
+    txLayout->setSpacing(4);
+
+    auto* txTopRow = new QHBoxLayout;
+    auto* txLabel  = new QLabel("Transmit", txOuter);
+    txLabel->setStyleSheet(
+        "font-family:'Courier New'; font-size:9px;"
+        "color:#666; letter-spacing:1px;");
+    auto* txHint = new QLabel("Ctrl+Enter to send", txOuter);
+    txHint->setStyleSheet("font-size:8px; color:#444;");
+    txTopRow->addWidget(txLabel);
+    txTopRow->addStretch();
+    txTopRow->addWidget(txHint);
+    txLayout->addLayout(txTopRow);
+
+    m_txInput = new QTextEdit(txOuter);
+    m_txInput->setPlaceholderText("Type message — wraps automatically...");
     m_txInput->setFont(QFont("Courier New", 10));
+    m_txInput->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    m_txInput->setAcceptRichText(false);
+    m_txInput->setMinimumHeight(52);
+    m_txInput->setMaximumHeight(120);
+    m_txInput->setStyleSheet(
+        "QTextEdit {"
+        "  background: #141414; color: #bbb;"
+        "  border: 1px solid #2a2a2a; border-radius: 3px;"
+        "  padding: 4px 6px;"
+        "}");
     txLayout->addWidget(m_txInput, 1);
-    m_txButton = new QPushButton("Transmit", txGroup);
-    m_txButton->setMinimumWidth(100);
-    txLayout->addWidget(m_txButton);
-    mainLayout->addWidget(txGroup);
+
+    auto* txBtnRow = new QHBoxLayout;
+    txBtnRow->addStretch();
+    m_txButton = new QPushButton("Transmit", txOuter);
+    m_txButton->setMinimumWidth(90);
+    m_txButton->setStyleSheet(
+        "QPushButton {"
+        "  background: #1a2e1a; color: #7ab07a;"
+        "  border: 1px solid #2a4a2a; border-radius: 3px;"
+        "  padding: 4px 16px;"
+        "}"
+        "QPushButton:hover { background: #223322; }"
+        "QPushButton:disabled { color: #444; border-color: #2a2a2a; }");
+    txBtnRow->addWidget(m_txButton);
+    txLayout->addLayout(txBtnRow);
+
+    bottomLayout->addWidget(txOuter, 1);
+    mainLayout->addWidget(bottomSection);
 
     // Status bar — fixed
     auto* statusBar    = new QWidget(central);
@@ -274,7 +324,10 @@ void MainWindow::setupConnections() {
     // TX
     connect(m_txButton, &QPushButton::clicked,
             this, &MainWindow::onTransmit);
-    connect(m_txInput, &QLineEdit::returnPressed,
+    // QTextEdit: Ctrl+Enter transmits, plain Enter adds newline
+    auto* txShortcut = new QShortcut(
+        QKeySequence(Qt::CTRL | Qt::Key_Return), m_txInput);
+    connect(txShortcut, &QShortcut::activated,
             this, &MainWindow::onTransmit);
 
     // AudioEngine → DspPipeline (AFC-corrected path)
@@ -356,20 +409,32 @@ void MainWindow::setupConnections() {
                 qDebug() << "txAudioReady:" << samples.size()
                          << "samples on" << outDev;
 
+                // TX meter: show peak level of generated audio
+                if (m_levelPanel && !samples.empty()) {
+                    float peak = 0.0f;
+                    for (float s : samples) peak = std::max(peak, std::abs(s));
+                    float dbFS = (peak > 1e-10f)
+                        ? 20.0f * std::log10(peak) : -96.0f;
+                    m_levelPanel->setTxLevel(dbFS);
+                }
+
                 bool isCQ      = m_pipeline->lastTxWasCQ();
                 bool dcdActive = m_pipeline->dcdActive();
 
                 if (m_pttManager && m_radio && m_radio->isConnected()) {
                     int leadMs = HavenFSK::pttLeadMs();
-                    // Assert PTT immediately
                     m_pttManager->requestTX(isCQ, dcdActive);
                     qDebug() << "TX: PTT asserted, waiting"
                              << leadMs << "ms lead time";
-                    // Delay audio start by PTT lead time
                     QTimer::singleShot(leadMs, this,
                         [this, samples, outDev]() {
                             qDebug() << "TX: lead time elapsed, starting audio";
                             bool ok = m_audio->startTx(outDev, samples);
+                            if (ok && m_levelPanel) {
+                                float vol = std::pow(
+                                    10.0f, m_levelPanel->txFaderDbFS() / 20.0f);
+                                m_audio->setTxVolume(vol);
+                            }
                             if (!ok) {
                                 qWarning() << "startTx failed — aborting TX";
                                 m_pipeline->onTxComplete();
@@ -380,7 +445,12 @@ void MainWindow::setupConnections() {
                 } else {
                     // No rig control — play audio immediately (VOX mode)
                     qDebug() << "TX: no rig control — VOX mode";
-                    m_audio->startTx(outDev, samples);
+                    bool ok = m_audio->startTx(outDev, samples);
+                    if (ok && m_levelPanel) {
+                        float vol = std::pow(
+                            10.0f, m_levelPanel->txFaderDbFS() / 20.0f);
+                        m_audio->setTxVolume(vol);
+                    }
                 }
             });
 
@@ -406,6 +476,33 @@ void MainWindow::setupConnections() {
             this, [this](const QString& text) {
                 HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
                 m_rxDisplay->appendTxMessage(text, info.callsign);
+            });
+
+    // RX level meter — peak of each incoming audio chunk
+    connect(m_audio, &AudioEngine::rxDataReady,
+            this, [this](const std::vector<float>& samples) {
+                if (samples.empty() || !m_levelPanel) return;
+                float peak = 0.0f;
+                for (float s : samples) peak = std::max(peak, std::abs(s));
+                float dbFS = (peak > 1e-10f)
+                    ? 20.0f * std::log10(peak) : -96.0f;
+                m_levelPanel->setRxLevel(dbFS);
+            });
+
+    // RX fader → DspPipeline gain
+    connect(m_levelPanel, &LevelPanel::rxFaderChanged,
+            this, [this](float dBu) {
+                float gain = std::pow(10.0f, (dBu - 6.0f) / 20.0f);
+                m_pipeline->setRxGain(gain);
+            });
+
+    // TX fader → AudioEngine volume (real-time if transmitting)
+    connect(m_levelPanel, &LevelPanel::txFaderChanged,
+            this, [this](float dBu) {
+                if (m_audio && m_audio->isTransmitting()) {
+                    float vol = std::pow(10.0f, (dBu - 6.0f) / 20.0f);
+                    m_audio->setTxVolume(vol);
+                }
             });
 
     // LogPanel → session log
@@ -563,7 +660,7 @@ void MainWindow::onTransmit() {
         return;
     }
 
-    QString text = m_txInput->text().trimmed();
+    QString text = m_txInput->toPlainText().trimmed();
     if (text.isEmpty()) return;
 
     if (m_audio->isTransmitting()) {
@@ -696,7 +793,7 @@ void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
 }
 
 void MainWindow::onMacroTriggered(const QString& text, bool autoTx) {
-    m_txInput->setText(text);
+    m_txInput->setPlainText(text);
     if (autoTx) onTransmit();
 }
 
