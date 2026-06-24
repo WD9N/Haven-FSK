@@ -12,7 +12,6 @@ namespace HavenFSK {
 Modulator::Modulator()
 {
     buildToneTable();
-    buildRamps();
 }
 
 void Modulator::buildToneTable()
@@ -28,15 +27,6 @@ void Modulator::buildToneTable()
     }
 }
 
-void Modulator::buildRamps()
-{
-    for (int i = 0; i < RAMP_SAMPLES; ++i)
-        m_rampUp[i] = static_cast<float>(
-            std::sin(M_PI / 2.0 * i / RAMP_SAMPLES));
-    for (int i = 0; i < RAMP_SAMPLES; ++i)
-        m_rampDown[i] = m_rampUp[RAMP_SAMPLES - 1 - i];
-}
-
 std::vector<int> Modulator::bytesToSymbols(
     const std::vector<uint8_t>& data) const
 {
@@ -47,18 +37,6 @@ std::vector<int> Modulator::bytesToSymbols(
         symbols.push_back(byte & 0x0F);
     }
     return symbols;
-}
-
-void Modulator::applyRamps(std::vector<float>& samples)
-{
-    int n       = static_cast<int>(samples.size());
-    int rampLen = RAMP_SAMPLES;
-
-    for (int i = 0; i < rampLen && i < n; i++)
-        samples[i] *= m_rampUp[i];
-
-    for (int i = 0; i < rampLen && i < n; i++)
-        samples[n - 1 - i] *= m_rampDown[i];
 }
 
 std::vector<float> Modulator::symbolToSamples(int symbol)
@@ -86,10 +64,6 @@ std::vector<float> Modulator::symbolToSamples(int symbol)
         if (m_txPhase > M_PI)
             m_txPhase -= 2.0 * M_PI;
     }
-
-    // Ramps removed: with continuous phase (CPFSK) there are no phase
-    // discontinuities to mask. Ramps at 31.25 symbols/sec created
-    // periodic amplitude dips that caused the pulsing artifact.
 
     return samples;
 }

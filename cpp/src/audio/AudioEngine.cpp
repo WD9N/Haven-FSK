@@ -186,7 +186,7 @@ bool AudioEngine::startTx(const QString& deviceName,
 
     qDebug() << "AudioEngine: startTx"
              << "samples=" << samples.size()
-             << "duration=" << (samples.size() / 48000.0) << "s"
+             << "duration=" << (samples.size() / static_cast<double>(HavenFSK::SAMPLE_RATE)) << "s"
              << "device=" << deviceName;
 
     // Build WAV file in memory
@@ -239,8 +239,7 @@ void AudioEngine::onTxPlaybackStateChanged(
         m_transmitting = false;
 
         if (m_txPlayer) {
-            m_txPlayer->stop();
-            delete m_txPlayer;
+            delete m_txPlayer;   // already stopped — StoppedState just fired
             m_txPlayer = nullptr;
         }
         if (m_txAudioOut) {

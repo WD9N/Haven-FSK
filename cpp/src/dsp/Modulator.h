@@ -30,23 +30,15 @@ private:
     // Pre-built tone table — kept for reference; not used for TX generation
     float m_toneTable[NUM_TONES][SAMPLES_PER_SYMBOL];
 
-    // Pre-built raised cosine ramps
-    float m_rampUp[RAMP_SAMPLES];
-    float m_rampDown[RAMP_SAMPLES];
-
     // Continuous phase accumulator — carries phase across all symbol boundaries
     double m_txPhase {0.0};
 
     void buildToneTable();
-    void buildRamps();
 
     std::vector<int> bytesToSymbols(const std::vector<uint8_t>& data) const;
 
-    // Generate one shaped symbol period — advances m_txPhase continuously
+    // Generate one symbol period — advances m_txPhase continuously
     std::vector<float> symbolToSamples(int symbol);
-
-    // Apply raised cosine ramps to a symbol's amplitude envelope
-    void applyRamps(std::vector<float>& samples);
 };
 
 } // namespace HavenFSK
