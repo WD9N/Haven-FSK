@@ -296,7 +296,12 @@ public:
 
         hl->addWidget(m_rx);
 
-        m_tx->setFaderDb(-18.0f);
+        m_tx->setFaderDb(-6.0f);
+        m_tx->setToolTip(
+            "TX audio output level\n"
+            "0dBu = -6dBFS (nominal)\n"
+            "Target: watch wattmeter, keep ALC inactive\n"
+            "Full scale (+6dBu) = 0dBFS");
         m_rx->setFaderDb(-22.0f);
 
         connect(m_tx, &ChannelStrip::faderChanged,

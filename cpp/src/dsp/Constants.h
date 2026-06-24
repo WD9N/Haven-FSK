@@ -47,7 +47,7 @@ constexpr uint16_t CRC16_POLY        = 0x1021;
 constexpr uint16_t CRC16_INIT        = 0xFFFF;
 
 // ── TX parameters ──────────────────────────────────────────────
-constexpr double TX_AMPLITUDE        = 0.25;  // peak, -12 dBFS
+constexpr double TX_AMPLITUDE        = 1.0;   // peak, 0 dBFS — GainedAudioDevice is sole gain control
 constexpr int    PTT_WATCHDOG_SEC    = 120;   // max TX time
 
 // ── DCD parameters ─────────────────────────────────────────────

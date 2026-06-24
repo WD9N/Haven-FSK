@@ -1638,3 +1638,22 @@ Windows FFmpeg backend. Pre-baking gain into PCM prevents
 mid-transmission adjustment. GainedAudioDevice applies gain at
 read time — the audio changes within ~200ms of a fader move,
 giving genuine real-time level control during live transmission.
+
+## ADR-085 — Modulator output normalized to 0dBFS
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** TX_AMPLITUDE constant changed from 0.25 to 1.0 in
+Constants.h. CPFSK is constant-envelope — peak is always ±1.0,
+normalization to 0.25 was unnecessary attenuation baking -12dBFS
+into the signal before GainedAudioDevice. buildWav() now encodes
+at full scale (×32767). GainedAudioDevice is the sole gain control
+in the TX chain. TX fader default changed from -18dBu to -6dBu.
+
+**Reasoning:** With TX_AMPLITUDE=0.25, Thetis VAC1 TX Gain
+required +40dB compensation just to produce 2W from a 5W radio.
+This inverted correct gain structure — attenuation before the
+fader rather than after. With 0dBFS Modulator output and Thetis
+VAC1 TX Gain at 0dB, the HAVEN fader has full meaningful control
+range.
