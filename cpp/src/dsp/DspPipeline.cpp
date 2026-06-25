@@ -105,7 +105,7 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
         if (static_cast<int>(m_searchWindow.size()) >= PREAMBLE_LENGTH) {
             float score = 0.0f;
             if (m_preamble.detect(m_searchWindow, score)) {
-                qDebug() << "DspPipeline: preamble detected, score =" << score;
+                qDebug() << "DspPipeline: preamble DETECTED score=" << score;
                 emit preambleDetected(score);
 
                 m_symbolAccum.clear();
@@ -123,6 +123,8 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
                              << m_afcOffsetHz << "Hz";
                     emit afcOffsetChanged(m_afcOffsetHz);
                 }
+            } else {
+                qDebug() << "DspPipeline: preamble miss score=" << score;
             }
         }
         break;
