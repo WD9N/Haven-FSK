@@ -40,7 +40,7 @@ MainWindow::MainWindow(QWidget* parent)
         QString("%1 v%2")
         .arg(HavenFSK::APP_NAME)
         .arg(HavenFSK::APP_VERSION));
-    setMinimumSize(800, 640);
+    setMinimumSize(800, 820);
 
     m_audio      = new AudioEngine(this);
     m_pipeline   = new HavenFSK::DspPipeline(this);
@@ -87,7 +87,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     QSettings s;
-    s.setValue("ui/splitterState", m_splitter->saveState());
+    s.setValue("ui/splitterState4", m_splitter->saveState());
     QMainWindow::closeEvent(event);
 }
 
@@ -298,14 +298,6 @@ void MainWindow::setupUi() {
     statusLayout->setContentsMargins(0, 0, 0, 0);
     statusLayout->setSpacing(8);
 
-    m_dcdLabel = new QLabel("DCD: --");
-    m_dcdLabel->setMinimumWidth(70);
-    statusLayout->addWidget(m_dcdLabel);
-
-    m_rxStateLabel = new QLabel("Idle");
-    m_rxStateLabel->setMinimumWidth(80);
-    statusLayout->addWidget(m_rxStateLabel);
-
     m_freqControl = new FrequencyControl(statusBar);
     statusLayout->addWidget(m_freqControl);
 
@@ -328,11 +320,17 @@ void MainWindow::setupUi() {
 
     mainLayout->addWidget(statusBar);
 
-    // Restore splitter state
+    // Restore splitter state (key v4 matches the 4-widget layout)
     QSettings s;
-    QByteArray splitterState = s.value("ui/splitterState").toByteArray();
-    if (!splitterState.isEmpty())
+    QByteArray splitterState = s.value("ui/splitterState4").toByteArray();
+    if (!splitterState.isEmpty()) {
         m_splitter->restoreState(splitterState);
+    } else {
+        // First run with this layout: set explicit initial sizes so the
+        // bottom container (constrained by LevelPanel ~340px fixed height)
+        // gets enough room rather than being crushed by stretch-factor math.
+        m_splitter->setSizes({120, 180, 140, 380});
+    }
 }
 
 void MainWindow::setupConnections() {
@@ -473,10 +471,6 @@ void MainWindow::setupConnections() {
     // DspPipeline → UI
     connect(m_pipeline, &HavenFSK::DspPipeline::messageReceived,
             this, &MainWindow::onMessageReceived);
-    connect(m_pipeline, &HavenFSK::DspPipeline::dcdChanged,
-            this, &MainWindow::onDcdChanged);
-    connect(m_pipeline, &HavenFSK::DspPipeline::rxStateChanged,
-            this, &MainWindow::onRxStateChanged);
 
     // RxDisplay → MainWindow (element clicks)
     connect(m_rxDisplay, &RxDisplay::elementClicked,
@@ -720,23 +714,6 @@ void MainWindow::onMessageReceived(const HavenFSK::RxMessage& msg) {
         QString("RX — CRC: %1  FEC: %2")
         .arg(msg.crcOk ? "OK" : "FAIL")
         .arg(msg.converged ? "OK" : "NC"));
-}
-
-void MainWindow::onDcdChanged(bool active) {
-    m_dcdLabel->setText(active ? "DCD: ON" : "DCD: --");
-    m_dcdLabel->setStyleSheet(
-        active ? "color: green; font-weight: bold;" : "");
-}
-
-void MainWindow::onRxStateChanged(HavenFSK::RxState state) {
-    switch (state) {
-    case HavenFSK::RxState::Idle:
-        m_rxStateLabel->setText("Idle");      break;
-    case HavenFSK::RxState::Searching:
-        m_rxStateLabel->setText("Searching"); break;
-    case HavenFSK::RxState::Receiving:
-        m_rxStateLabel->setText("Receiving"); break;
-    }
 }
 
 void MainWindow::onAudioError(const QString& message) {

@@ -1698,3 +1698,17 @@ eliminates wasted space and gives the operator all controls in one
 resizable area. Single flat grid of 18 buttons removes the bank
 A/B switching overhead — all macros always visible. Fixed button
 widths prevent layout shift when window resizes.
+
+## ADR-089 — DCD removed from status bar display
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** DCD status indicator and RX state text (Idle/Searching/
+Receiving) removed from status bar. DCD energy detector continues
+running internally to gate the RX state machine (Idle→Searching→
+Receiving transitions). Visual indicator removed because: operator
+can see signal presence on waterfall; RX window shows when decoding
+occurs; "DCD: ON" label implied active TX blocking which no longer
+exists; cleaner status bar. Status bar now shows: frequency, rig
+connection status, RX level bar, and operational status text.

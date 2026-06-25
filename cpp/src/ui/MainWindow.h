@@ -16,7 +16,6 @@ class AudioEngine;
 namespace HavenFSK {
     class DspPipeline;
     struct RxMessage;
-    enum class RxState;
 }
 
 class SettingsDialog;
@@ -46,8 +45,6 @@ protected:
 private slots:
     void onTransmit();
     void onMessageReceived(const HavenFSK::RxMessage& msg);
-    void onDcdChanged(bool active);
-    void onRxStateChanged(HavenFSK::RxState state);
     void onTxComplete();
     void onAudioError(const QString& message);
     void onRxLevelChanged(float level);
@@ -83,9 +80,7 @@ private:
     QTextEdit*         m_txInput      {nullptr};
     LevelPanel*        m_levelPanel   {nullptr};
     QPushButton*       m_txButton     {nullptr};
-    QLabel*            m_dcdLabel     {nullptr};
     QLabel*            m_statusLabel  {nullptr};
-    QLabel*            m_rxStateLabel {nullptr};
     FrequencyControl*  m_freqControl  {nullptr};
     QLabel*            m_rigLabel     {nullptr};
     QProgressBar*      m_rxLevel      {nullptr};
