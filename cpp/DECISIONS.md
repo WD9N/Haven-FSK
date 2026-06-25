@@ -1852,3 +1852,40 @@ resulting in frame misalignment and "Unknown protocol version" parse failures
 instead of expected header byte 0x11). The threshold increase (0.25 → 0.375)
 reduces false detections on noise while remaining reachable for legitimate
 preamble receptions.
+
+## ADR-096 — Buffered RX architecture replaces real-time preamble detection
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** DspPipeline RX path changed to buffered architecture. Raw
+audio samples accumulate in `m_rxBuffer` while DCD is active. When DCD
+drops (transmission ends), `processRxBuffer()` runs: demodulates the
+entire buffer to soft symbols, searches for the preamble using a
+sliding-window hard-decision correlation across all symbols, computes
+accurate AFC from the preamble region using the centroid method,
+re-demodulates the full buffer with AFC correction applied, then decodes
+the frame from the correct alignment point. `RxState` simplified to
+`Idle` / `Buffering` / `Decoding`. `Preamble::correlate()` made public
+so `processRxBuffer()` can drive its own search loop.
+
+**Latency:** ~50-100ms after end of transmission. Imperceptible in
+conversational QSO flow.
+
+**Memory:** ~720 KB for a typical 18-character message at 48 kHz.
+~11 MB absolute maximum (60-second safety limit). Negligible on all
+target hardware including Raspberry Pi 4.
+
+**Reasoning:** Real-time preamble detection failed because AFC was not
+locked during preamble arrival, causing wrong symbol decisions and low
+correlation scores. The complete transmission was detected only near its
+end when random noise happened to score above threshold. Buffered decode
+eliminates all timing pressure — the decoder has the complete
+transmission and all the time it needs. Preamble offset is found
+retrospectively with exact sample alignment. AFC is computed accurately
+over the full 16-symbol preamble from known-content audio.
+
+**Trade-off:** Real-time (symbol-by-symbol) processing path removed
+entirely. No partial decoding during reception. This is acceptable for
+HF conversational use where transmissions are short (typically 2-5 s)
+and the decode latency is measured in milliseconds, not seconds.

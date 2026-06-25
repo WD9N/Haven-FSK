@@ -4,7 +4,6 @@
 #include <QMap>
 #include <QDateTime>
 #include <vector>
-#include <deque>
 #include <memory>
 #include "Constants.h"
 #include "Modulator.h"
@@ -17,9 +16,9 @@ namespace HavenFSK {
 
 // RX state machine states
 enum class RxState {
-    Idle,           // DCD not active, discarding audio
-    Searching,      // DCD active, looking for preamble
-    Receiving,      // Preamble found, accumulating frame symbols
+    Idle,       // no signal, not buffering
+    Buffering,  // DCD active, accumulating raw audio
+    Decoding,   // processing completed buffer
 };
 
 // Result of a received message, emitted to the UI layer
@@ -35,10 +34,10 @@ struct RxMessage {
 
 // Per-station signal quality measurement stored in cache
 struct RxMeasurement {
-    float     snrDb;         // measured SNR from DCD band energy
-    int       fecIterations; // BP iterations — lower = cleaner signal
-    bool      converged;     // FEC converged within iteration limit
-    QDateTime timestamp;     // when this measurement was taken
+    float     snrDb;
+    int       fecIterations;
+    bool      converged;
+    QDateTime timestamp;
 };
 
 class DspPipeline : public QObject
@@ -58,8 +57,6 @@ public:
     bool    isTransmitting() const { return m_transmitting; }
 
     // ── RX gain ───────────────────────────────────────────────────────────
-    // Applied to incoming audio before AFC and demodulation.
-    // 1.0 = unity, <1.0 = attenuate, >1.0 = boost.
     void setRxGain(float linear) { m_rxGain = linear; }
 
     // ── AFC controls ──────────────────────────────────────────────────────
@@ -67,7 +64,6 @@ public:
     bool  afcEnabled()      const     { return m_afcEnabled; }
     float afcOffsetHz()     const     { return m_afcOffsetHz; }
 
-    // Returns true if the most recent transmit() text contained "CQ"
     bool lastTxWasCQ() const {
         return m_lastTxText.contains("CQ", Qt::CaseInsensitive);
     }
@@ -92,11 +88,7 @@ signals:
     void txAudioReady(const std::vector<float>& samples);
     void preambleDetected(float score);
     void rxProgress(int symbolsReceived, int symbolsExpected);
-
-    // Emitted when AFC offset changes — connected to WaterfallWidget
     void afcOffsetChanged(float hz);
-
-    // Emitted just before transmission begins — connected to RxDisplay
     void messageTransmitted(const QString& text);
 
 private:
@@ -108,14 +100,17 @@ private:
     Frame       m_frame;
 
     // ── RX state ──────────────────────────────────────────────────────────
-    RxState m_rxState    = RxState::Idle;
-    bool    m_dcdActive  = false;
+    RxState m_rxState      = RxState::Idle;
+    bool    m_dcdActive    = false;
     bool    m_transmitting = false;
 
-    std::vector<float> m_sampleAccum;
-    std::vector<std::vector<float>> m_symbolAccum;
-    std::vector<std::vector<float>> m_searchWindow;
-    int m_expectedSymbols = 0;
+    // Raw audio buffer — accumulates samples while DCD active.
+    // Processed in one pass when DCD drops.
+    std::vector<float> m_rxBuffer;
+    bool               m_buffering {false};
+
+    // 60-second safety limit (~11 MB) — prevents runaway on continuous carrier
+    static constexpr int MAX_BUFFER_SAMPLES = SAMPLE_RATE * 60;
 
     // ── RX gain ───────────────────────────────────────────────────────────
     float m_rxGain {1.0f};
@@ -126,10 +121,10 @@ private:
     // ── AFC state ─────────────────────────────────────────────────────────
     float  m_afcOffsetHz   = 0.0f;
     bool   m_afcEnabled    = true;
-    float  m_afcPhase      = 0.0f;   // NCO phase accumulator
+    float  m_afcPhase      = 0.0f;
 
-    static constexpr float AFC_TRACK_ALPHA = 0.02f;  // slow tracking
-    static constexpr float AFC_RESET_DECAY = 0.50f;  // partial reset
+    static constexpr float AFC_TRACK_ALPHA = 0.02f;
+    static constexpr float AFC_RESET_DECAY = 0.50f;
 
     void  applyAfcCorrection(std::vector<float>& samples);
     float measureToneOffset(
@@ -145,13 +140,10 @@ private:
     void expireRxCache();
 
     // ── Helpers ───────────────────────────────────────────────────────────
-    void processSymbol(const std::vector<float>& softEnergies);
-    void processFrame();
+    void processRxBuffer();
+    void processFrame(const std::vector<std::vector<float>>& softSymbols);
     void setRxState(RxState newState);
     void resetRx();
-
-    static constexpr int MAX_FRAME_SYMBOLS =
-        16 + 4 + 4 + (32 * 48);  // 1560 symbols = ~50 seconds
 };
 
 } // namespace HavenFSK

@@ -25,16 +25,18 @@ public:
     bool detect(const std::vector<std::vector<float>>& softSymbols,
                 int& matchOffset) const;
 
+    // Normalized correlation of hard-decision symbols against
+    // PREAMBLE_SYMBOLS[] starting at offset.
+    // Returns score in [0.0, 1.0] where 1.0 = perfect match.
+    // Public so DspPipeline can run its own sliding-window search.
+    float correlate(const std::vector<int>& symbols, int offset) const;
+
 private:
     double m_finalPhase {0.0};  // phase at end of last generate() call
 
     // Take hard decisions from soft energies, return symbol indices
     std::vector<int> hardDecisions(
         const std::vector<std::vector<float>>& softSymbols) const;
-
-    // Normalized correlation against PREAMBLE_SYMBOLS[]
-    // Returns score in range [0.0, 1.0] where 1.0 = perfect match
-    float correlate(const std::vector<int>& symbols, int offset) const;
 };
 
 } // namespace HavenFSK
