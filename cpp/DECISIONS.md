@@ -1676,3 +1676,25 @@ conversational HF mode used by licensed operators, operating
 convention (listen before transmitting) is the correct collision
 avoidance mechanism. Automatic blocking conflicts with weak signal
 operation and creates unpredictable TX behavior.
+
+## ADR-088 — Bottom section: meters + 18-button macro grid + TX textarea
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Bottom section of main window redesigned as a single
+resizable container added to the main QSplitter as its 4th widget.
+Left side: LevelPanel (fixed size, unchanged). Right side: MacroPanel
+(6×3 grid, 18 buttons) above TX textarea. MacroPanel expanded from
+16 buttons (2 banks × 8) to 18 buttons (single flat grid, no bank
+switching). Buttons are 100px fixed width, left-aligned, never
+stretch to fill window. The entire bottom container resizes with the
+splitter. QSettings keys migrated from "macros/bank0/N/label" to
+"macros/N/label".
+
+**Reasoning:** Previous layout had unused space and the macro panel
+was outside the splitter. Moving macros into the bottom container
+eliminates wasted space and gives the operator all controls in one
+resizable area. Single flat grid of 18 buttons removes the bank
+A/B switching overhead — all macros always visible. Fixed button
+widths prevent layout shift when window resizes.

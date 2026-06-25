@@ -199,50 +199,63 @@ void MainWindow::setupUi() {
     m_logPanel->setMinimumHeight(120);
     m_splitter->addWidget(m_logPanel);
 
-    m_splitter->setStretchFactor(0, 1);
-    m_splitter->setStretchFactor(1, 3);
-    m_splitter->setStretchFactor(2, 2);
+    // ── Bottom resizable container — added as 4th splitter widget ───────────
+    // LevelPanel (fixed) | MacroPanel 6×3 grid + TX textarea (expanding)
+    auto* bottomContainer = new QWidget(central);
+    bottomContainer->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    mainLayout->addWidget(m_splitter, 1);
+    auto* bottomHLayout = new QHBoxLayout(bottomContainer);
+    bottomHLayout->setContentsMargins(0, 0, 0, 0);
+    bottomHLayout->setSpacing(0);
 
-    // Macro buttons — fixed
-    m_macroPanel = new MacroPanel(central);
-    mainLayout->addWidget(m_macroPanel);
+    // Left: LevelPanel — fixed size, unchanged
+    m_levelPanel = new LevelPanel(bottomContainer);
+    bottomHLayout->addWidget(m_levelPanel, 0);
 
-    // Bottom section: LevelPanel (fixed) + TX area (flexible)
-    auto* bottomSection = new QWidget(central);
-    auto* bottomLayout  = new QHBoxLayout(bottomSection);
-    bottomLayout->setContentsMargins(0, 0, 0, 0);
-    bottomLayout->setSpacing(0);
+    // Right: macro grid above TX textarea
+    auto* rightSection = new QWidget(bottomContainer);
+    rightSection->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    m_levelPanel = new LevelPanel(bottomSection);
-    bottomLayout->addWidget(m_levelPanel);
+    auto* rightLayout = new QVBoxLayout(rightSection);
+    rightLayout->setContentsMargins(4, 4, 4, 4);
+    rightLayout->setSpacing(4);
 
-    // TX area
-    auto* txOuter  = new QWidget(bottomSection);
-    auto* txLayout = new QVBoxLayout(txOuter);
-    txLayout->setContentsMargins(6, 6, 6, 6);
+    m_macroPanel = new MacroPanel(rightSection);
+    m_macroPanel->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Preferred);
+    rightLayout->addWidget(m_macroPanel, 0);
+
+    // TX textarea section
+    auto* txContainer = new QWidget(rightSection);
+    txContainer->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    auto* txLayout = new QVBoxLayout(txContainer);
+    txLayout->setContentsMargins(0, 0, 0, 0);
     txLayout->setSpacing(4);
 
     auto* txTopRow = new QHBoxLayout;
-    auto* txLabel  = new QLabel("Transmit", txOuter);
+    auto* txLabel  = new QLabel("Transmit", txContainer);
     txLabel->setStyleSheet(
         "font-family:'Courier New'; font-size:9px;"
         "color:#666; letter-spacing:1px;");
-    auto* txHint = new QLabel("Ctrl+Enter to send", txOuter);
+    auto* txHint = new QLabel("Ctrl+Enter to send", txContainer);
     txHint->setStyleSheet("font-size:8px; color:#444;");
     txTopRow->addWidget(txLabel);
     txTopRow->addStretch();
     txTopRow->addWidget(txHint);
     txLayout->addLayout(txTopRow);
 
-    m_txInput = new QTextEdit(txOuter);
-    m_txInput->setPlaceholderText("Type message — Enter for new line, Ctrl+Enter to send...");
+    m_txInput = new QTextEdit(txContainer);
+    m_txInput->setPlaceholderText(
+        "Type message — Enter for new line, Ctrl+Enter to send...");
     m_txInput->setFont(QFont("Courier New", 10));
     m_txInput->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
     m_txInput->setAcceptRichText(false);
-    m_txInput->setMinimumHeight(52);
-    m_txInput->setMaximumHeight(120);
+    m_txInput->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_txInput->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_txInput->setStyleSheet(
         "QTextEdit {"
         "  background: #141414; color: #bbb;"
@@ -253,7 +266,7 @@ void MainWindow::setupUi() {
 
     auto* txBtnRow = new QHBoxLayout;
     txBtnRow->addStretch();
-    m_txButton = new QPushButton("Transmit", txOuter);
+    m_txButton = new QPushButton("Transmit", txContainer);
     m_txButton->setMinimumWidth(90);
     m_txButton->setStyleSheet(
         "QPushButton {"
@@ -266,8 +279,18 @@ void MainWindow::setupUi() {
     txBtnRow->addWidget(m_txButton);
     txLayout->addLayout(txBtnRow);
 
-    bottomLayout->addWidget(txOuter, 1);
-    mainLayout->addWidget(bottomSection);
+    rightLayout->addWidget(txContainer, 1);
+    bottomHLayout->addWidget(rightSection, 1);
+
+    // Add all four widgets to the vertical splitter
+    m_splitter->addWidget(bottomContainer);
+
+    m_splitter->setStretchFactor(0, 2);  // waterfall
+    m_splitter->setStretchFactor(1, 3);  // RX display
+    m_splitter->setStretchFactor(2, 2);  // log panel
+    m_splitter->setStretchFactor(3, 2);  // bottom container
+
+    mainLayout->addWidget(m_splitter, 1);
 
     // Status bar — fixed
     auto* statusBar    = new QWidget(central);
@@ -459,7 +482,7 @@ void MainWindow::setupConnections() {
     connect(m_rxDisplay, &RxDisplay::elementClicked,
             this, &MainWindow::onElementClicked);
 
-    // MacroPanel → TX pipeline
+    // MacroPanel → TX input
     connect(m_macroPanel, &MacroPanel::macroTriggered,
             this, &MainWindow::onMacroTriggered);
 
@@ -772,9 +795,8 @@ void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
     }
 }
 
-void MainWindow::onMacroTriggered(const QString& text, bool autoTx) {
+void MainWindow::onMacroTriggered(const QString& text) {
     m_txInput->setPlainText(text);
-    if (autoTx) onTransmit();
 }
 
 void MainWindow::onContactLogged(const QVariantMap& fields) {
