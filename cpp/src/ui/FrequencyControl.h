@@ -11,6 +11,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPainter>
+#include <QDebug>
 #include <cstdint>
 #include <algorithm>
 
@@ -19,9 +20,10 @@
 // Paints its own text and highlight box — no QLineEdit text cursor.
 // System cursor hidden (BlankCursor) when over a scrollable digit.
 //
-// Format: "14.074000" (MHz, 6 dp)
-// Index:   0=10MHz(disabled) 1=1MHz 2=. 3=100kHz 4=10kHz
-//          5=1kHz 6=. 7=100Hz 8=10Hz 9=1Hz
+// Format: "14.074000" (MHz, 6 dp) — 9 chars, one decimal point
+// Index:  0='1'(disabled) 1='4'(1MHz) 2='.'(dot)
+//         3='0'(100kHz)   4='7'(10kHz) 5='4'(1kHz)
+//         6='0'(100Hz)    7='0'(10Hz)  8='0'(1Hz)
 class DigitDisplay : public QWidget {
     Q_OBJECT
 public:
@@ -123,6 +125,13 @@ protected:
         int idx = (e->pos().x() - textX) / charW;
         idx = std::max(0, std::min(static_cast<int>(m_text.length()) - 1, idx));
 
+        qDebug() << "hover x=" << e->pos().x()
+                 << "charW=" << charW
+                 << "textX=" << textX
+                 << "idx=" << idx
+                 << "char=" << (idx < m_text.length()
+                                ? m_text.at(idx) : QChar('?'));
+
         // Dots and 10MHz digit (index 0) are not interactive
         if (m_text.at(idx) == '.' || idx == 0) {
             if (m_hoveredDigit != -1) {
@@ -188,16 +197,19 @@ protected:
     }
 
 private:
+    // "14.074000" has ONE decimal point (idx 2). No second dot.
+    // idx: 0=disabled 1=1MHz 2=dot 3=100kHz 4=10kHz 5=1kHz
+    //      6=100Hz    7=10Hz 8=1Hz
     uint64_t stepForIndex(int idx) const {
         switch (idx) {
-            case 1: return 1000000ULL;
-            case 3: return  100000ULL;
-            case 4: return   10000ULL;
-            case 5: return    1000ULL;
-            case 7: return     100ULL;
-            case 8: return      10ULL;
-            case 9: return       1ULL;
-            default: return      0ULL;
+            case 1: return 1000000ULL;  // 1MHz
+            case 3: return  100000ULL;  // 100kHz
+            case 4: return   10000ULL;  // 10kHz
+            case 5: return    1000ULL;  // 1kHz
+            case 6: return     100ULL;  // 100Hz
+            case 7: return      10ULL;  // 10Hz
+            case 8: return       1ULL;  // 1Hz
+            default: return      0ULL;  // idx 0 (10MHz) or idx 2 (dot)
         }
     }
 
