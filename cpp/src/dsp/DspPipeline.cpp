@@ -103,28 +103,44 @@ void DspPipeline::processSymbol(const std::vector<float>& softEnergies) {
             m_searchWindow.erase(m_searchWindow.begin());
 
         if (static_cast<int>(m_searchWindow.size()) >= PREAMBLE_LENGTH) {
-            float score = 0.0f;
-            if (m_preamble.detect(m_searchWindow, score)) {
-                qDebug() << "DspPipeline: preamble DETECTED score=" << score;
-                emit preambleDetected(score);
+            int matchOffset = 0;
+            if (m_preamble.detect(m_searchWindow, matchOffset)) {
+                int frameStart = matchOffset + PREAMBLE_LENGTH;
 
-                m_symbolAccum.clear();
-                m_expectedSymbols = MAX_FRAME_SYMBOLS;
-                setRxState(RxState::Receiving);
-
-                // AFC hard lock from preamble symbols — immediate correction,
-                // phase reset. Handles the jump when a new station calls.
-                if (m_afcEnabled && !m_searchWindow.empty()) {
-                    float offset = measureToneOffset(m_searchWindow);
+                // AFC hard lock — measure from the matched preamble slice
+                // before the window is cleared.
+                if (m_afcEnabled &&
+                    frameStart <= static_cast<int>(m_searchWindow.size()))
+                {
+                    std::vector<std::vector<float>> preambleSlice(
+                        m_searchWindow.begin() + matchOffset,
+                        m_searchWindow.begin() + frameStart);
+                    float afcMeasure = measureToneOffset(preambleSlice);
                     m_afcOffsetHz = std::max(-AFC_MAX_HZ,
-                                    std::min(AFC_MAX_HZ, offset));
+                                    std::min(AFC_MAX_HZ, afcMeasure));
                     m_afcPhase = 0.0f;
                     qDebug() << "DspPipeline: AFC hard lock"
                              << m_afcOffsetHz << "Hz";
                     emit afcOffsetChanged(m_afcOffsetHz);
                 }
+
+                m_symbolAccum.clear();
+
+                // Recover symbols already past the preamble end —
+                // these are the first frame (header) symbols.
+                for (int i = frameStart;
+                     i < static_cast<int>(m_searchWindow.size()); ++i)
+                    m_symbolAccum.push_back(m_searchWindow[i]);
+
+                m_searchWindow.clear();
+                m_expectedSymbols = MAX_FRAME_SYMBOLS;
+                setRxState(RxState::Receiving);
+
+                qDebug() << "DspPipeline: preamble at offset" << matchOffset
+                         << "frameStart=" << frameStart
+                         << "pre-loaded symbols=" << m_symbolAccum.size();
             } else {
-                qDebug() << "DspPipeline: preamble miss score=" << score;
+                qDebug() << "DspPipeline: preamble miss";
             }
         }
         break;

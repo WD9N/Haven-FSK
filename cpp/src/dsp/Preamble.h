@@ -18,10 +18,12 @@ public:
     // starts with continuous phase from the preamble.
     double finalPhase() const { return m_finalPhase; }
 
-    // Feed a window of soft symbol energies (shape [N][NUM_TONES])
-    // Returns true if preamble detected, sets score to correlation value
+    // Feed a window of soft symbol energies (shape [N][NUM_TONES]).
+    // Returns true if preamble detected; sets matchOffset to the index
+    // within softSymbols where the preamble begins. Caller uses
+    // matchOffset + PREAMBLE_LENGTH to find the first frame symbol.
     bool detect(const std::vector<std::vector<float>>& softSymbols,
-                float& score) const;
+                int& matchOffset) const;
 
 private:
     double m_finalPhase {0.0};  // phase at end of last generate() call

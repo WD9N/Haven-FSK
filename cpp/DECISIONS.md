@@ -1831,3 +1831,24 @@ Index 0=10MHz(disabled) 1=1MHz 2=dot 3=100kHz 4=10kHz 5=1kHz
 
 **Rounding:** newHz = (newHz/step)*step — zeroes all digits below the
 scrolled digit in one integer operation.
+
+## ADR-095 — Preamble detect() returns match offset
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** `Preamble::detect()` now returns the offset within the search
+window where the preamble was found via output parameter `matchOffset`.
+`DspPipeline` uses this offset to calculate `frameStart = matchOffset +
+PREAMBLE_LENGTH` and pre-loads any symbols already past the preamble end
+into `m_symbolAccum` before entering `Receiving` state. `PREAMBLE_THRESHOLD`
+raised from 4.0 to 6.0 (score threshold 0.375 instead of 0.25).
+
+**Reasoning:** `detect()` was finding the preamble at non-zero offsets within
+the search window but discarding that offset. This caused `DspPipeline` to
+lose all header symbols already in the search window past the preamble end,
+resulting in frame misalignment and "Unknown protocol version" parse failures
+(preamble tones 0/15 landing in header symbol slots, decoded as byte 0x0F
+instead of expected header byte 0x11). The threshold increase (0.25 → 0.375)
+reduces false detections on noise while remaining reachable for legitimate
+preamble receptions.

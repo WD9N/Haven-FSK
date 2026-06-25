@@ -86,20 +86,26 @@ float Preamble::correlate(
 
 bool Preamble::detect(
     const std::vector<std::vector<float>>& softSymbols,
-    float& score) const
+    int& matchOffset) const
 {
     auto symbols = hardDecisions(softSymbols);
-    score = 0.0f;
+
+    int   bestOffset = 0;
+    float bestScore  = 0.0f;
 
     int n = static_cast<int>(symbols.size());
     for (int offset = 0; offset <= n - PREAMBLE_LENGTH; ++offset) {
-        float c = correlate(symbols, offset);
-        if (c > score) score = c;
+        float score = correlate(symbols, offset);
+        if (score > bestScore) {
+            bestScore = score;
+            bestOffset = offset;
+        }
     }
 
+    matchOffset = bestOffset;
     constexpr float threshold =
         static_cast<float>(PREAMBLE_THRESHOLD) / PREAMBLE_LENGTH;
-    return score >= threshold;
+    return bestScore >= threshold;
 }
 
 } // namespace HavenFSK

@@ -31,7 +31,7 @@ constexpr int PREAMBLE_LENGTH        = 16;
 constexpr int PREAMBLE_SYMBOLS[16]   = {
     0,15,0,15,7,8,7,8,0,15,0,15,7,8,7,8
 };
-constexpr double PREAMBLE_THRESHOLD  = 4.0;  // minimum exact symbol matches (out of 16) → score >= 0.25
+constexpr double PREAMBLE_THRESHOLD  = 6.0;  // minimum exact symbol matches (out of 16) → score >= 0.375
 
 // ── FEC ────────────────────────────────────────────────────────
 constexpr int LDPC_N                 = 192;  // coded bits

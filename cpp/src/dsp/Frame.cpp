@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cassert>
+#include <QDebug>
+#include <QString>
 
 namespace HavenFSK {
 
@@ -177,12 +179,29 @@ ParseResult Frame::parse(
     }
 
     // ── Decode header (symbols 0-3, hard decision) ────────────────────────
+    // Log first 8 symbol argmax values to diagnose alignment issues
+    {
+        QString syms;
+        for (int i = 0; i < std::min(8, (int)softSymbols.size()); i++) {
+            syms += QString::number(argmax(softSymbols[i]));
+            if (i < 7) syms += ",";
+        }
+        qDebug() << "Frame::parse first 8 symbols:" << syms
+                 << "total=" << softSymbols.size();
+    }
+
     auto hdrBytes = hardDecodeSymbols(softSymbols, 0, HEADER_SYMS);
     if ((int)hdrBytes.size() < HEADER_BYTES) {
         result.error = "Header decode failed";
         return result;
     }
     std::array<uint8_t, 2> hdr = {hdrBytes[0], hdrBytes[1]};
+
+    qDebug() << "Frame::parse hdr[0]=0x" +
+                QString::number(hdr[0], 16).rightJustified(2, '0') +
+                " hdr[1]=0x" +
+                QString::number(hdr[1], 16).rightJustified(2, '0') +
+                " expect hdr[0]=0x11";
 
     uint8_t version, flags, nBlocks;
     if (!parseHeader(hdr, version, flags, nBlocks)) {
