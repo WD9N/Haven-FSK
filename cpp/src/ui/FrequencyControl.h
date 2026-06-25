@@ -11,7 +11,6 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPainter>
-#include <QCursor>
 #include <cstdint>
 #include <algorithm>
 
@@ -48,7 +47,6 @@ public:
                 static_cast<double>(hz) / 1.0e6, 'f', 6);
             m_placeholder = false;
         }
-        m_hoveredDigit = -1;
         update();
     }
 
@@ -168,10 +166,7 @@ protected:
 
         setFrequencyHz(rounded);
         emit frequencyRequested(rounded);
-
-        // Restore highlight — setFrequencyHz() cleared m_hoveredDigit
-        m_hoveredDigit = digitUnderMouse();
-        update();
+        update();  // repaint with m_hoveredDigit unchanged
     }
 
     void mousePressEvent(QMouseEvent*) override {
@@ -204,17 +199,6 @@ private:
             case 9: return       1ULL;
             default: return      0ULL;
         }
-    }
-
-    int digitUnderMouse() const {
-        if (m_text.isEmpty()) return -1;
-        QPoint pos = mapFromGlobal(QCursor::pos());
-        QFontMetrics fm(font());
-        int charW = fm.horizontalAdvance('0');
-        int idx   = (pos.x() - 4) / charW;
-        idx = std::max(0, std::min(static_cast<int>(m_text.length()) - 1, idx));
-        if (m_text.at(idx) == '.' || idx == 0) return -1;
-        return idx;
     }
 
     uint64_t m_hz           {0};
