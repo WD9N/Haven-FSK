@@ -1758,3 +1758,26 @@ any target hardware. Persistent cfg eliminates per-call alloc overhead.
 rectangular blocks on the display. Doubling FFT size halves bin width.
 Linear interpolation smooths remaining steps. Both are display-only —
 the demodulator uses its own independent FFT pipeline and is unaffected.
+
+## ADR-092 — Macro behavioral tags <TX> and <clr>
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** Two behavioral tags added to macro system.
+<TX> causes auto-transmit after macro text is inserted (50ms
+delay to allow UI update). <clr> clears TX input before
+inserting macro text. Both tags are stripped before transmission.
+Tags are case-insensitive and may appear anywhere in macro text.
+MacroPanel::macroTriggered signal updated to carry clearFirst
+and autoTx bool parameters. Default macros updated to use
+<clr> and <TX>. macroTriggered connection in MainWindow
+converted to lambda for inline handling.
+
+**Reasoning:** Flat grid MacroPanel lost the auto-TX feature
+from the previous bank-based implementation. Tag-based approach
+is more flexible — operator controls which macros auto-transmit
+by including or omitting <TX>. <clr> prevents accidental
+concatenation of macro text onto existing content. Backwards
+compatible — macros without tags append text and wait for
+operator input.

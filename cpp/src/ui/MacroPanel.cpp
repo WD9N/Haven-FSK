@@ -74,16 +74,16 @@ void MacroPanel::loadMacros() {
 
     struct Default { int idx; const char* label; const char* text; };
     static const Default defaults[] = {
-        {0,  "CQ POTA",  "CQ POTA DE <myCall> <myParks> K"},
-        {1,  "Stn Info", "DE <myCall> NAME:<myName> QTH:<myQTH> GRID:<myGrid> POTA:<myParks> RS:<rstSent> K"},
-        {2,  "TU 73",    "<theirCall> DE <myCall> TU 73 SK"},
-        {3,  "QRZ?",     "QRZ? DE <myCall> K"},
-        {4,  "AGN?",     "<theirCall> DE <myCall> AGN? K"},
-        {5,  "QSL",      "<theirCall> DE <myCall> QSL TU K"},
-        {6,  "CQ",       "CQ CQ DE <myCall> <myCall> K"},
-        {7,  "Stn Info", "DE <myCall> NAME:<myName> QTH:<myQTH> GRID:<myGrid> K"},
-        {8,  "TU 73",    "<theirCall> DE <myCall> TU 73 K"},
-        {9,  "AGN?",     "<theirCall> DE <myCall> AGN? K"},
+        {0,  "CQ POTA",  "<clr>CQ POTA DE <myCall> <myParks> K<TX>"},
+        {1,  "Stn Info", "<clr>DE <myCall> NAME:<myName> QTH:<myQTH> GRID:<myGrid> POTA:<myParks> RS: K<TX>"},
+        {2,  "TU 73",    "<clr>TU 73 SK<TX>"},
+        {3,  "QRZ?",     "<clr>QRZ? DE <myCall> K<TX>"},
+        {4,  "AGN?",     "<clr>AGN? PSE RPT K<TX>"},
+        {5,  "QSL",      "<clr><theirCall> DE <myCall> QSL TU K<TX>"},
+        {6,  "CQ",       "<clr>CQ CQ DE <myCall> <myCall> K<TX>"},
+        {7,  "Stn Info", "<clr>DE <myCall> NAME:<myName> QTH:<myQTH> GRID:<myGrid> K<TX>"},
+        {8,  "TU 73",    "<theirCall> DE <myCall> TU 73 K<TX>"},
+        {9,  "AGN?",     "AGN? PSE RPT K<TX>"},
     };
 
     for (int i = 0; i < NUM_MACROS; i++) {
@@ -149,11 +149,17 @@ void MacroPanel::onMacroClicked(int index) {
     QString raw = m_macroText[index];
     if (raw.trimmed().isEmpty()) return;
 
-    QString text = expandMacro(raw);
-    text.remove("<TX>", Qt::CaseInsensitive);
-    text = text.trimmed();
+    // Detect behavioral tags before expansion
+    bool autoTx     = raw.contains("<TX>",  Qt::CaseInsensitive);
+    bool clearFirst = raw.contains("<clr>", Qt::CaseInsensitive);
 
-    emit macroTriggered(text);
+    // Strip behavioral tags before expanding content tags
+    raw.remove("<TX>",  Qt::CaseInsensitive);
+    raw.remove("<clr>", Qt::CaseInsensitive);
+
+    QString expanded = expandMacro(raw).trimmed();
+
+    emit macroTriggered(expanded, clearFirst, autoTx);
 }
 
 void MacroPanel::onMacroRightClicked(int index) {
@@ -169,12 +175,16 @@ void MacroPanel::onMacroRightClicked(int index) {
     textEdit->setFont(QFont("Courier New", 9));
 
     auto* hint = new QLabel(
-        "Tags: &lt;myCall&gt; &lt;myParks&gt; &lt;mySOTA&gt; "
-        "&lt;myGrid&gt; &lt;myName&gt; &lt;myQTH&gt; "
-        "&lt;myState&gt; &lt;myCounty&gt; "
-        "&lt;theirCall&gt; &lt;rstSent&gt;");
+        "Tags:  <myCall>  <myName>  <myQTH>  <myGrid>\n"
+        "       <myParks> <mySOTA>  <myState> <myCounty>\n"
+        "       <myFD>    <theirCall>  <rstSent>\n"
+        "\n"
+        "<clr>  clear input before inserting\n"
+        "<TX>   auto-transmit after inserting");
+    hint->setTextFormat(Qt::PlainText);
     hint->setWordWrap(true);
-    hint->setStyleSheet("color: gray; font-size: 8pt;");
+    hint->setStyleSheet(
+        "color: #666; font-size: 8pt; font-family: 'Courier New';");
 
     form->addRow("Button Label:", labelEdit);
     form->addRow("Macro Text:",   textEdit);

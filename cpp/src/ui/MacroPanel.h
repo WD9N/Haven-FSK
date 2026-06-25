@@ -5,11 +5,15 @@
 
 // MacroPanel — flat 6×3 grid of 18 user-configurable macro buttons.
 //
-// Supported tags in macro text:
+// Expansion tags in macro text:
 //   <myCall>  <myParks>  <mySOTA>  <myGrid>  <myName>
 //   <myQTH>   <myState>  <myCounty>  <theirCall>  <rstSent>
 //
-// Left-click: expand tags and emit macroTriggered(text).
+// Behavioral tags (stripped before transmission):
+//   <clr> — clear TX input before inserting macro text
+//   <TX>  — auto-transmit after inserting macro text
+//
+// Left-click: expand tags and emit macroTriggered(text, clearFirst, autoTx).
 // Right-click: open edit dialog for label and macro text.
 
 class MacroPanel : public QWidget {
@@ -23,7 +27,9 @@ public:
     void setRsSent(const QString& rs)      { m_rsSent = rs; }
 
 signals:
-    void macroTriggered(const QString& text);
+    void macroTriggered(const QString& text,
+                        bool clearFirst,
+                        bool autoTx);
 
 private slots:
     void onMacroClicked(int index);

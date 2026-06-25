@@ -55,7 +55,6 @@ private slots:
     void onFrequencyChanged(uint64_t hz);
     void onWatchdogTripped();
     void onElementClicked(const QString& scheme, const QString& value);
-    void onMacroTriggered(const QString& text);
     void onContactLogged(const QVariantMap& fields);
     void onFieldDayToggled(bool enabled);
     void onExport();

@@ -478,7 +478,23 @@ void MainWindow::setupConnections() {
 
     // MacroPanel → TX input
     connect(m_macroPanel, &MacroPanel::macroTriggered,
-            this, &MainWindow::onMacroTriggered);
+            this, [this](const QString& text,
+                         bool clearFirst, bool autoTx) {
+                if (clearFirst) {
+                    m_txInput->setPlainText(text);
+                } else {
+                    QTextCursor cursor = m_txInput->textCursor();
+                    cursor.movePosition(QTextCursor::End);
+                    m_txInput->setTextCursor(cursor);
+                    m_txInput->insertPlainText(text);
+                }
+                QTextCursor cursor = m_txInput->textCursor();
+                cursor.movePosition(QTextCursor::End);
+                m_txInput->setTextCursor(cursor);
+                m_txInput->setFocus();
+                if (autoTx)
+                    QTimer::singleShot(50, this, &MainWindow::onTransmit);
+            });
 
     // TX message → RxDisplay (amber [TX] styling)
     connect(m_pipeline,
@@ -772,9 +788,6 @@ void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
     }
 }
 
-void MainWindow::onMacroTriggered(const QString& text) {
-    m_txInput->setPlainText(text);
-}
 
 void MainWindow::onContactLogged(const QVariantMap& fields) {
     if (m_logManager && m_logManager->isOpen()) {
