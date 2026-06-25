@@ -31,7 +31,7 @@ constexpr int PREAMBLE_LENGTH        = 16;
 constexpr int PREAMBLE_SYMBOLS[16]   = {
     0,15,0,15,7,8,7,8,0,15,0,15,7,8,7,8
 };
-constexpr double PREAMBLE_THRESHOLD  = 1.4;  // correlation score
+constexpr double PREAMBLE_THRESHOLD  = 8.0;  // minimum exact symbol matches (out of 16) → score >= 0.5
 
 // ── FEC ────────────────────────────────────────────────────────
 constexpr int LDPC_N                 = 192;  // coded bits
@@ -55,17 +55,6 @@ constexpr double DCD_THRESHOLD_DB    = 12.0;
 constexpr double DCD_FREQ_LOW        = 450.0;
 constexpr double DCD_FREQ_HIGH       = 1050.0;
 constexpr int    DCD_HOLDOFF_CHUNKS  = 4;
-
-// ── TX backoff ─────────────────────────────────────────────────
-// Three-tier system — see DECISIONS.md ADR-015
-// CQ: no backoff — operator has checked frequency
-constexpr int BACKOFF_CQ_MS              = 0;
-// Activator (POTA/SOTA reference set): minimal backoff
-constexpr int BACKOFF_ACTIVATOR_MIN_MS   = 0;
-constexpr int BACKOFF_ACTIVATOR_MAX_MS   = 50;
-// Standard: floor prevents collision with activator
-constexpr int BACKOFF_STANDARD_MIN_MS    = 50;
-constexpr int BACKOFF_STANDARD_MAX_MS    = 300;
 
 // ── FFT parameters ─────────────────────────────────────────────
 // 8x zero-padding per spec §3.5

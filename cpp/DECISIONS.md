@@ -1657,3 +1657,22 @@ This inverted correct gain structure — attenuation before the
 fader rather than after. With 0dBFS Modulator output and Thetis
 VAC1 TX Gain at 0dB, the HAVEN fader has full meaningful control
 range.
+
+## ADR-087 — PTTManager simplified, DCD advisory only
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** PTTManager reduced to PTT sequencing only.
+requestTX() keys PTT immediately with no backoff, no DCD check,
+no operating mode logic. Only the 120-second watchdog remains as
+a safety feature. DCD energy detector remains active but only
+updates the visual indicator — never blocks or delays TX.
+
+**Reasoning:** DCD-based TX blocking caused PTT to be denied while
+audio played anyway — radio never keyed but audio was sent to VAC.
+This is worse than no collision avoidance at all. For a
+conversational HF mode used by licensed operators, operating
+convention (listen before transmitting) is the correct collision
+avoidance mechanism. Automatic blocking conflicts with weak signal
+operation and creates unpredictable TX behavior.

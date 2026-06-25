@@ -57,7 +57,6 @@ private slots:
     void onRadioDisconnected();
     void onFrequencyChanged(uint64_t hz);
     void onWatchdogTripped();
-    void onChannelBusy();
     void onElementClicked(const QString& scheme, const QString& value);
     void onMacroTriggered(const QString& text, bool autoTx);
     void onContactLogged(const QVariantMap& fields);

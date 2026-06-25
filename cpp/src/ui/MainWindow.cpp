@@ -56,8 +56,6 @@ MainWindow::MainWindow(QWidget* parent)
     m_pttManager = new PTTManager(nullptr, this);
     connect(m_pttManager, &PTTManager::watchdogTripped,
             this, &MainWindow::onWatchdogTripped);
-    connect(m_pttManager, &PTTManager::channelBusy,
-            this, &MainWindow::onChannelBusy);
 
     setupMenu();
     setupUi();
@@ -405,10 +403,8 @@ void MainWindow::setupConnections() {
     // DspPipeline → AudioEngine (TX audio) — PTT lead then audio
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
             this, [this](const std::vector<float>& samples) {
-                QString outDev  = HavenFSK::savedOutputDevice();
-                bool isCQ       = m_pipeline->lastTxWasCQ();
-                bool dcdActive  = m_pipeline->dcdActive();
-                int  leadMs     = HavenFSK::pttLeadMs();
+                QString outDev = HavenFSK::savedOutputDevice();
+                int     leadMs = HavenFSK::pttLeadMs();
 
                 // Compute initial gain from TX fader and show expected level
                 float initialGain = 1.0f;
@@ -423,7 +419,13 @@ void MainWindow::setupConnections() {
                 }
 
                 if (m_pttManager && m_radio && m_radio->isConnected()) {
-                    m_pttManager->requestTX(isCQ, dcdActive);
+                    bool pttOk = m_pttManager->requestTX();
+                    if (!pttOk) {
+                        qWarning() << "TX: PTT request failed — aborting";
+                        m_pipeline->onTxComplete();
+                        onTxComplete();
+                        return;
+                    }
                     qDebug() << "TX: PTT asserted, waiting"
                              << leadMs << "ms lead time";
                     QTimer::singleShot(leadMs, this,
@@ -566,14 +568,6 @@ void MainWindow::startRadio() {
                 });
                 connect(m_pttManager, &PTTManager::watchdogTripped,
                         this, &MainWindow::onWatchdogTripped);
-                connect(m_pttManager, &PTTManager::channelBusy,
-                        this, &MainWindow::onChannelBusy);
-                // Set operating mode from station info
-                HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
-                m_pttManager->setOperatingMode(
-                    info.isActivator()
-                    ? HavenFSK::OperatingMode::Activator
-                    : HavenFSK::OperatingMode::Standard);
             });
     connect(m_radio, &RadioInterface::disconnected,
             this, &MainWindow::onRadioDisconnected);
@@ -622,15 +616,6 @@ void MainWindow::onSettingsChanged() {
             "⚠  Enter callsign in Settings before transmitting");
     else
         m_statusLabel->setText("Listening...");
-
-    // Update PTTManager operating mode when station info changes
-    if (m_pttManager) {
-        HavenFSK::StationInfo si = HavenFSK::loadStationInfo();
-        m_pttManager->setOperatingMode(
-            si.isActivator()
-            ? HavenFSK::OperatingMode::Activator
-            : HavenFSK::OperatingMode::Standard);
-    }
 
     // Restart audio only — radio reconnects only from RadioConfigDialog
     // (onSettingsChanged has no radio tab; calling startRadio() here
@@ -771,9 +756,6 @@ void MainWindow::onWatchdogTripped() {
     onTxComplete();
 }
 
-void MainWindow::onChannelBusy() {
-    m_statusLabel->setText("Channel busy — waiting for clear frequency");
-}
 
 void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
     m_logPanel->populateField(scheme, value);
