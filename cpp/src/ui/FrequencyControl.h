@@ -20,10 +20,10 @@
 // Paints its own text and highlight box — no QLineEdit text cursor.
 // System cursor hidden (BlankCursor) when over a scrollable digit.
 //
-// Format: "14.074000" (MHz, 6 dp) — 9 chars, one decimal point
-// Index:  0='1'(disabled) 1='4'(1MHz) 2='.'(dot)
-//         3='0'(100kHz)   4='7'(10kHz) 5='4'(1kHz)
-//         6='0'(100Hz)    7='0'(10Hz)  8='0'(1Hz)
+// Format: "14.074.000" (MHz, 10 chars, always 2-digit MHz with leading zero)
+// Index:  0='1'(10MHz,disabled) 1='4'(1MHz) 2='.'
+//         3='0'(100kHz) 4='7'(10kHz) 5='4'(1kHz) 6='.'
+//         7='0'(100Hz)  8='0'(10Hz)  9='0'(1Hz)
 class DigitDisplay : public QWidget {
     Q_OBJECT
 public:
@@ -45,8 +45,14 @@ public:
             m_text.clear();
             m_placeholder = true;
         } else {
-            m_text = QString::number(
-                static_cast<double>(hz) / 1.0e6, 'f', 6);
+            uint64_t hzPart  = hz % 1000;
+            uint64_t khz     = hz / 1000;
+            uint64_t kHzPart = khz % 1000;
+            uint64_t mHz     = khz / 1000;
+            m_text = QString("%1.%2.%3")
+                     .arg(mHz,    2, 10, QChar('0'))
+                     .arg(kHzPart, 3, 10, QChar('0'))
+                     .arg(hzPart,  3, 10, QChar('0'));
             m_placeholder = false;
         }
         update();
@@ -184,8 +190,12 @@ protected:
 
     void keyPressEvent(QKeyEvent* e) override {
         if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            // Strip digit-group separator before parsing: "14.074.000" → "14.074000"
+            QString s = m_text;
+            int secondDot = s.indexOf('.', s.indexOf('.') + 1);
+            if (secondDot >= 0) s.remove(secondDot, 1);
             bool ok   = false;
-            double mhz = m_text.toDouble(&ok);
+            double mhz = s.toDouble(&ok);
             if (ok && mhz >= 1.0 && mhz <= 30.0) {
                 uint64_t hz = static_cast<uint64_t>(mhz * 1.0e6);
                 setFrequencyHz(hz);
@@ -197,19 +207,19 @@ protected:
     }
 
 private:
-    // "14.074000" has ONE decimal point (idx 2). No second dot.
-    // idx: 0=disabled 1=1MHz 2=dot 3=100kHz 4=10kHz 5=1kHz
-    //      6=100Hz    7=10Hz 8=1Hz
+    // "14.074.000" — 10 chars, dots at idx 2 and idx 6
+    // idx: 0=10MHz(disabled) 1=1MHz 2=dot 3=100kHz 4=10kHz 5=1kHz
+    //      6=dot 7=100Hz 8=10Hz 9=1Hz
     uint64_t stepForIndex(int idx) const {
         switch (idx) {
             case 1: return 1000000ULL;  // 1MHz
             case 3: return  100000ULL;  // 100kHz
             case 4: return   10000ULL;  // 10kHz
             case 5: return    1000ULL;  // 1kHz
-            case 6: return     100ULL;  // 100Hz
-            case 7: return      10ULL;  // 10Hz
-            case 8: return       1ULL;  // 1Hz
-            default: return      0ULL;  // idx 0 (10MHz) or idx 2 (dot)
+            case 7: return     100ULL;  // 100Hz
+            case 8: return      10ULL;  // 10Hz
+            case 9: return       1ULL;  // 1Hz
+            default: return      0ULL;  // dots (idx 2, 6) and 10MHz (idx 0)
         }
     }
 
