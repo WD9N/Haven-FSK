@@ -1,31 +1,233 @@
 #pragma once
 #include <QWidget>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
-#include <QLabel>
 #include <QMenu>
 #include <QAction>
-#include <QDoubleValidator>
 #include <QFont>
 #include <QFontMetrics>
 #include <QWheelEvent>
 #include <QMouseEvent>
-#include <QPalette>
-#include <QTimer>
+#include <QKeyEvent>
+#include <QPainter>
+#include <QCursor>
 #include <cstdint>
 #include <algorithm>
 
-// FrequencyControl — editable frequency display with increment buttons.
+// ── DigitDisplay ──────────────────────────────────────────────────────────────
+// Custom frequency display with digit-scroll tuning.
+// Paints its own text and highlight box — no QLineEdit text cursor.
+// System cursor hidden (BlankCursor) when over a scrollable digit.
 //
-// Always editable — works with or without rig control (Fix 11).
-// Amber text: rig-controlled frequency.
-// Grey text: manual entry mode (no rig connected).
-//
-// Emits frequencyRequested(hz) when operator requests a change.
-// Call setFrequency(hz) to update display from rig control feedback.
+// Format: "14.074000" (MHz, 6 dp)
+// Index:   0=10MHz(disabled) 1=1MHz 2=. 3=100kHz 4=10kHz
+//          5=1kHz 6=. 7=100Hz 8=10Hz 9=1Hz
+class DigitDisplay : public QWidget {
+    Q_OBJECT
+public:
+    explicit DigitDisplay(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setFont(QFont("Courier New", 11, QFont::Bold));
+        setCursor(Qt::ArrowCursor);
+        setMouseTracking(true);
+        setMinimumWidth(115);
+        setMaximumWidth(155);
+        setFixedHeight(fontMetrics().height() + 8);
+        setFocusPolicy(Qt::ClickFocus);
+    }
 
+    void setFrequencyHz(uint64_t hz) {
+        m_hz = hz;
+        if (hz == 0) {
+            m_text.clear();
+            m_placeholder = true;
+        } else {
+            m_text = QString::number(
+                static_cast<double>(hz) / 1.0e6, 'f', 6);
+            m_placeholder = false;
+        }
+        m_hoveredDigit = -1;
+        update();
+    }
+
+    void setRigControlled(bool rig) {
+        m_rigControlled = rig;
+        update();
+    }
+
+    uint64_t hz() const { return m_hz; }
+
+signals:
+    void frequencyRequested(uint64_t hz);
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.fillRect(rect(), QColor(0x0d, 0x11, 0x17));
+
+        QFontMetrics fm(font());
+        int charW = fm.horizontalAdvance('0');
+        int charH = fm.height();
+        int textY = (height() + charH) / 2 - fm.descent();
+        int textX = 4;
+
+        if (m_placeholder || m_text.isEmpty()) {
+            p.setPen(QColor(0x55, 0x55, 0x55));
+            p.drawText(textX, textY, "Enter MHz");
+            return;
+        }
+
+        // Highlight box behind hovered digit
+        if (m_hoveredDigit >= 0 &&
+            m_hoveredDigit < m_text.length() &&
+            m_text.at(m_hoveredDigit) != '.') {
+            int boxX = textX + m_hoveredDigit * charW;
+            QRect box(boxX - 1, 2, charW + 2, height() - 4);
+            p.fillRect(box, QColor(0x2a, 0x2a, 0x5a));
+            p.setPen(QColor(0x44, 0x44, 0x88));
+            p.drawRect(box.adjusted(0, 0, -1, -1));
+        }
+
+        QColor normalColor = m_rigControlled
+            ? QColor(0xff, 0xaa, 0x00)
+            : QColor(0x88, 0x88, 0x88);
+
+        for (int i = 0; i < m_text.length(); i++) {
+            int  cx = textX + i * charW;
+            QChar c = m_text.at(i);
+
+            if (c == '.') {
+                p.setPen(normalColor.darker(150));
+            } else if (i == m_hoveredDigit) {
+                p.setPen(QColor(0xff, 0xcc, 0x44));  // bright amber on hover
+            } else {
+                p.setPen(normalColor);
+            }
+            p.drawText(cx, textY, QString(c));
+        }
+
+        // "MHz" suffix
+        p.setPen(QColor(0x55, 0x55, 0x55));
+        p.setFont(QFont("Arial", 8));
+        p.drawText(textX + m_text.length() * charW + 4, textY, "MHz");
+    }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (m_text.isEmpty()) return;
+
+        QFontMetrics fm(font());
+        int charW = fm.horizontalAdvance('0');
+        int textX = 4;
+
+        int idx = (e->pos().x() - textX) / charW;
+        idx = std::max(0, std::min(static_cast<int>(m_text.length()) - 1, idx));
+
+        // Dots and 10MHz digit (index 0) are not interactive
+        if (m_text.at(idx) == '.' || idx == 0) {
+            if (m_hoveredDigit != -1) {
+                m_hoveredDigit = -1;
+                setCursor(Qt::ArrowCursor);
+                update();
+            }
+            return;
+        }
+
+        if (idx != m_hoveredDigit) {
+            m_hoveredDigit = idx;
+            setCursor(Qt::BlankCursor);  // highlight box is sufficient feedback
+            update();
+        }
+    }
+
+    void leaveEvent(QEvent*) override {
+        m_hoveredDigit = -1;
+        setCursor(Qt::ArrowCursor);
+        update();
+    }
+
+    void wheelEvent(QWheelEvent* e) override {
+        if (m_hz == 0 || m_hoveredDigit < 0) return;
+        if (m_text.at(m_hoveredDigit) == '.' || m_hoveredDigit == 0) return;
+
+        uint64_t step = stepForIndex(m_hoveredDigit);
+        if (step == 0) return;
+
+        int delta = e->angleDelta().y() > 0 ? 1 : -1;
+
+        int64_t newHz = static_cast<int64_t>(m_hz)
+                      + delta * static_cast<int64_t>(step);
+
+        newHz = std::max(static_cast<int64_t>(1000000),
+                std::min(static_cast<int64_t>(30000000), newHz));
+
+        // Zero all digits below the scrolled digit
+        uint64_t rounded = (static_cast<uint64_t>(newHz) / step) * step;
+
+        setFrequencyHz(rounded);
+        emit frequencyRequested(rounded);
+
+        // Restore highlight — setFrequencyHz() cleared m_hoveredDigit
+        m_hoveredDigit = digitUnderMouse();
+        update();
+    }
+
+    void mousePressEvent(QMouseEvent*) override {
+        setFocus();
+    }
+
+    void keyPressEvent(QKeyEvent* e) override {
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            bool ok   = false;
+            double mhz = m_text.toDouble(&ok);
+            if (ok && mhz >= 1.0 && mhz <= 30.0) {
+                uint64_t hz = static_cast<uint64_t>(mhz * 1.0e6);
+                setFrequencyHz(hz);
+                emit frequencyRequested(hz);
+            }
+            return;
+        }
+        QWidget::keyPressEvent(e);
+    }
+
+private:
+    uint64_t stepForIndex(int idx) const {
+        switch (idx) {
+            case 1: return 1000000ULL;
+            case 3: return  100000ULL;
+            case 4: return   10000ULL;
+            case 5: return    1000ULL;
+            case 7: return     100ULL;
+            case 8: return      10ULL;
+            case 9: return       1ULL;
+            default: return      0ULL;
+        }
+    }
+
+    int digitUnderMouse() const {
+        if (m_text.isEmpty()) return -1;
+        QPoint pos = mapFromGlobal(QCursor::pos());
+        QFontMetrics fm(font());
+        int charW = fm.horizontalAdvance('0');
+        int idx   = (pos.x() - 4) / charW;
+        idx = std::max(0, std::min(static_cast<int>(m_text.length()) - 1, idx));
+        if (m_text.at(idx) == '.' || idx == 0) return -1;
+        return idx;
+    }
+
+    uint64_t m_hz           {0};
+    QString  m_text;
+    bool     m_placeholder  {true};
+    bool     m_rigControlled{false};
+    int      m_hoveredDigit {-1};
+};
+
+// ── FrequencyControl ──────────────────────────────────────────────────────────
+// Frequency display + tuning control using DigitDisplay.
+// Amber: rig-controlled frequency. Grey: manual / no rig.
+// Emits frequencyRequested(hz) on digit scroll or ▲/▼ button.
 class FrequencyControl : public QWidget
 {
     Q_OBJECT
@@ -37,40 +239,18 @@ public:
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(2);
 
-        m_freqEdit = new QLineEdit(this);
-        m_freqEdit->setFont(QFont("Courier New", 11, QFont::Bold));
-        m_freqEdit->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_freqEdit->setMinimumWidth(115);
-        m_freqEdit->setMaximumWidth(135);
-        m_freqEdit->setValidator(
-            new QDoubleValidator(0.0, 450.0, 6, this));
-        m_freqEdit->setPlaceholderText("Enter MHz");
-        applyStyle(false);  // start in manual mode
+        m_freqDisplay = new DigitDisplay(this);
+        layout->addWidget(m_freqDisplay);
 
-        // Digit scroll tuning — event filter handles wheel and hover
-        m_freqEdit->installEventFilter(this);
-        m_freqEdit->setMouseTracking(true);
-
-        // Highlight palette: dark blue bg, amber text — matches frequency color
-        QPalette pal = m_freqEdit->palette();
-        pal.setColor(QPalette::Highlight,        QColor(0x2a, 0x2a, 0x5a));
-        pal.setColor(QPalette::HighlightedText,  QColor(0xff, 0xaa, 0x00));
-        m_freqEdit->setPalette(pal);
-
-        layout->addWidget(m_freqEdit);
-
-        // ▲/▼ step buttons
-        auto* btnCol = new QVBoxLayout;
+        // ▲/▼ step buttons — complement digit scroll for non-mouse input
+        auto* btnCol  = new QVBoxLayout;
         btnCol->setSpacing(1);
         m_upBtn   = new QPushButton("▲", this);
         m_downBtn = new QPushButton("▼", this);
         QString btnStyle =
             "QPushButton {"
-            "  background: #1a1a2e;"
-            "  color: #ffaa00;"
-            "  border: 1px solid #2a2a3e;"
-            "  font-size: 8pt;"
-            "  padding: 0px;"
+            "  background: #1a1a2e; color: #ffaa00;"
+            "  border: 1px solid #2a2a3e; font-size: 8pt; padding: 0px;"
             "}"
             "QPushButton:hover { background: #0f3460; }"
             "QPushButton:pressed { background: #162447; }";
@@ -84,40 +264,27 @@ public:
         btnCol->addWidget(m_downBtn);
         layout->addLayout(btnCol);
 
-        auto* mhzLabel = new QLabel("MHz", this);
-        mhzLabel->setStyleSheet("color: #888; font-size: 9pt;");
-        layout->addWidget(mhzLabel);
-
-        connect(m_freqEdit, &QLineEdit::returnPressed,
-                this, &FrequencyControl::onEnterPressed);
+        connect(m_freqDisplay, &DigitDisplay::frequencyRequested,
+                this,           &FrequencyControl::frequencyRequested);
         connect(m_upBtn,   &QPushButton::clicked,
                 this, [this]() { onStep(+1); });
         connect(m_downBtn, &QPushButton::clicked,
                 this, [this]() { onStep(-1); });
-
         for (auto* btn : {m_upBtn, m_downBtn}) {
             connect(btn, &QPushButton::customContextMenuRequested,
                     this, &FrequencyControl::onStepMenu);
         }
     }
 
-    // Update display from rig control (amber style)
     void setFrequency(uint64_t hz) {
-        m_currentHz      = hz;
-        m_rigControlled  = (hz > 0);
-        if (hz == 0) {
-            m_freqEdit->setText("");
-            m_freqEdit->setPlaceholderText("Enter MHz");
-            applyStyle(false);
-        } else {
-            m_freqEdit->setText(
-                QString::number(static_cast<double>(hz) / 1.0e6, 'f', 6));
-            applyStyle(true);
-        }
-        m_freqEdit->setToolTip(
+        m_currentHz     = hz;
+        m_rigControlled = (hz > 0);
+        m_freqDisplay->setFrequencyHz(hz);
+        m_freqDisplay->setRigControlled(m_rigControlled);
+        m_freqDisplay->setToolTip(
             m_rigControlled
-            ? "Frequency from rig control — click ▲▼ to adjust"
-            : "No rig control — type frequency in MHz and press Enter");
+            ? "Hover a digit and scroll to tune\n10MHz digit disabled"
+            : "No rig control — digit scroll inactive");
     }
 
     uint64_t frequency() const { return m_currentHz; }
@@ -125,38 +292,7 @@ public:
 signals:
     void frequencyRequested(uint64_t hz);
 
-protected:
-    bool eventFilter(QObject* obj, QEvent* event) override {
-        if (obj != m_freqEdit)
-            return QWidget::eventFilter(obj, event);
-
-        if (event->type() == QEvent::Wheel) {
-            auto* we = static_cast<QWheelEvent*>(event);
-            onDigitWheel(we);
-            return true;
-        }
-        if (event->type() == QEvent::MouseMove) {
-            auto* me = static_cast<QMouseEvent*>(event);
-            onDigitHover(me->pos().x());
-            return false;
-        }
-        if (event->type() == QEvent::Leave) {
-            m_freqEdit->deselect();
-            m_hoveredDigit = -1;
-            return false;
-        }
-        return QWidget::eventFilter(obj, event);
-    }
-
 private slots:
-    void onEnterPressed() {
-        bool ok = false;
-        double mhz = m_freqEdit->text().toDouble(&ok);
-        if (!ok || mhz <= 0.0) return;
-        m_currentHz = static_cast<uint64_t>(mhz * 1.0e6);
-        emit frequencyRequested(m_currentHz);
-    }
-
     void onStep(int dir) {
         if (m_currentHz == 0) return;
         int64_t n = static_cast<int64_t>(m_currentHz)
@@ -190,108 +326,10 @@ private slots:
     }
 
 private:
-    static constexpr uint64_t FREQ_MIN_HZ =  1000000ULL;  // 1 MHz
-    static constexpr uint64_t FREQ_MAX_HZ = 30000000ULL;  // 30 MHz
-
-    // Map x pixel to character index in the frequency string.
-    // Text is right-aligned, so compute text start from contentsRect.
-    // Format: "14.074000" — 9 chars, indices 0-8.
-    int digitAtX(int x) const {
-        QString text = m_freqEdit->text();
-        if (text.isEmpty()) return -1;
-
-        QFontMetrics fm(m_freqEdit->font());
-        int charWidth = fm.horizontalAdvance(QChar('0'));
-
-        // Right-aligned: text ends at contentsRect right - 4px stylesheet padding
-        int rightEdge  = m_freqEdit->contentsRect().right() - 4;
-        int textStartX = rightEdge - charWidth * text.length();
-
-        int charIndex = (x - textStartX) / charWidth;
-        if (charIndex < 0 || charIndex >= text.length()) return -1;
-
-        QChar c = text.at(charIndex);
-        if (c == '.') return -1;
-
-        return charIndex;
-    }
-
-    // Hz step for character index in "14.074000":
-    // idx 0='1'(10M) 1='4'(1M) 2='.'  3='0'(100k) 4='7'(10k)
-    // idx 5='4'(1k)  6='.'     7='0'(100Hz) 8='0'(10Hz) 9='0'(1Hz)
-    uint64_t stepForDigitIndex(int idx) const {
-        switch (idx) {
-            case 0: return 10000000ULL;  // 10 MHz — disabled in hover
-            case 1: return  1000000ULL;  // 1 MHz
-            case 3: return   100000ULL;  // 100 kHz
-            case 4: return    10000ULL;  // 10 kHz
-            case 5: return     1000ULL;  // 1 kHz
-            case 7: return      100ULL;  // 100 Hz
-            case 8: return       10ULL;  // 10 Hz
-            case 9: return        1ULL;  // 1 Hz
-            default: return       0ULL;
-        }
-    }
-
-    void onDigitHover(int x) {
-        int digit = digitAtX(x);
-        if (digit == m_hoveredDigit) return;
-        m_hoveredDigit = digit;
-
-        if (digit > 0) {  // index 0 (10MHz) disabled
-            m_freqEdit->setSelection(digit, 1);
-        } else {
-            m_freqEdit->deselect();
-        }
-    }
-
-    void onDigitWheel(QWheelEvent* e) {
-        if (m_currentHz == 0) return;
-        if (m_hoveredDigit <= 0) return;  // -1 = none, 0 = 10MHz disabled
-
-        uint64_t step = stepForDigitIndex(m_hoveredDigit);
-        if (step == 0) return;
-
-        int delta = e->angleDelta().y() > 0 ? 1 : -1;
-
-        int64_t newHz = static_cast<int64_t>(m_currentHz)
-                      + delta * static_cast<int64_t>(step);
-
-        newHz = std::max(static_cast<int64_t>(FREQ_MIN_HZ),
-                std::min(static_cast<int64_t>(FREQ_MAX_HZ), newHz));
-
-        // Zero all digits below the scrolled digit
-        uint64_t rounded = (static_cast<uint64_t>(newHz) / step) * step;
-
-        setFrequency(rounded);
-        emit frequencyRequested(rounded);
-
-        // Restore selection after setText clears it
-        QTimer::singleShot(0, this, [this]() {
-            if (m_hoveredDigit > 0)
-                m_freqEdit->setSelection(m_hoveredDigit, 1);
-        });
-    }
-
-    void applyStyle(bool rigControlled) {
-        QString color = rigControlled ? "#ffaa00" : "#888888";
-        m_freqEdit->setStyleSheet(
-            QString("QLineEdit {"
-                    "  background: #0d1117;"
-                    "  color: %1;"
-                    "  border: 1px solid #2a2a3e;"
-                    "  padding: 2px 4px;"
-                    "}"
-                    "QLineEdit:focus {"
-                    "  border: 1px solid %1;"
-                    "}").arg(color));
-    }
-
-    QLineEdit*   m_freqEdit     {nullptr};
-    QPushButton* m_upBtn        {nullptr};
-    QPushButton* m_downBtn      {nullptr};
-    uint64_t     m_currentHz    {0};
-    int          m_stepHz       {100};
-    bool         m_rigControlled{false};
-    int          m_hoveredDigit {-1};
+    DigitDisplay* m_freqDisplay   {nullptr};
+    QPushButton*  m_upBtn         {nullptr};
+    QPushButton*  m_downBtn       {nullptr};
+    uint64_t      m_currentHz     {0};
+    int           m_stepHz        {100};
+    bool          m_rigControlled {false};
 };

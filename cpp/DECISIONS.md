@@ -1804,3 +1804,30 @@ digitAtX() accounts for right-aligned text using contentsRect().
 **Reasoning:** Digit scroll tuning is standard UX in SDR applications.
 Operators familiar with SDR software expect this behavior. Rounding
 mirrors mechanical VFO encoder behavior on traditional radios.
+
+## ADR-094 — FrequencyControl replaced with custom DigitDisplay widget
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** QLineEdit frequency display replaced with custom DigitDisplay
+QWidget that paints its own text and digit highlight box using QPainter.
+System cursor hidden (Qt::BlankCursor) when hovering a scrollable digit.
+A painted rectangle highlights the digit under the cursor. Mouse wheel
+applies step for that digit with automatic rounding of lower digits to
+zero via integer division: newHz = (newHz / step) * step. 10MHz digit
+(index 0) disabled. Frequency clamped to 1-30MHz.
+
+**Why custom widget instead of QLineEdit + event filter:**
+QLineEdit places its own text cursor on click, causing visual confusion
+with digit-scroll tuning. QLineEdit's internal left margin and padding
+are platform-dependent, making pixel-accurate hit testing unreliable.
+The custom widget gives exact control over cursor appearance, highlight
+box position, character metrics, and event handling.
+
+**Digit layout (format "14.074000"):**
+Index 0=10MHz(disabled) 1=1MHz 2=dot 3=100kHz 4=10kHz 5=1kHz
+6=dot 7=100Hz 8=10Hz 9=1Hz
+
+**Rounding:** newHz = (newHz/step)*step — zeroes all digits below the
+scrolled digit in one integer operation.
