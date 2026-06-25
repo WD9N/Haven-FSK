@@ -1781,3 +1781,26 @@ by including or omitting <TX>. <clr> prevents accidental
 concatenation of macro text onto existing content. Backwards
 compatible — macros without tags append text and wait for
 operator input.
+
+## ADR-093 — FrequencyControl digit scroll tuning
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** FrequencyControl QLineEdit supports mouse wheel digit
+tuning. Hovering over a digit highlights it via setSelection() — dark
+blue background, amber text, no cursor change or tooltip. Scrolling
+applies the digit's step and zeros all lower digits via integer
+division: newHz = (newHz / step) * step. 10MHz digit (index 0)
+disabled to prevent coarse accidental changes. Frequency clamped to
+1-30MHz. Event filter on m_freqEdit intercepts wheel and mouse events.
+digitAtX() accounts for right-aligned text using contentsRect().
+
+**Rounding examples:**
+- Scroll 1kHz at 14.087.432: result 14.088.000 or 14.086.000
+- Scroll 100Hz at 14.087.432: result 14.087.500 or 14.087.300
+- Scroll 10Hz at 14.087.432: result 14.087.440 or 14.087.420
+
+**Reasoning:** Digit scroll tuning is standard UX in SDR applications.
+Operators familiar with SDR software expect this behavior. Rounding
+mirrors mechanical VFO encoder behavior on traditional radios.
