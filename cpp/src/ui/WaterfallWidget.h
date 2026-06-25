@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QComboBox>
 #include <QSlider>
+#include <QSpinBox>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -43,6 +44,12 @@ public:
     // Update AFC offset for floating green marker lines.
     void setAfcOffset(float hz);
 
+    // Adjust the dBFS floor for color mapping (display only).
+    // Lower = more sensitive. Range: -140 to 0.
+    void setFloorDb(float db) {
+        m_floorDb = std::max(-140.0f, std::min(0.0f, db));
+    }
+
 signals:
     // Emitted when operator left-clicks after right-click tuning.
     // audioHz: the audio frequency clicked.
@@ -72,9 +79,8 @@ private:
     void  drawOverlays(QPainter& p, int w, int h) const;
 
     static constexpr int   WATERFALL_ROWS = 120;
-    static constexpr int   FFT_SIZE       = 2048;
-    static constexpr float DB_MIN         = -60.0f;
-    static constexpr float DB_MAX         =  40.0f;
+    static constexpr int   FFT_SIZE       = 4096;  // 11.7 Hz/bin at 48kHz
+    static constexpr int   HOP_SIZE       = FFT_SIZE / 2;  // 50% overlap
 
     // Display state
     QImage  m_image;
@@ -91,8 +97,10 @@ private:
     // FFT accumulation across chunk boundaries
     std::vector<float> m_fftAccum;
 
-    // Color palette
+    // Color palette and level
     QRgb    m_palette[256];
+    float   m_floorDb  = -60.0f;  // dBFS floor for color mapping
+    float   m_rangeDb  =  80.0f;  // dynamic range (fixed)
 
     // AFC offset — drives floating green marker lines
     float   m_afcOffsetHz = 0.0f;
@@ -109,5 +117,6 @@ private:
     QSlider*   m_speedSlider  {nullptr};
     QLabel*    m_speedLabel   {nullptr};
     QComboBox* m_paletteCombo {nullptr};
+    QSpinBox*  m_levelSpinBox {nullptr};
     QLabel*    m_afcLabel     {nullptr};
 };

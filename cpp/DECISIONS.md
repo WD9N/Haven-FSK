@@ -1712,3 +1712,24 @@ can see signal presence on waterfall; RX window shows when decoding
 occurs; "DCD: ON" label implied active TX blocking which no longer
 exists; cleaner status bar. Status bar now shows: frequency, rig
 connection status, RX level bar, and operational status text.
+
+## ADR-090 — Waterfall floor control and resolution improvement
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** WaterfallWidget floor level adjustable via QSpinBox in
+toolbar (-140 to 0 dBFS, default -60, step 5, persisted in QSettings).
+dbToColor() uses m_floorDb / m_rangeDb (80 dB fixed range) instead of
+compile-time DB_MIN/DB_MAX constants. FFT_SIZE increased from 2048 to
+4096 with 50% overlap (HOP_SIZE=2048) — doubles frequency resolution
+from 23.4 Hz/bin to 11.7 Hz/bin. computeFFT() drains all accumulated
+hops per call (allocating one kiss_fftr_cfg), returning the most recent
+frame. Linear interpolation between bins in addRow() already present.
+All changes are display-only — decode path uses its own FFT.
+
+**Reasoning:** Fixed floor at -60 dBFS made the waterfall too dim on
+strong signals and too noisy on weak signal bands. Adjustable floor
+lets the operator tune sensitivity to match band conditions. Larger FFT
+improves ability to distinguish adjacent HAVEN-FSK signals and nearby
+interference without changing scroll rate.

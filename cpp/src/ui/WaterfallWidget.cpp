@@ -158,6 +158,24 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
         "background:#1a1a2e; color:#ccc; border:1px solid #333;");
     tl->addWidget(m_paletteCombo);
 
+    auto* ll = new QLabel("Level:", m_toolbar);
+    ll->setStyleSheet("color: #888; font-size: 9pt;");
+    tl->addWidget(ll);
+    m_levelSpinBox = new QSpinBox(m_toolbar);
+    m_levelSpinBox->setRange(-140, 0);
+    m_levelSpinBox->setValue(-60);
+    m_levelSpinBox->setSuffix(" dB");
+    m_levelSpinBox->setSingleStep(5);
+    m_levelSpinBox->setFixedWidth(76);
+    m_levelSpinBox->setStyleSheet(
+        "background:#1a1a2e; color:#ccc; border:1px solid #333;");
+    m_levelSpinBox->setToolTip(
+        "Waterfall floor level in dBFS\n"
+        "Lower = more sensitive\n"
+        "Higher = less clutter\n"
+        "Does not affect decoding");
+    tl->addWidget(m_levelSpinBox);
+
     m_afcLabel = new QLabel("AFC: --", m_toolbar);
     m_afcLabel->setStyleSheet(
         "color:#555; font-family:'Courier New'; font-size:9pt;");
@@ -188,12 +206,15 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
     int ri = s.value("waterfall/rangeIndex",   3).toInt();
     int si = s.value("waterfall/speedIndex",   0).toInt();
     int pi = s.value("waterfall/paletteIndex", 0).toInt();
+    int li = s.value("waterfall/floorDb",    -60).toInt();
     m_rangeCombo->setCurrentIndex(std::clamp(ri, 0, 5));
     m_speedSlider->setValue(std::clamp(si, 0, 3));
     m_paletteCombo->setCurrentIndex(std::clamp(pi, 0, 3));
+    m_levelSpinBox->setValue(std::clamp(li, -140, 0));
     onRangeChanged(m_rangeCombo->currentIndex());
     onSpeedChanged(m_speedSlider->value());
     onPaletteChanged(m_paletteCombo->currentIndex());
+    setFloorDb(static_cast<float>(m_levelSpinBox->value()));
 
     connect(m_rangeCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -203,6 +224,12 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
     connect(m_paletteCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &WaterfallWidget::onPaletteChanged);
+    connect(m_levelSpinBox,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int val) {
+                setFloorDb(static_cast<float>(val));
+                QSettings().setValue("waterfall/floorDb", val);
+            });
 }
 
 void WaterfallWidget::onRangeChanged(int index) {
@@ -268,32 +295,44 @@ std::vector<float> WaterfallWidget::computeFFT(
     m_fftAccum.insert(m_fftAccum.end(), samples.begin(), samples.end());
     if (static_cast<int>(m_fftAccum.size()) < FFT_SIZE) return {};
 
-    std::vector<float> block(
-        m_fftAccum.begin(),
-        m_fftAccum.begin() + FFT_SIZE);
-    m_fftAccum.erase(
-        m_fftAccum.begin(),
-        m_fftAccum.begin() + FFT_SIZE);
-
-    // Hann window
-    for (int i = 0; i < FFT_SIZE; i++) {
-        float w = 0.5f * (1.0f - std::cos(
-            2.0f * static_cast<float>(M_PI) * i / (FFT_SIZE - 1)));
-        block[i] *= w;
-    }
-
+    // Allocate FFT config once — reused across all hops this call
     kiss_fftr_cfg cfg = kiss_fftr_alloc(FFT_SIZE, 0, nullptr, nullptr);
     std::vector<kiss_fft_cpx> out(FFT_SIZE / 2 + 1);
-    kiss_fftr(cfg, block.data(), out.data());
-    kiss_fftr_free(cfg);
+    std::vector<float> result;
 
-    int nBins = FFT_SIZE / 2 + 1;
-    std::vector<float> db(nBins);
-    for (int i = 0; i < nBins; i++) {
-        float mag = std::sqrt(out[i].r * out[i].r + out[i].i * out[i].i);
-        db[i] = 20.0f * std::log10(mag + 1e-10f);
+    // Process all complete frames with 50% overlap (HOP_SIZE = FFT_SIZE/2).
+    // If m_chunkSkip > 1 the buffer accumulates multiple hops between calls;
+    // drain them all and return the most recent frame for display.
+    while (static_cast<int>(m_fftAccum.size()) >= FFT_SIZE) {
+        std::vector<float> block(
+            m_fftAccum.begin(),
+            m_fftAccum.begin() + FFT_SIZE);
+
+        // Hann window
+        for (int i = 0; i < FFT_SIZE; i++) {
+            float w = 0.5f * (1.0f - std::cos(
+                2.0f * static_cast<float>(M_PI) * i / (FFT_SIZE - 1)));
+            block[i] *= w;
+        }
+
+        kiss_fftr(cfg, block.data(), out.data());
+
+        int nBins = FFT_SIZE / 2 + 1;
+        result.resize(nBins);
+        for (int i = 0; i < nBins; i++) {
+            float mag = std::sqrt(
+                out[i].r * out[i].r + out[i].i * out[i].i);
+            result[i] = 20.0f * std::log10(mag + 1e-10f);
+        }
+
+        // Advance by HOP_SIZE — second half becomes first half of next frame
+        m_fftAccum.erase(
+            m_fftAccum.begin(),
+            m_fftAccum.begin() + HOP_SIZE);
     }
-    return db;
+
+    kiss_fftr_free(cfg);
+    return result;  // most recent frame; empty only if buffer < FFT_SIZE
 }
 
 void WaterfallWidget::pushChunk(const std::vector<float>& samples) {
@@ -347,7 +386,7 @@ void WaterfallWidget::addRow(const std::vector<float>& magnitudesDb) {
 }
 
 QRgb WaterfallWidget::dbToColor(float db) const {
-    float t = (db - DB_MIN) / (DB_MAX - DB_MIN);
+    float t = (db - m_floorDb) / m_rangeDb;
     t = std::max(0.0f, std::min(1.0f, t));
     return m_palette[static_cast<int>(t * 255.0f)];
 }
