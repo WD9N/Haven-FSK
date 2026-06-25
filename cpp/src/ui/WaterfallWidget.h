@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdint>
 #include "../dsp/Constants.h"
+#include "kiss_fft.h"
 
 // WaterfallWidget — scrolling spectrogram display for HAVEN-FSK.
 //
@@ -36,6 +37,7 @@ class WaterfallWidget : public QWidget
     Q_OBJECT
 public:
     explicit WaterfallWidget(QWidget* parent = nullptr);
+    ~WaterfallWidget() override;
 
     // Feed raw audio chunk for FFT and display.
     // MUST be raw audio from AudioEngine — never AFC-corrected.
@@ -94,8 +96,15 @@ private:
     // Frequency range
     float   m_hzMax      = 3000.0f;
 
-    // FFT accumulation across chunk boundaries
-    std::vector<float> m_fftAccum;
+    // FFT overlap buffer — HOP_SIZE new samples per frame, FFT_SIZE window
+    std::vector<float> m_overlapBuffer;
+
+    // Persistent FFT config — allocated once, freed in destructor
+    kiss_fft_cfg m_fftCfg {nullptr};
+
+    // Hz per FFT bin — precomputed, used in addRow()
+    float m_binWidth {static_cast<float>(HavenFSK::SAMPLE_RATE)
+                      / static_cast<float>(FFT_SIZE)};
 
     // Color palette and level
     QRgb    m_palette[256];

@@ -1733,3 +1733,28 @@ strong signals and too noisy on weak signal bands. Adjustable floor
 lets the operator tune sensitivity to match band conditions. Larger FFT
 improves ability to distinguish adjacent HAVEN-FSK signals and nearby
 interference without changing scroll rate.
+
+## ADR-091 — Waterfall FFT 4096 with 50% overlap and linear interpolation
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** WaterfallWidget FFT_SIZE increased from 2048 to 4096 with
+HOP_SIZE=2048 (50% overlap). One waterfall row generated per HOP_SIZE
+samples — same scroll rate as before. Persistent kiss_fft_cfg allocated
+once in constructor and freed in destructor (replaces per-call alloc/free).
+Complex kiss_fft used with zero imaginary input. m_binWidth precomputed
+as SAMPLE_RATE/FFT_SIZE. Linear interpolation between adjacent FFT bins
+in addRow() uses m_binWidth for exact sub-bin positioning.
+
+**Resolution improvement:**
+- Before: 23.4 Hz/bin (2048 FFT), blocky pixel steps
+- After:  11.7 Hz/bin (4096 FFT) + smooth interpolation
+
+**CPU cost:** Negligible — KissFFT 4096-point at 48kHz is trivial on
+any target hardware. Persistent cfg eliminates per-call alloc overhead.
+
+**Reasoning:** 2048-point FFT produced 23.4Hz/bin width visible as
+rectangular blocks on the display. Doubling FFT size halves bin width.
+Linear interpolation smooths remaining steps. Both are display-only —
+the demodulator uses its own independent FFT pipeline and is unaffected.

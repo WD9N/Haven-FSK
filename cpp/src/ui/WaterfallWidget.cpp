@@ -9,7 +9,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
-#include "kiss_fftr.h"
+#include "kiss_fft.h"
 
 namespace {
 
@@ -105,7 +105,8 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
 {
     setFocusPolicy(Qt::ClickFocus);
     setMinimumHeight(80);
-    m_fftAccum.reserve(FFT_SIZE * 2);
+    m_overlapBuffer.reserve(FFT_SIZE * 2);
+    m_fftCfg = kiss_fft_alloc(FFT_SIZE, 0, nullptr, nullptr);
     buildEarthPalette(m_palette);
 
     auto* outerLayout = new QVBoxLayout(this);
@@ -232,6 +233,10 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
             });
 }
 
+WaterfallWidget::~WaterfallWidget() {
+    if (m_fftCfg) kiss_fft_free(m_fftCfg);
+}
+
 void WaterfallWidget::onRangeChanged(int index) {
     static const float ranges[] = {
         1500.f,2000.f,2500.f,3000.f,3500.f,4000.f };
@@ -292,47 +297,42 @@ void WaterfallWidget::setAfcOffset(float hz) {
 std::vector<float> WaterfallWidget::computeFFT(
     const std::vector<float>& samples)
 {
-    m_fftAccum.insert(m_fftAccum.end(), samples.begin(), samples.end());
-    if (static_cast<int>(m_fftAccum.size()) < FFT_SIZE) return {};
+    m_overlapBuffer.insert(m_overlapBuffer.end(),
+                           samples.begin(), samples.end());
+    if (static_cast<int>(m_overlapBuffer.size()) < FFT_SIZE) return {};
 
-    // Allocate FFT config once — reused across all hops this call
-    kiss_fftr_cfg cfg = kiss_fftr_alloc(FFT_SIZE, 0, nullptr, nullptr);
-    std::vector<kiss_fft_cpx> out(FFT_SIZE / 2 + 1);
+    std::vector<kiss_fft_cpx> in(FFT_SIZE), out(FFT_SIZE);
     std::vector<float> result;
 
-    // Process all complete frames with 50% overlap (HOP_SIZE = FFT_SIZE/2).
-    // If m_chunkSkip > 1 the buffer accumulates multiple hops between calls;
-    // drain them all and return the most recent frame for display.
-    while (static_cast<int>(m_fftAccum.size()) >= FFT_SIZE) {
-        std::vector<float> block(
-            m_fftAccum.begin(),
-            m_fftAccum.begin() + FFT_SIZE);
-
-        // Hann window
+    // Drain all complete frames; return the most recent for display.
+    // With 50% overlap (HOP_SIZE) m_chunkSkip>1 accumulates multiple hops —
+    // processing them all here keeps the buffer bounded.
+    while (static_cast<int>(m_overlapBuffer.size()) >= FFT_SIZE) {
+        // Hann-windowed complex input (imaginary = 0 for real signal)
         for (int i = 0; i < FFT_SIZE; i++) {
             float w = 0.5f * (1.0f - std::cos(
                 2.0f * static_cast<float>(M_PI) * i / (FFT_SIZE - 1)));
-            block[i] *= w;
+            in[i].r = m_overlapBuffer[i] * w;
+            in[i].i = 0.0f;
         }
 
-        kiss_fftr(cfg, block.data(), out.data());
+        kiss_fft(m_fftCfg, in.data(), out.data());
 
-        int nBins = FFT_SIZE / 2 + 1;
+        // Only positive frequencies (first FFT_SIZE/2 bins)
+        int nBins = FFT_SIZE / 2;
         result.resize(nBins);
         for (int i = 0; i < nBins; i++) {
-            float mag = std::sqrt(
-                out[i].r * out[i].r + out[i].i * out[i].i);
+            float mag = std::sqrt(out[i].r * out[i].r + out[i].i * out[i].i);
             result[i] = 20.0f * std::log10(mag + 1e-10f);
         }
 
-        // Advance by HOP_SIZE — second half becomes first half of next frame
-        m_fftAccum.erase(
-            m_fftAccum.begin(),
-            m_fftAccum.begin() + HOP_SIZE);
+        // 50% overlap — keep second half for next frame
+        m_overlapBuffer.erase(
+            m_overlapBuffer.begin(),
+            m_overlapBuffer.begin() + HOP_SIZE);
     }
 
-    kiss_fftr_free(cfg);
-    return result;  // most recent frame; empty only if buffer < FFT_SIZE
+    return result;
 }
 
 void WaterfallWidget::pushChunk(const std::vector<float>& samples) {
@@ -357,8 +357,6 @@ void WaterfallWidget::addRow(const std::vector<float>& magnitudesDb) {
         m_rowCount = 0;
     }
 
-    float hzPerBin = static_cast<float>(HavenFSK::SAMPLE_RATE)
-                   / static_cast<float>(FFT_SIZE);
     int nBins = static_cast<int>(magnitudesDb.size());
 
     // Scroll: copy rows 0..N-2 → 1..N-1 (newest at top = index 0)
@@ -369,16 +367,18 @@ void WaterfallWidget::addRow(const std::vector<float>& magnitudesDb) {
         std::memcpy(dst, src, m_imageWidth * sizeof(QRgb));
     }
 
-    // Paint new row at top
+    // Paint new row at top — linear interpolation between adjacent bins
     QRgb* row0 = reinterpret_cast<QRgb*>(m_image.scanLine(0));
     for (int x = 0; x < m_imageWidth; x++) {
-        float hz  = static_cast<float>(x) / m_imageWidth * m_hzMax;
-        float binF = hz / hzPerBin;
-        int   bin  = static_cast<int>(binF);
-        bin = std::clamp(bin, 0, nBins - 2);
-        float frac = binF - static_cast<float>(bin);
-        float db   = magnitudesDb[bin] * (1.0f - frac)
-                   + magnitudesDb[bin + 1] * frac;
+        float hz      = static_cast<float>(x) / m_imageWidth * m_hzMax;
+        float exactBin = hz / m_binWidth;
+        int   bin0    = static_cast<int>(exactBin);
+        int   bin1    = bin0 + 1;
+        bin0 = std::max(0, std::min(nBins - 1, bin0));
+        bin1 = std::max(0, std::min(nBins - 1, bin1));
+        float frac = exactBin - static_cast<float>(bin0);
+        float db   = magnitudesDb[bin0] * (1.0f - frac)
+                   + magnitudesDb[bin1] * frac;
         row0[x] = dbToColor(db);
     }
 
