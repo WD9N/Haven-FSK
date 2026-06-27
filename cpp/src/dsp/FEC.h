@@ -39,9 +39,14 @@ public:
     DecodeResult decodeBlock(const std::vector<float>& llr) const;
 
     // Decode nBlocks of concatenated LLR values to origLen bytes.
-    std::vector<uint8_t> decodeMessage(const std::vector<float>& llr,
-                                       int nBlocks,
-                                       int origLen) const;
+    struct DecodeMessageResult {
+        std::vector<uint8_t> bytes;  // decoded payload bytes (trimmed to origLen)
+        bool allConverged;           // true if every LDPC block converged
+        int totalIterations;         // sum of BP iterations across all blocks
+    };
+    DecodeMessageResult decodeMessage(const std::vector<float>& llr,
+                                      int nBlocks,
+                                      int origLen) const;
 
     // ── LLR Conversion ────────────────────────────────────────────────────
 

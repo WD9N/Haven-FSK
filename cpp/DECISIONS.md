@@ -1889,3 +1889,134 @@ over the full 16-symbol preamble from known-content audio.
 entirely. No partial decoding during reception. This is acceptable for
 HF conversational use where transmissions are short (typically 2-5 s)
 and the decode latency is measured in milliseconds, not seconds.
+
+## ADR-097 — Demodulator::demodulateToSoft accepts sample offset; timing sweep in preamble search
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** `Demodulator::demodulateToSoft(audio, sampleOffset=0)` gains an
+optional `sampleOffset` parameter that skips that many samples before slicing
+the audio into symbol-sized FFT blocks. `DspPipeline::tryFindPreamble()` uses
+this to run an 8-step timing sweep — trying sample offsets 0, 192, 384, 576,
+768, 960, 1152, 1344 (each 1/8 of a symbol period) — and selects the offset
+that yields the highest preamble correlation score.
+
+**Reasoning:** `demodulateToSoft` always starts slicing from sample 0 of the
+buffer. If the preamble begins mid-block (i.e., the actual symbol boundary
+does not align to a multiple of SAMPLES_PER_SYMBOL from the buffer start),
+every FFT window straddles two symbols. With 8× zero-padding and a Hann
+window, the energy from both symbols mixes in the FFT output — producing wrong
+hard decisions even on a clean signal. The timing sweep finds the alignment
+where symbol boundaries match the FFT grid. Cost: 8 demodulations per preamble
+scan, which is negligible at HAVEN-FSK baud rates.
+
+**Coarse pre-filter:** Before running the 8-step sweep, a single demodulation
+at offset 0 runs a quick preamble correlator. If the best score is below 0.18
+(barely above random chance for 16-tone symbols), the sweep is skipped. This
+keeps the scan cheap when no signal is present.
+
+## ADR-098 — Preamble-triggered RX decode; DCD advisory only
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** `DspPipeline` RX decode path is no longer triggered by DCD
+drop. DCD is retained solely as a UI signal-present indicator (drives the
+waterfall lamp and SNR meter). The decode path is now preamble-triggered:
+
+1. DCD-on → enter `Searching` state, begin accumulating audio.
+2. Every 4 audio chunks (~170 ms): run coarse+fine preamble scan on buffer.
+3. Preamble found (score ≥ 0.375) → enter `Collecting` state; measure and
+   store AFC offset from preamble soft symbols.
+4. `tryCompleteFrame()` called each new chunk: decodes the double header once
+   8 symbols are available (gets `nBlocks`), then waits until the exact number
+   of symbols needed for the complete frame are present, then decodes.
+5. After decode (success or failure): `resetRx()` → `Idle`.
+
+**Timeouts:** 8-second search timeout (after DCD drops, give up if no
+preamble found). 20-second collect timeout (safety valve if frame never
+completes).
+
+**RxState enum** changed from `Idle / Buffering / Decoding` to
+`Idle / Searching / Collecting`.
+
+**Reasoning:** The DCD-triggered architecture had two fatal failure modes:
+(a) DCD fires on noise before the signal arrives → leading buffer garbage
+pushes preamble toward the end of the buffer where there are too few trailing
+symbols for the frame. (b) DCD drops due to brief signal dip during reception
+→ buffer is truncated, frame is incomplete. By decoupling accumulation end
+from DCD state, the buffer continues growing after DCD drops until the
+complete frame arrives or the timeout fires.
+
+**Method added:** `Frame::frameSymsNeeded(nBlocks)` — public static helper
+that returns the total post-preamble symbol count for a given `nBlocks`,
+allowing `DspPipeline` to know exactly when to decode without coupling to
+Frame's private layout constants.
+
+## ADR-100 — AudioEngine verifies negotiated format on RX start
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** After `QAudioSource::start()`, `AudioEngine::startRx()` reads
+back the format Qt actually negotiated and logs it unconditionally. If the
+sample rate or channel count differs from the requested format, a warning is
+logged and `audioError()` is emitted so the UI can alert the operator.
+
+**What each mismatch does:**
+- Wrong sample rate (e.g., 44100 Hz): shifts all HAVEN tone bins by the
+  ratio, causing every tone hypothesis to miss its window. No decode is
+  possible.
+- Wrong channel count (e.g., stereo instead of mono): `pcmToFloat()`
+  interprets interleaved L,R int16 pairs as sequential mono samples, halving
+  the apparent sample rate and destroying all tone bin mapping. Root-caused
+  in a real debugging session where a VAC was set to 2 ch and the preamble
+  scanner produced only noise-level scores.
+
+**Why log even when correct:** VAC drivers and some USB audio devices silently
+deliver a different format than they advertise. Logging the actual negotiated
+format unconditionally means a mismatch is immediately visible in the debug
+log without needing to add print statements.
+
+**What is NOT done:** The pipeline does not refuse to start on a format
+mismatch. The operator receives a warning and may be able to correct the VAC
+configuration without restarting. Refusing to start would require a restart
+cycle and loses the ability to log the mismatch in context.
+
+## ADR-099 — Frame header sent twice for HF fade resilience
+
+**Status:** Decided
+**Date:** June 2026
+
+**Decision:** The 2-byte frame header (version/flags + nBlocks) is transmitted
+twice — 8 symbols total instead of 4 — as consecutive, continuous-phase
+symbols immediately after the preamble. The frame structure is now:
+
+```
+Preamble (16) | Header copy 1 (4) | Header copy 2 (4) | CRC (4) | Payload (nBlocks×48)
+```
+
+`PAYLOAD_START` updated from 8 to 12. `Frame::parse()` decodes both copies
+and logs a warning if they differ; copy 1 is used in all cases (CRC catches
+any remaining error).
+
+**TX:** `Frame::assemble()` calls `mod.modulate(hdrVec)` twice; the Modulator
+continuous-phase accumulator ensures no phase discontinuity between the two
+copies or at the header→CRC boundary.
+
+**RX:** `tryCompleteFrame()` peeks at both header copies before committing to
+`nBlocks`. If both agree, `nBlocks` is reliable. If they differ, copy 1 is
+used and the CRC provides the final integrity check.
+
+**Cost:** 4 additional symbols = 128 ms at 31.25 baud. Invisible in
+conversational HF use.
+
+**Reasoning:** The header is the only field that tells the decoder how long
+the frame is. If `nBlocks` is corrupted by a single HF fade (which can
+span 100–500 ms = 3–15 symbols), the decoder attempts to read the wrong
+number of payload symbols and the CRC catches it only after wasted effort.
+At 31.25 baud, a 4-symbol header sits entirely within one typical fade
+window. Sending it twice requires independent fades to corrupt both copies,
+which is highly improbable given typical HF propagation. This change was
+made together with ADR-098 since both require `PAYLOAD_START = 12`.

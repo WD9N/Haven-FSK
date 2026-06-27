@@ -9,13 +9,14 @@ namespace HavenFSK {
 
 // Result of a frame parse attempt
 struct ParseResult {
-    std::string text;     // decoded text, empty on failure
-    bool crcOk;           // true if CRC verified
-    bool converged;       // true if FEC BP converged
-    int nBlocks;          // FEC blocks decoded
-    uint8_t version;      // protocol version from header
-    bool useFec;          // whether FEC was active
-    std::string error;    // non-empty string on failure, empty on success
+    std::string text;       // decoded text, empty on failure
+    bool crcOk;             // true if CRC verified
+    bool converged;         // true if all FEC blocks converged
+    int nBlocks;            // FEC blocks decoded
+    int fecIterations;      // total BP iterations across all blocks (0 if no FEC)
+    uint8_t version;        // protocol version from header
+    bool useFec;            // whether FEC was active
+    std::string error;      // non-empty string on failure, empty on success
 };
 
 class Frame {
@@ -37,6 +38,13 @@ public:
     ParseResult parse(
         const std::vector<std::vector<float>>& softSymbols) const;
 
+    // Total post-preamble symbols needed for a complete frame.
+    // Used by DspPipeline::tryCompleteFrame() to know when to decode.
+    static int frameSymsNeeded(int nBlocks) {
+        return HEADER_TOTAL_SYMS + CRC_SYMS
+               + nBlocks * (LDPC_N / BITS_PER_SYMBOL);
+    }
+
     // ── CRC-16/CCITT-FALSE ────────────────────────────────────────────────
     // Polynomial 0x1021, init 0xFFFF, no reflection.
     // Known vector: crc16("123456789") == 0x29B1
@@ -47,12 +55,13 @@ private:
     static constexpr uint8_t PROTOCOL_VERSION = 0x01;
     static constexpr uint8_t FLAG_FEC_ENABLED = 0x01;
 
-    // Header layout
-    static constexpr int HEADER_BYTES  = 2;
-    static constexpr int HEADER_SYMS   = HEADER_BYTES * 2;  // 4
-    static constexpr int CRC_BYTES     = 2;
-    static constexpr int CRC_SYMS      = CRC_BYTES * 2;     // 4
-    static constexpr int PAYLOAD_START = HEADER_SYMS + CRC_SYMS;  // 8
+    // Header layout — header is sent twice for redundancy on HF
+    static constexpr int HEADER_BYTES       = 2;
+    static constexpr int HEADER_SYMS        = HEADER_BYTES * 2;        // 4 per copy
+    static constexpr int HEADER_TOTAL_SYMS  = HEADER_SYMS * 2;         // 8 (two copies)
+    static constexpr int CRC_BYTES          = 2;
+    static constexpr int CRC_SYMS           = CRC_BYTES * 2;           // 4
+    static constexpr int PAYLOAD_START      = HEADER_TOTAL_SYMS + CRC_SYMS;  // 12
 
     // Build 2-byte header
     std::array<uint8_t, 2> buildHeader(uint8_t nBlocks) const;
@@ -77,7 +86,8 @@ private:
     // +1.0f -> bit 0, -1.0f -> bit 1, then pack MSB first
     static std::vector<uint8_t> bpskToBytes(const std::vector<float>& bpsk);
 
-    // Strip trailing null bytes and whitespace from decoded text
+    // Strip trailing null bytes, then exactly one trailing space (the padding
+    // space added by assemble()). User-entered trailing spaces are preserved.
     static std::string stripPadding(const std::string& s);
 };
 

@@ -84,6 +84,23 @@ float Preamble::correlate(
     return static_cast<float>(matches) / PREAMBLE_LENGTH;
 }
 
+float Preamble::softCorrelate(
+    const std::vector<std::vector<float>>& softSymbols, int offset) const
+{
+    int remaining = static_cast<int>(softSymbols.size()) - offset;
+    if (remaining < PREAMBLE_LENGTH) return 0.0f;
+
+    float totalScore = 0.0f;
+    for (int i = 0; i < PREAMBLE_LENGTH; ++i) {
+        const auto& energies = softSymbols[offset + i];
+        float total = 0.0f;
+        for (float e : energies) total += e;
+        if (total < 1e-10f) continue;
+        totalScore += energies[PREAMBLE_SYMBOLS[i]] / total;
+    }
+    return totalScore / PREAMBLE_LENGTH;
+}
+
 bool Preamble::detect(
     const std::vector<std::vector<float>>& softSymbols,
     int& matchOffset) const

@@ -23,7 +23,7 @@ inline bool runFecSelfTest() {
         for (int i = 0; i < (int)enc.bpsk.size(); i++)
             llr[i] = enc.bpsk[i] * 10.0f;
 
-        auto decoded = fec.decodeMessage(llr, enc.nBlocks, enc.origLen);
+        auto decoded = fec.decodeMessage(llr, enc.nBlocks, enc.origLen).bytes;
         std::string result(decoded.begin(), decoded.end());
 
         if (result == msg) {
@@ -51,7 +51,7 @@ inline bool runFecSelfTest() {
             noisyLLR[i] = (enc.bpsk[i] + noise) * (2.0f / (sigma * sigma));
         }
 
-        auto decoded = fec.decodeMessage(noisyLLR, enc.nBlocks, enc.origLen);
+        auto decoded = fec.decodeMessage(noisyLLR, enc.nBlocks, enc.origLen).bytes;
         std::string result(decoded.begin(), decoded.end());
         if (result == msg)
             printf("PASS: noisy decode at sigma=%.1f\n", sigma);

@@ -370,11 +370,13 @@ DecodeResult FEC::decodeBlock(const std::vector<float>& llr) const {
     return DecodeResult{packBits(msgBits), false, LDPC_MAX_ITERATIONS};
 }
 
-std::vector<uint8_t> FEC::decodeMessage(const std::vector<float>& llr,
-                                         int nBlocks,
-                                         int origLen) const {
-    std::vector<uint8_t> result;
-    result.reserve(nBlocks * LDPC_BYTES_PER_BLOCK);
+FEC::DecodeMessageResult FEC::decodeMessage(const std::vector<float>& llr,
+                                             int nBlocks,
+                                             int origLen) const {
+    std::vector<uint8_t> bytes;
+    bytes.reserve(nBlocks * LDPC_BYTES_PER_BLOCK);
+    bool allConverged    = true;
+    int  totalIterations = 0;
 
     for (int b = 0; b < nBlocks; b++) {
         int start = b * LDPC_N;
@@ -382,12 +384,14 @@ std::vector<uint8_t> FEC::decodeMessage(const std::vector<float>& llr,
         std::vector<float> blockLLR(llr.begin() + start,
                                      llr.begin() + start + LDPC_N);
         auto res = decodeBlock(blockLLR);
-        result.insert(result.end(), res.bytes.begin(), res.bytes.end());
+        bytes.insert(bytes.end(), res.bytes.begin(), res.bytes.end());
+        if (!res.converged) allConverged = false;
+        totalIterations += res.iterations;
     }
 
-    if ((int)result.size() > origLen)
-        result.resize(origLen);
-    return result;
+    if ((int)bytes.size() > origLen)
+        bytes.resize(origLen);
+    return {bytes, allConverged, totalIterations};
 }
 
 // ── LLR conversion ────────────────────────────────────────────────────────

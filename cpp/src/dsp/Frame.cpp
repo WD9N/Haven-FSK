@@ -86,15 +86,14 @@ std::vector<uint8_t> Frame::bpskToBytes(const std::vector<float>& bpsk) {
 }
 
 std::string Frame::stripPadding(const std::string& s) {
-    // Strip trailing null bytes first, then whitespace
+    // Strip trailing null bytes
     size_t end = s.size();
     while (end > 0 && s[end - 1] == '\0') end--;
     std::string trimmed = s.substr(0, end);
-    while (!trimmed.empty() &&
-           (trimmed.back() == ' '  ||
-            trimmed.back() == '\n' ||
-            trimmed.back() == '\r' ||
-            trimmed.back() == '\t'))
+    // Strip exactly one trailing space — the padding space added by assemble().
+    // Removing all whitespace would corrupt messages with intentional trailing
+    // spaces and break CRC verification on the RX side.
+    if (!trimmed.empty() && trimmed.back() == ' ')
         trimmed.pop_back();
     return trimmed;
 }
@@ -138,8 +137,13 @@ std::vector<float> Frame::assemble(const std::string& text) const {
     // where preamble left off. Zero discontinuity at preamble→header boundary.
     mod.setPhase(preamble.finalPhase());
 
+    // Header sent twice — second copy is continuous-phase from first.
+    // If the first copy is hit by a fade the second copy allows recovery.
     std::vector<uint8_t> hdrVec(hdr.begin(), hdr.end());
     std::vector<float> headerAudio = mod.modulate(hdrVec);
+    std::vector<float> headerAudio2 = mod.modulate(hdrVec);
+    headerAudio.insert(headerAudio.end(),
+                       headerAudio2.begin(), headerAudio2.end());
 
     std::vector<uint8_t> crcVec(crcBytes.begin(), crcBytes.end());
     std::vector<float> crcAudio = mod.modulate(crcVec);
@@ -166,11 +170,12 @@ ParseResult Frame::parse(
     const std::vector<std::vector<float>>& softSymbols) const
 {
     ParseResult result{};
-    result.crcOk     = false;
-    result.converged = false;
-    result.nBlocks   = 0;
-    result.version   = 0;
-    result.useFec    = false;
+    result.crcOk          = false;
+    result.converged      = false;
+    result.nBlocks        = 0;
+    result.fecIterations  = 0;
+    result.version        = 0;
+    result.useFec         = false;
 
     // Minimum: 4 header symbols + 4 CRC symbols
     if ((int)softSymbols.size() < PAYLOAD_START) {
@@ -178,30 +183,27 @@ ParseResult Frame::parse(
         return result;
     }
 
-    // ── Decode header (symbols 0-3, hard decision) ────────────────────────
-    // Log first 8 symbol argmax values to diagnose alignment issues
-    {
-        QString syms;
-        for (int i = 0; i < std::min(8, (int)softSymbols.size()); i++) {
-            syms += QString::number(argmax(softSymbols[i]));
-            if (i < 7) syms += ",";
-        }
-        qDebug() << "Frame::parse first 8 symbols:" << syms
-                 << "total=" << softSymbols.size();
-    }
+    // ── Decode header — both copies (symbols 0-3 and 4-7) ───────────────────
+    auto hdrBytes1 = hardDecodeSymbols(softSymbols, 0,          HEADER_SYMS);
+    auto hdrBytes2 = hardDecodeSymbols(softSymbols, HEADER_SYMS, HEADER_SYMS);
 
-    auto hdrBytes = hardDecodeSymbols(softSymbols, 0, HEADER_SYMS);
-    if ((int)hdrBytes.size() < HEADER_BYTES) {
+    if ((int)hdrBytes1.size() < HEADER_BYTES) {
         result.error = "Header decode failed";
         return result;
     }
-    std::array<uint8_t, 2> hdr = {hdrBytes[0], hdrBytes[1]};
 
-    qDebug() << "Frame::parse hdr[0]=0x" +
-                QString::number(hdr[0], 16).rightJustified(2, '0') +
-                " hdr[1]=0x" +
-                QString::number(hdr[1], 16).rightJustified(2, '0') +
-                " expect hdr[0]=0x11";
+    if (hdrBytes1 != hdrBytes2) {
+        qDebug() << "Frame::parse: header copies differ — copy1 nBlocks="
+                 << hdrBytes1[1] << "copy2 nBlocks=" << hdrBytes2[1]
+                 << "using copy 1";
+    }
+    std::array<uint8_t, 2> hdr = {hdrBytes1[0], hdrBytes1[1]};
+
+    qDebug() << "Frame::parse hdr[0]=0x"
+                + QString::number(hdr[0], 16).rightJustified(2, '0')
+                + " hdr[1]=0x"
+                + QString::number(hdr[1], 16).rightJustified(2, '0')
+                + " expect hdr[0]=0x11 (double-header, PAYLOAD_START=12)";
 
     uint8_t version, flags, nBlocks;
     if (!parseHeader(hdr, version, flags, nBlocks)) {
@@ -212,8 +214,17 @@ ParseResult Frame::parse(
     result.useFec  = (flags & FLAG_FEC_ENABLED) != 0;
     result.nBlocks = nBlocks;
 
-    // ── Decode CRC (symbols 4-7, hard decision) ───────────────────────────
-    auto crcBytes = hardDecodeSymbols(softSymbols, HEADER_SYMS, CRC_SYMS);
+    // Sanity-check nBlocks before trusting it for buffer sizing.
+    // A corrupted header byte can produce nBlocks=200+, which would demand
+    // thousands of seconds of audio and cause a long collection timeout.
+    constexpr int MAX_NBLOCKS = 125;
+    if (nBlocks > MAX_NBLOCKS) {
+        result.error = "nBlocks out of range";
+        return result;
+    }
+
+    // ── Decode CRC (symbols 8-11, after double header) ────────────────────
+    auto crcBytes = hardDecodeSymbols(softSymbols, HEADER_TOTAL_SYMS, CRC_SYMS);
     if ((int)crcBytes.size() < CRC_BYTES) {
         result.error = "CRC decode failed";
         return result;
@@ -237,18 +248,13 @@ ParseResult Frame::parse(
         FEC fec;
         auto llr = fec.softToLLR(payloadSoft);
 
-        // Decode
         int origLen = nBlocks * LDPC_BYTES_PER_BLOCK;
-        auto decoded = fec.decodeMessage(llr, nBlocks, origLen);
+        auto decRes = fec.decodeMessage(llr, nBlocks, origLen);
 
-        // Check convergence on first block as representative
-        auto firstBlock = fec.decodeBlock(
-            std::vector<float>(llr.begin(),
-                               llr.begin() + std::min((int)llr.size(), LDPC_N)));
-        result.converged = firstBlock.converged;
+        result.converged     = decRes.allConverged;
+        result.fecIterations = decRes.totalIterations;
 
-        // Decode bytes as UTF-8
-        std::string text(decoded.begin(), decoded.end());
+        std::string text(decRes.bytes.begin(), decRes.bytes.end());
         result.text = stripPadding(text);
 
     } else {

@@ -12,9 +12,14 @@ public:
     ~Demodulator();
 
     // Returns soft symbol energies: shape [num_symbols][NUM_TONES]
-    // Used by FEC layer for belief propagation input
+    // sampleOffset skips that many samples before slicing into symbol blocks.
+    // afcBinOffset shifts every tone's expected bin by this many zero-padded
+    // FFT bins (use round(offsetHz * FFT_SIZE / SAMPLE_RATE)) to compensate
+    // for oscillator frequency offset between TX and RX radios.
     std::vector<std::vector<float>> demodulateToSoft(
-        const std::vector<float>& audio) const;
+        const std::vector<float>& audio,
+        int sampleOffset   = 0,
+        int afcBinOffset   = 0) const;
 
     // Hard decision demodulation — returns decoded bytes
     std::vector<uint8_t> demodulate(const std::vector<float>& audio) const;
@@ -22,18 +27,16 @@ public:
 private:
     kiss_fftr_cfg m_fftCfg;
 
-    // Pre-computed Hann window [SAMPLES_PER_SYMBOL]
-    float m_hannWindow[SAMPLES_PER_SYMBOL];
-
     // Pre-computed tone bin indices in the zero-padded FFT
     int m_toneBins[NUM_TONES];
 
-    void buildHannWindow();
     void buildToneBins();
 
     // Detect one symbol block (SAMPLES_PER_SYMBOL floats)
-    // Returns energy at each of the NUM_TONES tone bins
-    std::vector<float> detectSymbol(const float* block) const;
+    // Returns energy at each of the NUM_TONES tone bins.
+    // afcBinOffset shifts each tone's center bin before energy summation.
+    std::vector<float> detectSymbol(const float* block,
+                                    int afcBinOffset = 0) const;
 
     // Pack pairs of 4-bit symbol indices into bytes, high nibble first
     std::vector<uint8_t> symbolsToBytes(const std::vector<int>& symbols) const;

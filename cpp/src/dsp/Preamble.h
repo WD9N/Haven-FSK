@@ -31,6 +31,13 @@ public:
     // Public so DspPipeline can run its own sliding-window search.
     float correlate(const std::vector<int>& symbols, int offset) const;
 
+    // Soft correlation: returns fraction of FFT energy at expected-tone bins,
+    // averaged across all PREAMBLE_LENGTH positions. More robust than
+    // correlate() when tones are attenuated but still present. Score range:
+    // ~0.0625 = uniform noise (1/NUM_TONES), 1.0 = perfect, 0.0 = tone absent.
+    float softCorrelate(
+        const std::vector<std::vector<float>>& softSymbols, int offset) const;
+
 private:
     double m_finalPhase {0.0};  // phase at end of last generate() call
 

@@ -27,13 +27,8 @@ public:
     void setPhase(double phase) { m_txPhase = phase; }
 
 private:
-    // Pre-built tone table — kept for reference; not used for TX generation
-    float m_toneTable[NUM_TONES][SAMPLES_PER_SYMBOL];
-
     // Continuous phase accumulator — carries phase across all symbol boundaries
     double m_txPhase {0.0};
-
-    void buildToneTable();
 
     std::vector<int> bytesToSymbols(const std::vector<uint8_t>& data) const;
 

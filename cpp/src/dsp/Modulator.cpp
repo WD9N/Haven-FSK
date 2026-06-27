@@ -9,23 +9,7 @@
 
 namespace HavenFSK {
 
-Modulator::Modulator()
-{
-    buildToneTable();
-}
-
-void Modulator::buildToneTable()
-{
-    // Pre-build tone table for reference; TX generation now uses the
-    // continuous phase accumulator instead of this table.
-    for (int i = 0; i < NUM_TONES; ++i) {
-        double f = BASE_FREQ + i * SYMBOL_RATE;
-        for (int t = 0; t < SAMPLES_PER_SYMBOL; ++t) {
-            m_toneTable[i][t] = static_cast<float>(
-                std::sin(2.0 * M_PI * f * t / SAMPLE_RATE));
-        }
-    }
-}
+Modulator::Modulator() = default;
 
 std::vector<int> Modulator::bytesToSymbols(
     const std::vector<uint8_t>& data) const

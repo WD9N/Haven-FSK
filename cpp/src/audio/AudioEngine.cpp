@@ -80,6 +80,49 @@ bool AudioEngine::startRx(const QString& deviceName) {
         return false;
     }
 
+    // Verify the format Qt actually negotiated.  Some VAC/driver combinations
+    // advertise support for the requested format but deliver different data:
+    //
+    //  - Wrong sample rate (e.g. 44100 Hz instead of 48000 Hz): shifts every
+    //    HAVEN tone by the ratio, so tone 15 misses every hypothesis window.
+    //
+    //  - Wrong channel count (e.g. stereo instead of mono): pcmToFloat()
+    //    interprets interleaved L,R int16 pairs as sequential mono samples,
+    //    halving the apparent sample rate and destroying all tone bin mapping.
+    //
+    // Always log the actual format so mismatches are immediately visible.
+    QAudioFormat actual = m_rxSource->format();
+    qDebug() << "AudioEngine: RX actual format —"
+             << actual.sampleRate() << "Hz,"
+             << actual.channelCount() << "ch,"
+             << actual.sampleFormat();
+
+    bool formatOk = true;
+    if (actual.sampleRate() != HavenFSK::SAMPLE_RATE) {
+        qWarning() << "AudioEngine: sample rate mismatch — got"
+                   << actual.sampleRate() << "Hz, need"
+                   << HavenFSK::SAMPLE_RATE << "Hz."
+                   << "Set the Windows audio device and VAC to"
+                   << HavenFSK::SAMPLE_RATE << "Hz.";
+        formatOk = false;
+    }
+    if (actual.channelCount() != HavenFSK::AUDIO_CHANNELS) {
+        qWarning() << "AudioEngine: channel count mismatch — got"
+                   << actual.channelCount() << "ch, need"
+                   << HavenFSK::AUDIO_CHANNELS << "ch (mono)."
+                   << "Set the Windows audio device and VAC to Mono,"
+                   << "or configure the VAC to 1 channel.";
+        formatOk = false;
+    }
+    if (!formatOk) {
+        emit audioError(
+            QString("RX audio format mismatch (got %1 Hz, %2 ch). "
+                    "Set VAC to %3 Hz mono. See debug log for details.")
+            .arg(actual.sampleRate())
+            .arg(actual.channelCount())
+            .arg(HavenFSK::SAMPLE_RATE));
+    }
+
     connect(m_rxDevice, &QIODevice::readyRead,
             this, &AudioEngine::onRxDataAvailable);
 
