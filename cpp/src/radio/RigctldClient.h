@@ -41,6 +41,8 @@ public:
     bool     setMode(const QString& mode) override;
     QString  getMode()                    override;
     bool     setSplit(bool enable, uint64_t txHz = 0) override;
+    float    getPowerLevel()              override;
+    bool     setPowerLevel(float level0to1) override;
 
     // ── Configuration ─────────────────────────────────────────────────────
     void     setHost(const QString& host) { m_host = host; }
@@ -53,18 +55,33 @@ private slots:
     void onDisconnected();
     void onError(QAbstractSocket::SocketError error);
     void onPollTimer();
+    void onReconnectTimer();
 
 private:
     // Send a command and wait for response (blocking with timeout)
     // Returns response string or empty string on error
     QString sendCommand(const QString& cmd, int timeoutMs = 2000);
 
+    void scheduleReconnect();
+
     QString     m_host;
     uint16_t    m_port;
     QTcpSocket* m_socket    {nullptr};
     bool        m_connected {false};
-    QTimer*     m_pollTimer {nullptr};  // polls frequency every 2s
+    QTimer*     m_pollTimer {nullptr};  // polls frequency every 2s, mode every 5th tick
+    int         m_pollTick  {0};
+    QString     m_lastMode;
 
-    static constexpr int POLL_INTERVAL_MS    = 2000;
-    static constexpr int CONNECT_TIMEOUT_MS  = 5000;
+    // Reconnect/retry with exponential backoff. m_userDisconnected
+    // distinguishes an operator-initiated disconnect() call from a
+    // dropped connection — only the latter triggers auto-reconnect.
+    QTimer*     m_reconnectTimer   {nullptr};
+    int         m_reconnectAttempt {0};
+    bool        m_userDisconnected {false};
+
+    static constexpr int POLL_INTERVAL_MS       = 2000;
+    static constexpr int MODE_POLL_EVERY_N_TICKS = 5;   // ~10s
+    static constexpr int CONNECT_TIMEOUT_MS     = 5000;
+    static constexpr int RECONNECT_MIN_MS       = 1000;
+    static constexpr int RECONNECT_MAX_MS       = 30000;
 };

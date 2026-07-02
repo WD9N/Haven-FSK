@@ -4,12 +4,14 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QProgressBar>
+#include <QComboBox>
 #include <QAction>
 #include <QSplitter>
 #include <QCloseEvent>
 #include <cstdint>
 #include <cmath>
 #include "../radio/PTTManager.h"
+#include "../dsp/IModem.h"
 
 class AudioEngine;
 
@@ -60,6 +62,8 @@ private slots:
     void onExport();
     void onWaterfallTune(float audioHz);
     void onOpenRadioConfig();
+    void onToneSweepTx();
+    void onModeChanged(int index);
 
 private:
     void setupUi();
@@ -78,11 +82,15 @@ private:
     QSplitter*         m_splitter     {nullptr};
     QTextEdit*         m_txInput      {nullptr};
     LevelPanel*        m_levelPanel   {nullptr};
-    QPushButton*       m_txButton     {nullptr};
+    QPushButton*       m_txButton        {nullptr};
+    QPushButton*       m_toneTestButton  {nullptr};
+    QPushButton*       m_monitorButton   {nullptr};
+    bool               m_toneSweepActive {false};
     QLabel*            m_statusLabel  {nullptr};
     FrequencyControl*  m_freqControl  {nullptr};
     QLabel*            m_rigLabel     {nullptr};
     QProgressBar*      m_rxLevel      {nullptr};
+    QComboBox*         m_modeCombo    {nullptr};
 
     // ── Menu actions ──────────────────────────────────────────────────────
     QAction* m_settingsAction {nullptr};

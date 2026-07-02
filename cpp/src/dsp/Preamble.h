@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "Constants.h"
+#include "MfskConstants.h"
 
 namespace HavenFSK {
 

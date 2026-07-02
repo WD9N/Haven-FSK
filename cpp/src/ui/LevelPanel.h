@@ -302,7 +302,12 @@ public:
             "0dBu = -6dBFS (nominal)\n"
             "Target: watch wattmeter, keep ALC inactive\n"
             "Full scale (+6dBu) = 0dBFS");
-        m_rx->setFaderDb(-22.0f);
+        m_rx->setFaderDb(0.0f);   // 0 dBu = unity gain into demodulator
+        m_rx->setToolTip(
+            "RX demodulator input gain\n"
+            "0dBu = unity gain (no scaling)\n"
+            "+6dBu = 2× boost, -6dBu = 0.5× cut\n"
+            "Meter shows post-gain level");
 
         connect(m_tx, &ChannelStrip::faderChanged,
                 this, &LevelPanel::txFaderChanged);
@@ -317,9 +322,9 @@ public:
     // TX fader as dBFS (for QAudioOutput::setVolume)
     float txFaderDbFS() const { return m_tx->faderDb() - 6.0f; }
 
-    // RX fader as linear gain multiplier
+    // RX fader as linear gain multiplier (0 dBu = 1.0)
     float rxFaderGain() const {
-        return std::pow(10.0f, (m_rx->faderDb() - 6.0f) / 20.0f);
+        return std::pow(10.0f, m_rx->faderDb() / 20.0f);
     }
 
 signals:

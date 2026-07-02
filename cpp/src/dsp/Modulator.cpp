@@ -17,8 +17,8 @@ std::vector<int> Modulator::bytesToSymbols(
     std::vector<int> symbols;
     symbols.reserve(data.size() * 2);
     for (uint8_t byte : data) {
-        symbols.push_back((byte >> 4) & 0x0F);
-        symbols.push_back(byte & 0x0F);
+        symbols.push_back(grayEncode((byte >> 4) & 0x0F));
+        symbols.push_back(grayEncode(byte & 0x0F));
     }
     return symbols;
 }

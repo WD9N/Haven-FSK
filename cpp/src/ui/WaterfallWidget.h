@@ -10,6 +10,10 @@
 #include <vector>
 #include <cstdint>
 #include "../dsp/Constants.h"
+// TODO(Phase 5): passband markers should come from IModem::passbandLowHz()/
+// HighHz() via DspPipeline, not compile-time MFSK constants. MfskConstants.h
+// is a temporary bridge so this keeps compiling until that lands.
+#include "../dsp/MfskConstants.h"
 #include "kiss_fft.h"
 
 // WaterfallWidget — scrolling spectrogram display for HAVEN-FSK.
@@ -20,8 +24,9 @@
 // signal positions regardless of AFC activity.
 //
 // Two sets of vertical markers:
-//   Gray dashed (#B8B8B8) — fixed passband at BASE_FREQ and
-//     BASE_FREQ + NUM_TONES * SYMBOL_RATE. Never move.
+//   Gray dashed (#B8B8B8) — the active mode's fixed passband (see
+//     setPassband()). Defaults to MFSK-16's passband; updated on mode
+//     change. Does not move within a session except via setPassband().
 //   Soft green solid (#6DB640) — AFC tracking lines, float with offset.
 //     Only visible when |afcOffset| >= 0.5 Hz.
 //
@@ -45,6 +50,15 @@ public:
 
     // Update AFC offset for floating green marker lines.
     void setAfcOffset(float hz);
+
+    // Update the fixed (gray dashed) passband markers to match the
+    // active mode. Defaults to MFSK-16's passband; call after a mode
+    // change (see MainWindow::onModeChanged()) so the waterfall doesn't
+    // keep showing the previous mode's passband.
+    void setPassband(float loHz, float hiHz) {
+        m_passbandLoHz = loHz;
+        m_passbandHiHz = hiHz;
+    }
 
     // Adjust the dBFS floor for color mapping (display only).
     // Lower = more sensitive. Range: -140 to 0.
@@ -113,6 +127,14 @@ private:
 
     // AFC offset — drives floating green marker lines
     float   m_afcOffsetHz = 0.0f;
+
+    // Fixed passband markers — defaults to MFSK-16's passband;
+    // MainWindow::onModeChanged() updates these via setPassband() when
+    // the operator switches modes.
+    float   m_passbandLoHz {static_cast<float>(HavenFSK::BASE_FREQ)};
+    float   m_passbandHiHz {static_cast<float>(HavenFSK::BASE_FREQ)
+                            + static_cast<float>(HavenFSK::NUM_TONES)
+                            * static_cast<float>(HavenFSK::SYMBOL_RATE)};
 
     // Tuning line state
     bool    m_tuningMode   = false;

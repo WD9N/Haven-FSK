@@ -236,6 +236,21 @@ bool TCIClient::setSplit(bool enable, uint64_t txHz) {
     return false;  // Stub — implemented in future phase
 }
 
+float TCIClient::getPowerLevel() {
+    // Stub — TCI's drive/power-level command syntax is not yet verified
+    // against a live server (unlike setPTT/setMode/getFrequency, which
+    // were confirmed against real TCI traffic). Returning a fabricated
+    // command here risks silently mis-setting a real transmitter's RF
+    // power, so this is left unimplemented until confirmed, matching
+    // setSplit()'s existing stub pattern above.
+    return -1.0f;
+}
+
+bool TCIClient::setPowerLevel(float level0to1) {
+    Q_UNUSED(level0to1)
+    return false;  // Stub — see getPowerLevel() comment.
+}
+
 QString TCIClient::rigName() const {
     if (!m_deviceName.isEmpty())
         return QString("TCI: %1").arg(m_deviceName);

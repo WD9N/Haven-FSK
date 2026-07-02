@@ -25,6 +25,8 @@ public:
     bool     setMode(const QString& mode) override;
     QString  getMode()                    override { return {}; }
     bool     setSplit(bool enable, uint64_t txHz = 0) override;
+    float    getPowerLevel()              override { return -1.0f; }
+    bool     setPowerLevel(float)         override { return false; }
 
 private:
     QString m_host;

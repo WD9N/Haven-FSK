@@ -405,11 +405,12 @@ int WaterfallWidget::hzToPixel(float hz) const {
 
 void WaterfallWidget::drawOverlays(QPainter& p, int w, int h) const {
     // ── Fixed passband markers (gray dashed) ──────────────────────────────
-    // These NEVER move. They show where the signal SHOULD be.
-    float loHz = static_cast<float>(HavenFSK::BASE_FREQ);
-    float hiHz = static_cast<float>(HavenFSK::BASE_FREQ)
-               + static_cast<float>(HavenFSK::NUM_TONES)
-               * static_cast<float>(HavenFSK::SYMBOL_RATE);
+    // Show where the active mode's signal should be. Updated via
+    // setPassband() on mode change (see MainWindow::onModeChanged()) —
+    // do not read mode-specific constants directly here, since a
+    // different mode's passband differs from MFSK-16's.
+    float loHz = m_passbandLoHz;
+    float hiHz = m_passbandHiHz;
 
     QPen grayPen(QColor(0xB8, 0xB8, 0xB8, 204), 1.2f, Qt::DashLine);
     p.setPen(grayPen);

@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "Constants.h"
+#include "MfskConstants.h"
 #include "kiss_fftr.h"
 
 namespace HavenFSK {

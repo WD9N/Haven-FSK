@@ -20,6 +20,9 @@
 #include "../radio/TCIClient.h"
 #include "../dsp/DspPipeline.h"
 #include "../dsp/Constants.h"
+// TODO(Phase 5): BASE_FREQ usages below are MFSK-specific tuning-offset
+// math; should become mode-generic once IModem passband is UI-wired.
+#include "../dsp/MfskConstants.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -60,6 +63,21 @@ MainWindow::MainWindow(QWidget* parent)
     setupMenu();
     setupUi();
     setupConnections();
+
+    // Restore last-used mode; setting the combo index triggers
+    // onModeChanged() -> DspPipeline::setMode(), so this both applies the
+    // saved mode and updates the waterfall passband/labels for it.
+    {
+        QSettings s;
+        int savedMode = s.value("mode/current",
+            static_cast<int>(HavenFSK::ModemMode::Mfsk16)).toInt();
+        int idx = m_modeCombo->findData(savedMode);
+        m_modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        // setCurrentIndex() is a no-op (no signal fired) when the target
+        // index equals the combo's default (0) — call explicitly so the
+        // waterfall/labels are always initialized on first run.
+        onModeChanged(m_modeCombo->currentIndex());
+    }
 
     m_stationInfo->refresh();
     onSettingsChanged();
@@ -156,7 +174,7 @@ void MainWindow::setupMenu() {
         QMessageBox::about(this,
             "About HAVEN-FSK",
             QString("<b>HAVEN-FSK v%1</b><br>"
-                    "16-tone MFSK HF Digital Mode<br><br>"
+                    "HF Digital Mode application — MFSK-16 and PSK31<br><br>"
                     "Copyright 2026 WD9N<br>"
                     "Licensed under GPL-3.0<br><br>"
                     "<a href='%2'>%2</a><br><br>"
@@ -266,6 +284,45 @@ void MainWindow::setupUi() {
 
     auto* txBtnRow = new QHBoxLayout;
     txBtnRow->addStretch();
+
+    m_toneTestButton = new QPushButton("Tone TX", txContainer);
+    m_toneTestButton->setMinimumWidth(80);
+    m_toneTestButton->setToolTip(
+        "Transmit all 16 HAVEN tones (500 ms each) across the RF path\n"
+        "and log what the receiver hears, symbol by symbol.\n"
+        "Watch the debug output for ToneMon[] lines while TX plays.\n"
+        "RX pipeline stays active — use with two radios on dummy loads.");
+    m_toneTestButton->setStyleSheet(
+        "QPushButton {"
+        "  background: #1a1a2e; color: #7a9ab0;"
+        "  border: 1px solid #2a3a4a; border-radius: 3px;"
+        "  padding: 4px 12px;"
+        "}"
+        "QPushButton:hover { background: #222240; }");
+    txBtnRow->addWidget(m_toneTestButton);
+    txBtnRow->addSpacing(4);
+
+    m_monitorButton = new QPushButton("Monitor", txContainer);
+    m_monitorButton->setMinimumWidth(72);
+    m_monitorButton->setCheckable(true);
+    m_monitorButton->setToolTip(
+        "Toggle per-symbol tone logging.\n"
+        "When ON, every received symbol logs one line:\n"
+        "  ToneMon[N]: toneT (FFF.FF Hz)  frac=0.870\n"
+        "Turn on while 590SG is transmitting tones to see\n"
+        "exactly what the HermesLite demodulator hears.");
+    m_monitorButton->setStyleSheet(
+        "QPushButton {"
+        "  background: #1a1a2e; color: #7a9ab0;"
+        "  border: 1px solid #2a3a4a; border-radius: 3px;"
+        "  padding: 4px 10px;"
+        "}"
+        "QPushButton:hover   { background: #222240; }"
+        "QPushButton:checked { background: #0d2d0d; color: #7ab07a;"
+        "                      border-color: #2a4a2a; }");
+    txBtnRow->addWidget(m_monitorButton);
+    txBtnRow->addSpacing(8);
+
     m_txButton = new QPushButton("Transmit", txContainer);
     m_txButton->setMinimumWidth(90);
     m_txButton->setStyleSheet(
@@ -300,6 +357,12 @@ void MainWindow::setupUi() {
 
     m_freqControl = new FrequencyControl(statusBar);
     statusLayout->addWidget(m_freqControl);
+
+    m_modeCombo = new QComboBox(statusBar);
+    m_modeCombo->addItem("MFSK-16", static_cast<int>(HavenFSK::ModemMode::Mfsk16));
+    m_modeCombo->addItem("PSK31",   static_cast<int>(HavenFSK::ModemMode::Psk31));
+    m_modeCombo->setToolTip("Operating mode");
+    statusLayout->addWidget(m_modeCombo);
 
     m_rigLabel = new QLabel("No rig");
     m_rigLabel->setStyleSheet("color: gray;");
@@ -343,6 +406,19 @@ void MainWindow::setupConnections() {
     // TX
     connect(m_txButton, &QPushButton::clicked,
             this, &MainWindow::onTransmit);
+    connect(m_toneTestButton, &QPushButton::clicked,
+            this, &MainWindow::onToneSweepTx);
+    connect(m_monitorButton, &QPushButton::toggled,
+            this, [this](bool on) {
+                m_pipeline->setToneMonitor(on);
+                m_monitorButton->setText(on ? "Monitor ON" : "Monitor");
+                if (on)
+                    m_statusLabel->setText(
+                        "Tone monitor active — transmit tones from 590SG, "
+                        "watch debug log for ToneMon[] lines");
+                else
+                    m_statusLabel->setText("Tone monitor off");
+            });
     // QTextEdit: Ctrl+Enter transmits, plain Enter adds newline
     auto* txShortcut = new QShortcut(
         QKeySequence(Qt::CTRL | Qt::Key_Return), m_txInput);
@@ -376,6 +452,9 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onWaterfallTune);
 
     // Waterfall tuning line movement → status bar preview
+    connect(m_modeCombo, &QComboBox::currentIndexChanged,
+            this, &MainWindow::onModeChanged);
+
     connect(m_waterfall, &WaterfallWidget::tuningLineAt,
             this, [this](float hz) {
                 if (!m_radio || !m_radio->isConnected()) return;
@@ -472,6 +551,19 @@ void MainWindow::setupConnections() {
     connect(m_pipeline, &HavenFSK::DspPipeline::messageReceived,
             this, &MainWindow::onMessageReceived);
 
+    connect(m_pipeline, &HavenFSK::DspPipeline::preambleDetected,
+            this, [this](float score) {
+                m_statusLabel->setText(
+                    QString("Preamble found (score %1) — collecting frame...")
+                    .arg(score, 0, 'f', 2));
+            });
+
+    connect(m_pipeline, &HavenFSK::DspPipeline::rxStateChanged,
+            this, [this](HavenFSK::RxState state) {
+                if (state == HavenFSK::RxState::Idle)
+                    m_statusLabel->setText("Listening...");
+            });
+
     // RxDisplay → MainWindow (element clicks)
     connect(m_rxDisplay, &RxDisplay::elementClicked,
             this, &MainWindow::onElementClicked);
@@ -504,21 +596,23 @@ void MainWindow::setupConnections() {
                 m_rxDisplay->appendTxMessage(text, info.callsign);
             });
 
-    // RX level meter — peak of each incoming audio chunk
+    // RX level meter — peak of each chunk after RX gain, matching demodulator input
     connect(m_audio, &AudioEngine::rxDataReady,
             this, [this](const std::vector<float>& samples) {
                 if (samples.empty() || !m_levelPanel) return;
                 float peak = 0.0f;
                 for (float s : samples) peak = std::max(peak, std::abs(s));
+                float gain = m_pipeline ? m_pipeline->rxGain() : 1.0f;
+                peak = std::min(1.0f, peak * gain);
                 float dbFS = (peak > 1e-10f)
                     ? 20.0f * std::log10(peak) : -96.0f;
                 m_levelPanel->setRxLevel(dbFS);
             });
 
-    // RX fader → DspPipeline gain
+    // RX fader → DspPipeline gain (0 dBu = unity gain)
     connect(m_levelPanel, &LevelPanel::rxFaderChanged,
             this, [this](float dBu) {
-                float gain = std::pow(10.0f, (dBu - 6.0f) / 20.0f);
+                float gain = std::pow(10.0f, dBu / 20.0f);
                 m_pipeline->setRxGain(gain);
             });
 
@@ -592,6 +686,10 @@ void MainWindow::startRadio() {
     connect(m_radio, &RadioInterface::connected,
             this, [this]() {
                 onRadioConnected();
+                if (HavenFSK::setModeOnConnect()) {
+                    QString mode = HavenFSK::connectModeString();
+                    if (!mode.isEmpty()) m_radio->setMode(mode);
+                }
                 // Recreate PTTManager now that we have a connected radio
                 if (m_pttManager) m_pttManager->deleteLater();
                 m_pttManager = new PTTManager(m_radio, this);
@@ -695,6 +793,21 @@ void MainWindow::onTransmit() {
 }
 
 void MainWindow::onTxComplete() {
+    // Tone sweep TX completes here too.  Don't restart audio (RX was never
+    // stopped) — just stop the monitor, release PTT, and re-enable the button.
+    if (m_toneSweepActive) {
+        m_toneSweepActive = false;
+        m_monitorButton->setChecked(false);   // also calls setToneMonitor(false) via toggled signal
+        int tailMs = HavenFSK::txTailMs();
+        QTimer::singleShot(tailMs, this, [this]() {
+            if (m_pttManager) m_pttManager->txOff();
+            m_statusLabel->setText(
+                "Tone sweep complete — check debug log for ToneMon[] lines");
+        });
+        m_toneTestButton->setEnabled(true);
+        return;
+    }
+
     int tailMs = HavenFSK::txTailMs();
     qDebug() << "TX: audio complete — starting" << tailMs << "ms tail timer";
 
@@ -826,6 +939,73 @@ void MainWindow::onOpenRadioConfig() {
     connect(&dlg, &RadioConfigDialog::disconnectRequested,
             this, &MainWindow::stopRadio);
     dlg.exec();
+}
+
+void MainWindow::onModeChanged(int index) {
+    if (!m_pipeline || index < 0) return;
+
+    auto mode = static_cast<HavenFSK::ModemMode>(
+        m_modeCombo->itemData(index).toInt());
+    m_pipeline->setMode(mode);
+
+    QSettings s;
+    s.setValue("mode/current", static_cast<int>(mode));
+
+    if (m_waterfall) {
+        m_waterfall->setPassband(
+            static_cast<float>(m_pipeline->passbandLowHz()),
+            static_cast<float>(m_pipeline->passbandHighHz()));
+    }
+
+    m_statusLabel->setText("Mode: " + m_pipeline->modeName());
+}
+
+void MainWindow::onToneSweepTx() {
+    if (m_audio->isTransmitting()) {
+        m_statusLabel->setText("TX in progress — wait for it to finish");
+        return;
+    }
+
+    // Generate the 16-tone sweep audio (does NOT set m_pipeline m_transmitting,
+    // so the RX pipeline and tone monitor stay live during playback).
+    std::vector<float> audio = m_pipeline->generateToneSweepAudio();
+
+    float gain = 1.0f;
+    if (m_levelPanel) {
+        float dBFS = m_levelPanel->txFaderDbFS();
+        gain = std::max(0.0f, std::min(1.0f, std::pow(10.0f, dBFS / 20.0f)));
+    }
+    QString outDev = HavenFSK::savedOutputDevice();
+    int leadMs = HavenFSK::pttLeadMs();
+
+    m_toneSweepActive = true;
+    m_toneTestButton->setEnabled(false);
+    m_statusLabel->setText("Tone sweep TX (8s) — watch debug log for ToneMon[] lines");
+
+    // Start tone monitor BEFORE TX so no received symbols are missed.
+    m_monitorButton->setChecked(true);   // visually reflects active state
+
+    auto startAudio = [this, audio, outDev, gain]() {
+        if (!m_audio->startTx(outDev, audio, gain)) {
+            m_toneSweepActive = false;
+            m_pipeline->setToneMonitor(false);
+            m_toneTestButton->setEnabled(true);
+            m_statusLabel->setText("Tone sweep: audio start failed");
+        }
+    };
+
+    if (m_pttManager && m_radio && m_radio->isConnected()) {
+        if (!m_pttManager->requestTX()) {
+            m_toneSweepActive = false;
+            m_pipeline->setToneMonitor(false);
+            m_toneTestButton->setEnabled(true);
+            m_statusLabel->setText("Tone sweep: PTT request failed");
+            return;
+        }
+        QTimer::singleShot(leadMs, this, startAudio);
+    } else {
+        startAudio();
+    }
 }
 
 void MainWindow::onWaterfallTune(float audioHz) {

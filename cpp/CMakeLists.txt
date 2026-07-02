@@ -51,6 +51,13 @@ set(SOURCES
     src/dsp/DCD.cpp
     src/dsp/FEC.cpp
     src/dsp/Frame.cpp
+    src/dsp/MfskModem.cpp
+    src/dsp/Interleaver.cpp
+    src/dsp/psk/Varicode.cpp
+    src/dsp/psk/Psk31Modulator.cpp
+    src/dsp/psk/Psk31Demodulator.cpp
+    src/dsp/psk/Psk31Modem.cpp
+    src/dsp/ModemFactory.cpp
     src/dsp/DspPipeline.cpp
     src/audio/AudioEngine.cpp
     src/radio/RigctldClient.cpp
@@ -71,6 +78,18 @@ set(SOURCES
 
 set(HEADERS
     src/dsp/Constants.h
+    src/dsp/MfskConstants.h
+    src/dsp/IModem.h
+    src/dsp/ModemFactory.h
+    src/dsp/MfskModem.h
+    src/dsp/Interleaver.h
+    src/dsp/psk/Psk31Constants.h
+    src/dsp/psk/Psk31VaricodeTable.h
+    src/dsp/psk/Varicode.h
+    src/dsp/psk/Psk31Modulator.h
+    src/dsp/psk/Psk31Demodulator.h
+    src/dsp/psk/Psk31Modem.h
+    src/dsp/psk/Psk31SelfTest.h
     src/dsp/Modulator.h
     src/dsp/Demodulator.h
     src/dsp/Preamble.h

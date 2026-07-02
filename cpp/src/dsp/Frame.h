@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <array>
-#include "Constants.h"
+#include "MfskConstants.h"
 
 namespace HavenFSK {
 
@@ -52,16 +52,23 @@ public:
     static uint16_t crc16(const uint8_t* data, size_t len);
 
 private:
-    static constexpr uint8_t PROTOCOL_VERSION = 0x01;
+    // Version 2: header sent 3x with bit-level majority voting (was 2x,
+    // "prefer copy 1" — see DECISIONS.md ADR-102) and payload bits pass
+    // through Interleaver (new in v2) — both are wire-format changes,
+    // bundled into one version bump so old- and new-version stations
+    // reject each other's frames cleanly via parseHeader()'s version
+    // check rather than silently misdecoding.
+    static constexpr uint8_t PROTOCOL_VERSION = 0x02;
     static constexpr uint8_t FLAG_FEC_ENABLED = 0x01;
 
-    // Header layout — header is sent twice for redundancy on HF
+    // Header layout — header is sent 3x for majority-vote redundancy on HF
     static constexpr int HEADER_BYTES       = 2;
     static constexpr int HEADER_SYMS        = HEADER_BYTES * 2;        // 4 per copy
-    static constexpr int HEADER_TOTAL_SYMS  = HEADER_SYMS * 2;         // 8 (two copies)
+    static constexpr int HEADER_COPIES      = 3;
+    static constexpr int HEADER_TOTAL_SYMS  = HEADER_SYMS * HEADER_COPIES;  // 12 (three copies)
     static constexpr int CRC_BYTES          = 2;
     static constexpr int CRC_SYMS           = CRC_BYTES * 2;           // 4
-    static constexpr int PAYLOAD_START      = HEADER_TOTAL_SYMS + CRC_SYMS;  // 12
+    static constexpr int PAYLOAD_START      = HEADER_TOTAL_SYMS + CRC_SYMS;  // 16
 
     // Build 2-byte header
     std::array<uint8_t, 2> buildHeader(uint8_t nBlocks) const;
@@ -71,6 +78,13 @@ private:
                      uint8_t& version,
                      uint8_t& flags,
                      uint8_t& nBlocks) const;
+
+    // Bit-level majority vote across HEADER_COPIES decoded header byte
+    // sets. For each bit position independently, the value held by at
+    // least 2 of 3 copies wins — more robust than whole-byte majority,
+    // which would require two entire copies to match exactly.
+    static std::array<uint8_t, 2> majorityVoteHeader(
+        const std::vector<std::array<uint8_t, 2>>& copies);
 
     // Take hard decision (argmax) from one soft symbol energy vector
     static int argmax(const std::vector<float>& energies);

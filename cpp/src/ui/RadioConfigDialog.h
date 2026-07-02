@@ -1,6 +1,7 @@
 #pragma once
 #include <QDialog>
 #include <QRadioButton>
+#include <QCheckBox>
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QGroupBox>
@@ -48,6 +49,9 @@ private:
 
     QSpinBox*    m_pttLeadMs    {nullptr};
     QSpinBox*    m_txTailMs    {nullptr};
+
+    QCheckBox*   m_setModeOnConnect  {nullptr};
+    QLineEdit*   m_connectModeString {nullptr};
 
     QPushButton* m_connectBtn    {nullptr};
     QPushButton* m_disconnectBtn {nullptr};

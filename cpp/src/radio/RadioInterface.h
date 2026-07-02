@@ -36,7 +36,10 @@ public:
     virtual void requestFrequency() {}
 
     // ── Mode ──────────────────────────────────────────────────────────────
-    // Set operating mode (e.g. "USB", "LSB", "DIGU", "DIGL").
+    // Set operating mode using Hamlib rigctld mode tokens, e.g. "USB",
+    // "LSB", "PKTUSB", "PKTLSB", "RTTY". Kenwood-family radios (TS-590SG,
+    // TS-480HX, etc.) report/expect data mode as "PKTUSB"/"PKTLSB" in
+    // Hamlib — not front-panel-style labels like "DIGU"/"DIGL"/"USB-D".
     virtual bool setMode(const QString& mode) = 0;
 
     // Get current mode string. Returns empty string if not connected.
@@ -45,6 +48,15 @@ public:
     // ── Split ─────────────────────────────────────────────────────────────
     // Enable split operation. txHz = 0 means use current VFO B.
     virtual bool setSplit(bool enable, uint64_t txHz = 0) = 0;
+
+    // ── Power ─────────────────────────────────────────────────────────────
+    // Normalized TX power level in [0.0, 1.0] (fraction of the radio's
+    // configured max power) — matches rigctld's RFPOWER level protocol,
+    // which has no absolute-watts concept. Convert to/from a displayed
+    // watts figure at the UI layer using an operator-entered max-power
+    // setting, not here. Returns -1.0 if not connected/unsupported.
+    virtual float getPowerLevel() = 0;
+    virtual bool  setPowerLevel(float level0to1) = 0;
 
 signals:
     void connected();

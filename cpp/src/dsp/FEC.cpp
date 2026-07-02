@@ -409,7 +409,10 @@ std::vector<float> FEC::softToLLR(
         for (int b = 0; b < BITS_PER_SYMBOL; b++) {
             float sum0 = EPS, sum1 = EPS;
             for (int t = 0; t < NUM_TONES; t++) {
-                int bitVal = (t >> (BITS_PER_SYMBOL - 1 - b)) & 1;
+                // Gray-decode the tone index to recover the nibble value before
+                // extracting individual bits — must mirror grayEncode() in Modulator.
+                int nibble = grayDecode(static_cast<uint8_t>(t));
+                int bitVal = (nibble >> (BITS_PER_SYMBOL - 1 - b)) & 1;
                 if (bitVal == 0)
                     sum0 += energies[t];
                 else

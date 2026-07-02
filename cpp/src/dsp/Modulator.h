@@ -2,7 +2,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
-#include "Constants.h"
+#include "MfskConstants.h"
 
 namespace HavenFSK {
 

@@ -56,6 +56,18 @@ void RadioConfigDialog::setupUi() {
     auto* rigNote  = new QLabel("Default port 4532.");
     rigNote->setStyleSheet("color: gray; font-size: 9pt;");
     rigForm->addRow("", rigNote);
+
+    m_setModeOnConnect = new QCheckBox("Set radio to data mode on connect");
+    rigForm->addRow("", m_setModeOnConnect);
+    m_connectModeString = new QLineEdit;
+    m_connectModeString->setPlaceholderText("PKTUSB");
+    m_connectModeString->setToolTip(
+        "Hamlib rigctld mode token sent on connect.\n"
+        "Kenwood TS-590SG/TS-480HX data mode: PKTUSB / PKTLSB.\n"
+        "Check your rig's Hamlib backend for the correct token.");
+    rigForm->addRow("Mode on connect:", m_connectModeString);
+    connect(m_setModeOnConnect, &QCheckBox::toggled,
+            m_connectModeString, &QLineEdit::setEnabled);
     layout->addWidget(m_rigctldGroup);
 
     // TCI settings
@@ -173,6 +185,9 @@ void RadioConfigDialog::loadSettings() {
     m_tciPort->setValue(HavenFSK::tciPort());
     m_pttLeadMs->setValue(HavenFSK::pttLeadMs());
     m_txTailMs->setValue(HavenFSK::txTailMs());
+    m_setModeOnConnect->setChecked(HavenFSK::setModeOnConnect());
+    m_connectModeString->setText(HavenFSK::connectModeString());
+    m_connectModeString->setEnabled(m_setModeOnConnect->isChecked());
     onMethodChanged();
 }
 
@@ -194,6 +209,10 @@ void RadioConfigDialog::saveSettings() {
                m_pttLeadMs->value());
     s.setValue(HavenFSK::RadioSettingsKeys::TX_TAIL_MS,
                m_txTailMs->value());
+    s.setValue(HavenFSK::RadioSettingsKeys::SET_MODE_ON_CONNECT,
+               m_setModeOnConnect->isChecked());
+    s.setValue(HavenFSK::RadioSettingsKeys::CONNECT_MODE_STRING,
+               m_connectModeString->text().trimmed());
 }
 
 void RadioConfigDialog::setConnected(bool connected) {

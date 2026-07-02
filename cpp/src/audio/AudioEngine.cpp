@@ -264,10 +264,45 @@ bool AudioEngine::startTx(const QString& deviceName,
     connect(m_txPlayer, &QMediaPlayer::playbackStateChanged,
             this, &AudioEngine::onTxPlaybackStateChanged);
 
+    // Log when QMediaPlayer reports the actual audio format it negotiated
+    // with the output device.  A sample rate other than 48000 Hz means the
+    // OS audio engine resampled the WAV — all Haven tones would be shifted
+    // by the ratio and the remote receiver would fail to decode.
+    connect(m_txAudioOut, &QAudioOutput::deviceChanged,
+            this, [this]() {
+        if (m_txAudioOut) {
+            auto fmt = m_txAudioOut->device().preferredFormat();
+            qDebug() << "AudioEngine: TX output device preferred format —"
+                     << fmt.sampleRate() << "Hz,"
+                     << fmt.channelCount() << "ch,"
+                     << fmt.sampleFormat();
+            if (fmt.sampleRate() != HavenFSK::SAMPLE_RATE)
+                qWarning() << "AudioEngine: TX sample rate mismatch — device prefers"
+                           << fmt.sampleRate() << "Hz, WAV is"
+                           << HavenFSK::SAMPLE_RATE
+                           << "Hz. OS will resample and shift all Haven tones.";
+        }
+    });
+
     m_txPlayer->setSourceDevice(m_txGainDevice, QUrl("audio/wav"));
 
     m_transmitting = true;
     m_txPlayer->play();
+
+    // Log the TX output device's preferred format immediately (deviceChanged
+    // may not fire if the device was already set).
+    {
+        auto fmt = dev.preferredFormat();
+        qDebug() << "AudioEngine: TX output device preferred format —"
+                 << fmt.sampleRate() << "Hz,"
+                 << fmt.channelCount() << "ch,"
+                 << fmt.sampleFormat();
+        if (fmt.sampleRate() != HavenFSK::SAMPLE_RATE)
+            qWarning() << "AudioEngine: TX sample rate mismatch — device prefers"
+                       << fmt.sampleRate() << "Hz, WAV is"
+                       << HavenFSK::SAMPLE_RATE
+                       << "Hz. OS will resample and shift all Haven tones.";
+    }
 
     qDebug() << "AudioEngine: TX started with real-time gain"
              << initialGain << "(" << m_txWavData.size() << "bytes)";

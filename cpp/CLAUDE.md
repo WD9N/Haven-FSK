@@ -96,4 +96,4 @@ The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use 
 
 ## Architecture Decisions
 
-`DECISIONS.md` (ADR-001 through ADR-076) is the authoritative record. Consult it before changing any of the above invariants. Status "Decided" means the decision is not open for re-discussion without new information. Status "Revisable" means reasonable to reconsider.
+`DECISIONS.md` (ADR-001 through ADR-101 and growing) is the authoritative record. Consult it before changing any of the above invariants. Status "Decided" means the decision is not open for re-discussion without new information. Status "Revisable" means reasonable to reconsider.

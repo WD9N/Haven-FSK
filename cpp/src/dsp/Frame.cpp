@@ -3,6 +3,7 @@
 #include "Modulator.h"
 #include "Demodulator.h"
 #include "Preamble.h"
+#include "Interleaver.h"
 #include <algorithm>
 #include <cstring>
 #include <cassert>
@@ -53,6 +54,25 @@ bool Frame::parseHeader(const std::array<uint8_t, 2>& hdr,
     return (version == PROTOCOL_VERSION);
 }
 
+std::array<uint8_t, 2> Frame::majorityVoteHeader(
+    const std::vector<std::array<uint8_t, 2>>& copies)
+{
+    std::array<uint8_t, 2> result{0, 0};
+    int n = static_cast<int>(copies.size());
+    for (int byteIdx = 0; byteIdx < 2; byteIdx++) {
+        uint8_t out = 0;
+        for (int bit = 7; bit >= 0; bit--) {
+            int ones = 0;
+            for (const auto& copy : copies)
+                if ((copy[byteIdx] >> bit) & 1) ones++;
+            int bitVal = (ones * 2 >= n) ? 1 : 0;
+            out = static_cast<uint8_t>((out << 1) | bitVal);
+        }
+        result[byteIdx] = out;
+    }
+    return result;
+}
+
 int Frame::argmax(const std::vector<float>& energies) {
     return static_cast<int>(
         std::distance(energies.begin(),
@@ -69,8 +89,9 @@ std::vector<uint8_t> Frame::hardDecodeSymbols(
     std::vector<uint8_t> bytes;
     bytes.reserve(count / 2);
     for (int i = 0; i + 1 < count; i += 2) {
-        int s0 = argmax(syms[offset + i]);
-        int s1 = argmax(syms[offset + i + 1]);
+        // Gray-decode tone index back to nibble value — mirrors grayEncode() in Modulator.
+        int s0 = grayDecode(static_cast<uint8_t>(argmax(syms[offset + i])));
+        int s1 = grayDecode(static_cast<uint8_t>(argmax(syms[offset + i + 1])));
         bytes.push_back(static_cast<uint8_t>((s0 << 4) | (s1 & 0x0F)));
     }
     return bytes;
@@ -137,19 +158,26 @@ std::vector<float> Frame::assemble(const std::string& text) const {
     // where preamble left off. Zero discontinuity at preamble→header boundary.
     mod.setPhase(preamble.finalPhase());
 
-    // Header sent twice — second copy is continuous-phase from first.
-    // If the first copy is hit by a fade the second copy allows recovery.
+    // Header sent 3x — each copy is continuous-phase from the previous.
+    // RX majority-votes the 3 copies bit-by-bit (see Frame::parse()),
+    // tolerating a fade hitting up to one full copy without corrupting
+    // the recovered header.
     std::vector<uint8_t> hdrVec(hdr.begin(), hdr.end());
     std::vector<float> headerAudio = mod.modulate(hdrVec);
-    std::vector<float> headerAudio2 = mod.modulate(hdrVec);
-    headerAudio.insert(headerAudio.end(),
-                       headerAudio2.begin(), headerAudio2.end());
+    for (int copy = 1; copy < 3; ++copy) {
+        std::vector<float> headerAudioN = mod.modulate(hdrVec);
+        headerAudio.insert(headerAudio.end(),
+                           headerAudioN.begin(), headerAudioN.end());
+    }
 
     std::vector<uint8_t> crcVec(crcBytes.begin(), crcBytes.end());
     std::vector<float> crcAudio = mod.modulate(crcVec);
 
-    // Convert BPSK floats to bytes for modulation
-    std::vector<uint8_t> payloadBytes = bpskToBytes(enc.bpsk);
+    // Interleave payload bits across all nBlocks LDPC blocks before
+    // packing to bytes/symbols — spreads HF fade bursts so LDPC sees
+    // scattered errors rather than a concentrated run (see Interleaver.h).
+    std::vector<float> interleavedBpsk = Interleaver::interleave(enc.bpsk, enc.nBlocks);
+    std::vector<uint8_t> payloadBytes = bpskToBytes(interleavedBpsk);
     std::vector<float> payloadAudio = mod.modulate(payloadBytes);
 
     // 7. Concatenate
@@ -183,27 +211,29 @@ ParseResult Frame::parse(
         return result;
     }
 
-    // ── Decode header — both copies (symbols 0-3 and 4-7) ───────────────────
-    auto hdrBytes1 = hardDecodeSymbols(softSymbols, 0,          HEADER_SYMS);
-    auto hdrBytes2 = hardDecodeSymbols(softSymbols, HEADER_SYMS, HEADER_SYMS);
-
-    if ((int)hdrBytes1.size() < HEADER_BYTES) {
-        result.error = "Header decode failed";
-        return result;
+    // ── Decode header — 3 copies, bit-level majority vote ──────────────────
+    std::vector<std::array<uint8_t, 2>> hdrCopies;
+    for (int c = 0; c < HEADER_COPIES; c++) {
+        auto bytes = hardDecodeSymbols(softSymbols, c * HEADER_SYMS, HEADER_SYMS);
+        if ((int)bytes.size() < HEADER_BYTES) {
+            result.error = "Header decode failed";
+            return result;
+        }
+        hdrCopies.push_back({bytes[0], bytes[1]});
     }
 
-    if (hdrBytes1 != hdrBytes2) {
-        qDebug() << "Frame::parse: header copies differ — copy1 nBlocks="
-                 << hdrBytes1[1] << "copy2 nBlocks=" << hdrBytes2[1]
-                 << "using copy 1";
+    if (!(hdrCopies[0] == hdrCopies[1] && hdrCopies[1] == hdrCopies[2])) {
+        qDebug() << "Frame::parse: header copies differ — nBlocks candidates:"
+                 << hdrCopies[0][1] << hdrCopies[1][1] << hdrCopies[2][1]
+                 << "— using bit-level majority vote";
     }
-    std::array<uint8_t, 2> hdr = {hdrBytes1[0], hdrBytes1[1]};
+    std::array<uint8_t, 2> hdr = majorityVoteHeader(hdrCopies);
 
     qDebug() << "Frame::parse hdr[0]=0x"
                 + QString::number(hdr[0], 16).rightJustified(2, '0')
                 + " hdr[1]=0x"
                 + QString::number(hdr[1], 16).rightJustified(2, '0')
-                + " expect hdr[0]=0x11 (double-header, PAYLOAD_START=12)";
+                + " expect hdr[0]=0x21 (3x-header majority vote, PAYLOAD_START=16)";
 
     uint8_t version, flags, nBlocks;
     if (!parseHeader(hdr, version, flags, nBlocks)) {
@@ -244,12 +274,16 @@ ParseResult Frame::parse(
             softSymbols.begin() + PAYLOAD_START,
             softSymbols.begin() + PAYLOAD_START + symsNeeded);
 
-        // Convert soft symbol energies to per-bit LLR values
+        // Convert soft symbol energies to per-bit LLR values, then undo
+        // the TX-side interleave (see Frame::assemble()) before FEC
+        // decode — LLRs are still in the interleaved (transmission)
+        // order at this point, matching Interleaver's bit-level domain.
         FEC fec;
         auto llr = fec.softToLLR(payloadSoft);
+        auto deinterleavedLlr = Interleaver::deinterleave(llr, nBlocks);
 
         int origLen = nBlocks * LDPC_BYTES_PER_BLOCK;
-        auto decRes = fec.decodeMessage(llr, nBlocks, origLen);
+        auto decRes = fec.decodeMessage(deinterleavedLlr, nBlocks, origLen);
 
         result.converged     = decRes.allConverged;
         result.fecIterations = decRes.totalIterations;

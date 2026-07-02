@@ -75,7 +75,9 @@ architectural cleanliness.
 
 ## ADR-004 — KissFFT chosen as FFT library
 
-**Status:** Decided
+**Status:** Decided (GPL-rejection reasoning below superseded by ADR-101 —
+KissFFT remains the correct choice, but "commercial use" was never a real
+project constraint)
 **Date:** June 2026
 
 **Decision:** KissFFT is used for all FFT operations in the DSP layer.
@@ -2020,3 +2022,112 @@ At 31.25 baud, a 4-symbol header sits entirely within one typical fade
 window. Sending it twice requires independent fades to corrupt both copies,
 which is highly improbable given typical HF propagation. This change was
 made together with ADR-098 since both require `PAYLOAD_START = 12`.
+
+---
+
+## ADR-101 — Project license corrected to GPLv3; ADR-004 rationale superseded
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** HAVEN-FSK is licensed under GPLv3. `LICENSE` (repo root)
+carries the full canonical GPLv3 text. `THIRD_PARTY_LICENSES.md` documents
+third-party license obligations.
+
+**Reasoning:** The project was intended to be GPLv3 from inception. ADR-004's
+justification for choosing KissFFT — that FFTW's GPL variant was "incompatible
+with potential commercial use" — reflected a drift from that original intent,
+not a real constraint: HAVEN-FSK has no commercial-distribution goal that GPL
+would block, and GPLv3's copyleft is in fact aligned with the goal of
+preventing the mode from being locked into a closed-source commercial fork
+(GPLv3 does not prohibit commercial use of the software itself; it prohibits
+distributing it, or derivatives of it, without also conveying the same rights
+and source access to recipients).
+
+Concrete evidence the project was already implicitly GPL-obligated before this
+correction: `CMakeLists.txt` links `Qt6::Charts`
+(`target_link_libraries(HavenFSK PRIVATE ... Qt6::Charts ...)`). In Qt's
+open-source distribution, the Charts module is available only under GPLv3 —
+there is no LGPL option for it, unlike most other Qt6 modules used here. Any
+build linking `Qt6::Charts` under the open-source Qt offering is therefore
+already bound by GPLv3 terms for that dependency, regardless of what license
+the rest of the project claimed.
+
+**Effect on ADR-004:** ADR-004's actual *decision* — use KissFFT rather than
+FFTW — is unaffected and remains correct: KissFFT's BSD-3-Clause license is
+fully compatible with a GPLv3 project (permissive licenses may be incorporated
+into GPL works; the restriction only runs the other direction). Only the
+GPL-rejection *reasoning* given for that decision was incorrect and is
+superseded by this entry.
+
+**Practical effect going forward:** GPLv3 (or GPLv3-compatible, e.g.
+permissive) source may now be vendored or adapted into the project — for
+example, consulting fldigi (GPLv3, https://github.com/w1hkj/fldigi) for PSK31
+and MFSK decoding techniques — following the existing vendoring pattern
+established in ADR-005 (isolate under `src/third_party/` or an appropriately
+namespaced subdirectory, preserve upstream copyright notices, document the
+license and provenance in `THIRD_PARTY_LICENSES.md`).
+
+---
+
+## ADR-102 — Payload interleaving and 3x header majority vote (protocol v2)
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `Frame::PROTOCOL_VERSION` bumped from `0x01` to `0x02`,
+bundling two wire-format changes:
+
+1. **Payload interleaving.** A row/column block interleaver
+   (`Interleaver::interleave`/`deinterleave`, `src/dsp/Interleaver.h`)
+   spans all `nBlocks` LDPC blocks of a message: bits are written
+   row-wise (one row per block, natural order) and read out
+   column-wise. `Frame::assemble()` interleaves `FEC::encodeMessage()`'s
+   BPSK output before packing to bytes/symbols; `Frame::parse()`
+   deinterleaves the LLR array (post-`FEC::softToLLR()`) before
+   `FEC::decodeMessage()`. No-op when `nBlocks <= 1`.
+2. **3x header with bit-level majority vote.** The 2-byte header is now
+   sent 3 times (`HEADER_COPIES = 3`, was 2 — see ADR-099) instead of the
+   previous "send twice, always prefer copy 1" behavior. `Frame::parse()`
+   decodes all 3 copies and takes, independently for each bit position,
+   whichever value at least 2 of 3 copies agree on
+   (`Frame::majorityVoteHeader()`). `PAYLOAD_START` moves from 12 to 16.
+   `MfskModem::tryCompleteFrame()`'s early header decode (used for buffer
+   sizing before the full frame arrives — a deliberate duplicate of
+   `Frame::parse()`'s header logic per ADR-098) was updated to match.
+
+**Reasoning:** Both address the same root cause — HF fading produces
+*burst* errors (a fade lasting a fraction of a second corrupts several
+consecutive transmitted symbols), and LDPC belief propagation, like most
+block error-correcting codes, handles randomly-distributed bit errors far
+better than a burst concentrated in one region of a block. Interleaving
+spreads a burst across all blocks of a message so each individual block
+sees only scattered single-bit errors after deinterleaving. The header
+carries `nBlocks`, the one field that tells the receiver how long the
+frame is — if it's corrupted, the decoder doesn't know how many payload
+symbols to collect, and this is caught only after wasted collection
+time. Two copies can't do genuine majority voting (a tie with no
+tiebreak); three copies with independent per-bit voting means a fade
+would need to corrupt the *same* bit position in at least 2 of 3
+temporally-separated copies to still produce a wrong header, which is
+substantially less likely than corrupting one full copy.
+
+**Why bundle into one version bump:** both changes break wire
+compatibility with existing (pre-v2) HAVEN-FSK stations. Landing them
+as two separate breaking releases would mean two incompatible-version
+windows instead of one; `Frame::parseHeader()`'s existing version check
+(`version == PROTOCOL_VERSION`) already causes a v1-vs-v2 mismatch to be
+rejected cleanly (`"Unknown protocol version"`) rather than silently
+misdecoded, so no new gating logic was needed — only the version
+constant itself changed meaning.
+
+**Verification:** `FrameSelfTest.h`'s existing assemble/parse round-trip
+test exercises the full v2 path (3x header + interleave/deinterleave)
+automatically; confirmed passing via the app's debug log showing
+`Frame::parse hdr[0]=0x21 ... expect hdr[0]=0x21` during self-test, with
+the app proceeding normally into live audio RX afterward (a self-test
+failure would `return 1` before reaching that point — see `main.cpp`).
+**Not yet verified:** an actual over-the-air round trip on a real or
+simulated fading HF channel to confirm the interleaver measurably
+improves decode success versus the v1 baseline — the self-test only
+proves the encode/decode path is bit-exact on a clean channel.

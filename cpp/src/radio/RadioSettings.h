@@ -18,6 +18,13 @@ namespace RadioSettingsKeys {
 
     static constexpr const char* PTT_LEAD_MS = "radio/ptt_lead_ms";
     static constexpr const char* TX_TAIL_MS  = "radio/tx_tail_ms";
+
+    // Optional: set radio to a data mode automatically on rig connect.
+    // Off by default — never force a mode change without operator opt-in.
+    static constexpr const char* SET_MODE_ON_CONNECT = "radio/set_mode_on_connect";
+    static constexpr const char* CONNECT_MODE_STRING  = "radio/connect_mode_string";
+    // Hamlib rigctld convention for Kenwood-family data mode; see
+    // RadioInterface::setMode() doc comment.
 }
 
 // Station information keys
@@ -118,6 +125,16 @@ inline uint16_t tciPort() {
     QSettings s;
     return static_cast<uint16_t>(
         s.value(RadioSettingsKeys::TCI_PORT, 50001).toInt());
+}
+
+// Set radio to a data mode automatically on connect (opt-in)
+inline bool setModeOnConnect() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::SET_MODE_ON_CONNECT, false).toBool();
+}
+inline QString connectModeString() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::CONNECT_MODE_STRING, "PKTUSB").toString();
 }
 
 } // namespace HavenFSK

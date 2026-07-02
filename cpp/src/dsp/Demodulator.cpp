@@ -55,6 +55,18 @@ std::vector<float> Demodulator::detectSymbol(const float* block,
         }
         energies[t] = e;
     }
+
+    // Square energies — sharpens discrimination between signal and noise
+    // (matches FLDigi SoftDecode technique; E *= E before normalization).
+    for (float& e : energies) e *= e;
+
+    // Normalize to sum=1.0 — makes all downstream LLR magnitudes independent
+    // of absolute signal level, which is essential for LDPC BP convergence.
+    float total = 0.0f;
+    for (float e : energies) total += e;
+    if (total > 1e-10f)
+        for (float& e : energies) e /= total;
+
     return energies;
 }
 
