@@ -1,19 +1,30 @@
 # HAVEN-FSK Mode Specification
 
-**Version:** 0.1.1-alpha  
-**Date:** June 2026  
+**Version:** 0.2.0-beta  
+**Date:** July 2026  
 **Author:** WD9N  
 **Status:** Development — Pre-release  
 **Repository:** https://github.com/WD9N/Haven-FSK  
+
+**Scope note:** This document specifies HAVEN-FSK's original mode — 16-tone
+continuous-phase MFSK (CPMFSK), emission designator 500HJ2D. As of v0.2.0
+the reference application additionally supports PSK31 as a second,
+independently-selectable operating mode. PSK31 is a well-established public
+digital mode (G3PLX) requiring no novel §97.309 disclosure of its own; this
+specification does not cover it. Nothing in this document applies to the
+application's PSK31 mode.
 
 ---
 
 ## 1. Overview
 
 HAVEN-FSK is an HF digital mode designed for free-text conversational
-communication. It is the fastest conversational HF digital mode in common
-use, delivering ~62 bps net throughput in 500 Hz bandwidth — 50% faster
-than Olivia 16/500 and twice as fast as PSK31 — while retaining LDPC
+communication, using 16-tone **continuous-phase MFSK (CPMFSK)** — the
+transmitter's phase accumulator carries continuously across every symbol
+boundary rather than resetting per symbol, so only tone *frequency* changes
+between symbols, not phase. It is the fastest conversational HF digital mode
+in common use, delivering ~62 bps net throughput in 500 Hz bandwidth — 50%
+faster than Olivia 16/500 and twice as fast as PSK31 — while retaining LDPC
 forward error correction.
 
 The mode fills a gap in the current amateur digital landscape:
@@ -25,9 +36,11 @@ The mode fills a gap in the current amateur digital landscape:
 | Olivia 16/500 | ~42 bps  | ~63 WPM  | Good        | Yes       | Yes |
 | **HAVEN-FSK** | **~62 bps** | **~94 WPM** | **Good** | **Yes** | **Yes** |
 
-HAVEN-FSK uses 16-tone MFSK modulation with LDPC forward error correction,
-CRC-16 integrity checking, preamble-based frame synchronization, and
-collision avoidance via DCD monitoring and randomized transmit delay.
+HAVEN-FSK uses 16-tone continuous-phase MFSK modulation with LDPC forward
+error correction, CRC-16 integrity checking, and preamble-based frame
+synchronization. DCD (carrier detect) is displayed to the operator as an
+advisory indicator; automatic collision avoidance via randomized transmit
+delay is planned but not yet implemented (see §7.2).
 
 ---
 
@@ -116,43 +129,82 @@ Example: ASCII 'A' = 0x41 = 0100 0001
 - Symbol 1: tone 4 (0100) at 625.00 Hz for 32ms
 - Symbol 2: tone 1 (0001) at 531.25 Hz for 32ms
 
-### 3.4 Tone Generation
+### 3.4 Tone Generation — Continuous Phase (CPMFSK)
 
-Each symbol is a pure sine wave at the tone frequency lasting exactly
-32ms (1536 samples at 48000 Hz, or 256 samples at 8000 Hz). The tones
-are orthogonal — each tone frequency is an integer multiple of the 
-symbol rate (31.25 Hz), ensuring zero inter-tone interference when the 
-receiver is symbol-synchronized.
+Each symbol lasts exactly 32ms (1536 samples at 48000 Hz). The transmitter
+maintains a single continuous phase accumulator across the entire
+transmission — phase is **never reset at a symbol boundary**. Each sample
+is generated as `sin(phase)`, where `phase` advances every sample by
+`2π × f / Fs` for the current symbol's tone frequency `f`, and carries that
+accumulated value forward unchanged into the next symbol regardless of
+which tone is selected next. Only the tone (frequency) changes at a symbol
+boundary; phase itself is continuous. This is what distinguishes CPMFSK
+from simple/discontinuous-phase MFSK, where each symbol would restart at
+phase zero.
 
-Output amplitude is normalized to 0.25 peak (-12 dBFS) to provide 
-headroom and prevent ALC activation on typical radio audio inputs.
+The tones are orthogonal — each tone frequency is an integer multiple of
+the symbol rate (31.25 Hz) above the base frequency, ensuring zero
+inter-tone interference when the receiver is symbol-synchronized.
+
+**Note:** frequency (not phase) still changes abruptly at each symbol
+boundary. Raised-cosine amplitude shaping across that transition was
+tried and deliberately removed: with phase-continuous generation, the
+shaping produced audible amplitude dips at the 31.25 Hz symbol rate
+rather than smoothing anything, and was worse than no shaping at all
+(verified by waveform inspection). The current implementation applies no
+amplitude shaping at symbol boundaries; a raised-cosine constant remains
+defined in source but is intentionally unused.
+
+Per-symbol output is normalized to full scale (1.0 peak / 0 dBFS) before
+handoff to the audio output stage; actual transmit drive level is
+controlled downstream by the operator-adjustable TX gain control, not by a
+fixed modulator-side amplitude target.
 
 ### 3.5 Detection
 
 The receiver uses non-coherent detection via FFT. For each symbol period
-an 8× zero-padded FFT is computed. The tone with the highest energy at
-the 16 designated frequency bins is selected as the decoded symbol.
+an 8× zero-padded FFT is computed (12288-point FFT for a 1536-sample
+symbol, ≈3.9 Hz/bin resolution). Soft symbol energies (not just the
+single winning tone) are computed for every one of the 16 tone bins and
+passed downstream as soft-decision input to the LDPC decoder (see Section
+5) — final hard tone selection for header/CRC fields uses the
+highest-energy bin among the 16.
 
-A guard window of ±3 sub-bins around each tone center frequency provides
-sub-Hz frequency resolution, tolerating minor frequency drift.
+A guard window of ±3 zero-padded FFT bins (≈±11.7 Hz) around each tone's
+center frequency provides drift tolerance beyond the raw 31.25 Hz/bin
+resolution a non-zero-padded FFT would give.
+
+**Frequency acquisition:** because independent radios' oscillators can
+differ by tens to over a hundred Hz at HF (e.g. ±70 Hz at 14 MHz for 5 ppm
+tolerance) even when both are dialed to the same frequency, the receiver
+does not assume zero offset. It searches multiple frequency-offset
+hypotheses (spaced 20 Hz apart) while scanning for the preamble, refines
+the winning hypothesis using a sub-bin spectral-centroid measurement, and
+optionally (operator-enabled AFC) tracks that offset as the center of the
+search window for subsequent frames.
 
 ---
 
 ## 4. Frame Format
 
-A complete HAVEN-FSK transmission consists of:
+A complete HAVEN-FSK transmission (protocol version 2) consists of:
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│ PREAMBLE  │ HEADER  │ CRC-16  │ FEC-ENCODED PAYLOAD          │
-│ 16 sym    │ 2 bytes │ 2 bytes │ n_blocks × 192 bits          │
-│ 512ms     │ 64ms    │ 64ms    │ variable                     │
-└───────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ PREAMBLE  │ HEADER (x3)     │ CRC-16  │ FEC-ENCODED PAYLOAD (interleaved) │
+│ 16 sym    │ 2 bytes x 3     │ 2 bytes │ n_blocks × 192 bits                │
+│ 512ms     │ 384ms (12 sym)  │ 128ms   │ variable (n_blocks × 1536ms)       │
+└────────────────────────────────────────────────────────────────────────┘
 ```
+
+The header is transmitted three times in immediate succession (see §4.2);
+the payload's coded bits pass through a block interleaver before
+modulation (see §4.4/§5.6) — both are required for a receiving station to
+correctly decode a real transmission, not merely tuning parameters.
 
 End of frame is indicated by carrier drop. No end marker is transmitted.
 The receiver declares end of frame when the carrier is absent for
-4 consecutive audio chunks (~100ms holdoff).
+4 consecutive audio chunks of 2048 samples at 48000 Hz (~171ms holdoff).
 
 ### 4.1 Preamble
 
@@ -166,30 +218,48 @@ signal identification and symbol timing recovery.
 
 Duration: 16 × 32ms = 512ms
 
-Detection uses normalized correlation scoring with a threshold of 1.4
-(scale 0–16). This threshold rejects voice, noise, and other digital modes.
+Detection uses soft correlation: for a candidate window, the fraction of
+total FFT energy falling on the expected tone bin is measured at each of
+the 16 preamble positions and averaged. Score range is 0.0625 (uniform
+noise, i.e. 1/16) to 1.0 (perfect match); the detection threshold is 0.45.
+This is evaluated across multiple frequency-offset hypotheses and multiple
+symbol-timing offsets per scan (see §3.5) to find the best-aligned
+candidate before applying the threshold.
 
 ### 4.2 Header
 
-Two bytes transmitted immediately after the preamble without FEC.
+Two bytes, transmitted **three times** in immediate succession after the
+preamble, without FEC. The receiver independently majority-votes each bit
+position across the three received copies (the value held by at least 2
+of 3 copies wins), tolerating a fade that corrupts up to one entire copy
+without corrupting the recovered header.
 
 **Byte 0:**
 ```
-Bits 7-4: VERSION  — protocol version (currently 0001)
+Bits 7-4: VERSION  — protocol version (currently 0010 = 2)
 Bits 3-0: FLAGS    — bit 0: FEC enabled (1=yes)
                      bits 1-3: reserved
 ```
+A receiver that decodes a VERSION it does not recognize (e.g. a v1 station
+hearing a v2 transmission that also added payload interleaving, or vice
+versa) rejects the frame rather than attempting to decode it — the two
+versions are not wire-compatible.
 
 **Byte 1:**
 ```
-Bits 7-0: NBLOCKS  — number of FEC blocks in payload (0-255)
-                     Maximum message: 255 × 12 = 3060 bytes
+Bits 7-0: NBLOCKS  — number of FEC blocks in payload
+                     Field width allows 0-255, but the receiver rejects
+                     any decoded NBLOCKS > 125 as a corrupted-header
+                     sanity check (protects against attempting a
+                     multi-thousand-second collection on a bit error).
+                     Effective maximum message: 125 × 12 = 1500 bytes.
 ```
 
 ### 4.3 CRC-16
 
-A 16-bit CRC transmitted as 2 bytes after the header, covering the
-header bytes plus the original unencoded payload.
+A 16-bit CRC transmitted as 2 bytes after the header (once — not repeated
+with the header), covering the header bytes plus the original unencoded
+payload.
 
 **Parameters:**
 - Algorithm: CRC-16/CCITT-FALSE
@@ -200,6 +270,11 @@ header bytes plus the original unencoded payload.
 ### 4.4 FEC-Encoded Payload
 
 Transmitted as NBLOCKS consecutive FEC blocks, each 192 bits (48 symbols).
+Before modulation, the concatenated coded bits from all NBLOCKS blocks pass
+through a block interleaver spanning the whole payload (see §5.6) — this is
+a wire-format requirement, not an optional receiver-side enhancement: a
+receiver that does not deinterleave will not recover the correct bit
+ordering for FEC decoding.
 
 ---
 
@@ -297,6 +372,32 @@ Messages longer than 12 bytes are split into multiple 12-byte blocks,
 each independently encoded. Short messages are padded with null bytes
 and padding is stripped after decoding.
 
+### 5.6 Payload Interleaving (protocol v2+)
+
+HF fading tends to corrupt several consecutive transmitted bits at once
+(a fade lasting a fraction of a second spans multiple symbols), which is
+a burst error — a pattern LDPC belief propagation handles far worse than
+the same number of errors spread randomly through a block. To mitigate
+this, the coded bits from all NBLOCKS blocks of a message (after LDPC
+encoding, before modulation) pass through a row/column block interleaver
+spanning the full payload:
+
+- **Write:** bits are written row-wise into a matrix with NBLOCKS rows
+  and 192 columns — row *i* holds LDPC block *i*'s 192 coded bits in
+  their natural (unpermuted) order.
+- **Read:** bits are read out column-wise (column 0 top-to-bottom, then
+  column 1, etc.) to produce the transmitted bit sequence.
+
+The receiver applies the inverse permutation (read the received bits back
+into the matrix column-wise, read the matrix out row-wise) before handing
+each block's bits to the LDPC decoder. A contiguous burst in the received
+audio, once deinterleaved, lands as isolated single-bit errors scattered
+across many different blocks rather than a concentrated run within one
+block.
+
+When a message is exactly one LDPC block (NBLOCKS = 1), interleaving is a
+no-op — there is only one block to spread a burst across.
+
 ---
 
 ## 6. Text Encoding
@@ -315,16 +416,22 @@ Primary character set: printable ASCII (0x20 through 0x7E).
 
 Monitors the 450–1050 Hz audio band for signal energy. DCD threshold
 is 12 dB above measured noise floor. Holdoff: 4 consecutive audio
-chunks (~100ms) before declaring channel clear.
+chunks of 2048 samples at 48000 Hz (~171ms) before declaring channel clear.
 
-### 7.2 Transmit Backoff
+DCD is advisory only in the current C++ implementation — it drives a
+status indicator for the operator's own judgment and does not gate
+transmission (see §7.2).
 
-| Message type              | Backoff range |
-|---------------------------|---------------|
-| CQ (message starts "CQ") | 50 — 100ms    |
-| All other messages        | 200 — 1500ms  |
+### 7.2 Transmit Backoff — Not Yet Implemented (C++)
 
-If the channel becomes active during backoff, the timer resets.
+Randomized, DCD-linked transmit backoff (shorter delay for CQ calls,
+longer for other traffic, resetting if the channel becomes active during
+the delay) was part of the original design intent but **is not present in
+the current C++ implementation** — transmission begins immediately on
+operator command (subject only to the PTT lead-time sequencing delay in
+§9), with no automatic randomized delay or DCD gate. Operators are
+responsible for listening before transmitting. This section documents
+intended future behavior; it does not describe current software behavior.
 
 ---
 
@@ -344,14 +451,23 @@ originating station's own data only, consistent with FCC §97.113.
 
 ## 9. PTT and Radio Interface
 
-| Method        | Description                               | Status      |
-|---------------|-------------------------------------------|-------------|
-| TCI WebSocket | Thetis/ExpertSDR via ws://localhost:40001 | Implemented |
-| Hamlib/rigctld| Universal radio control via TCP:4532      | Planned     |
-| VOX           | Voice-activated TX                        | Supported   |
-| Manual PTT    | Operator keys radio manually              | Supported   |
+| Method        | Description                                    | Status      |
+|---------------|-------------------------------------------------|-------------|
+| TCI WebSocket | Thetis/ExpertSDR/HPSDR, default ws://localhost:50001 | Implemented |
+| Hamlib/rigctld| Universal radio control via TCP, default :4532 | Implemented |
+| VOX           | Voice-activated TX (no rig-control connection) | Supported   |
+| Manual PTT    | Operator keys radio manually                   | Supported   |
 
-PTT watchdog timer: 120 seconds maximum TX time, automatic release.
+Hamlib/rigctld support includes automatic reconnect with exponential
+backoff on a dropped connection, split-frequency operation, TX power
+level get/set (normalized 0.0-1.0 fraction of the radio's configured max,
+matching rigctld's own `RFPOWER` level protocol — there is no
+absolute-watts concept at this layer), and periodic mode polling.
+Direct Hamlib library linking (bypassing rigctld) remains unimplemented;
+rigctld is the supported path for Hamlib-based rig control.
+
+PTT watchdog timer: 120 seconds maximum TX time, automatic release
+(FCC Part 97 compliance safeguard against a stuck/runaway transmission).
 
 ---
 
@@ -370,13 +486,17 @@ PTT watchdog timer: 120 seconds maximum TX time, automatic release.
 
 ### 10.2 Throughput Examples
 
-| Message                             | Length | TX Time |
-|-------------------------------------|--------|---------|
-| CQ POTA DE WD9N K-1234 K           | 24 ch  | 5.4s    |
-| KC8TYK DE WD9N 599 IN US-1017 K   | 34 ch  | 5.4s    |
-| Typical ragchew sentence            | 80 ch  | 9.2s    |
+Recalculated for protocol v2 framing: fixed overhead per transmission is
+512ms preamble + 384ms header (3 copies) + 128ms CRC = 1.024s, before any
+payload. Payload duration is `nBlocks × 48 symbols × 32ms = nBlocks × 1.536s`,
+where `nBlocks = ceil((chars + 1) / 12)` (the "+1" is the trailing space
+added before encoding, per §6).
 
-*TX time includes 512ms preamble + 128ms header/CRC + FEC payload.*
+| Message                            | Length | Blocks | TX Time |
+|-------------------------------------|--------|--------|---------|
+| CQ POTA DE WD9N K-1234 K            | 24 ch  | 3      | 5.6s    |
+| KC8TYK DE WD9N 599 IN US-1017 K      | 34 ch  | 3      | 5.6s    |
+| Typical ragchew sentence (80 ch)    | 80 ch  | 7      | 11.8s   |
 
 ---
 
@@ -384,31 +504,41 @@ PTT watchdog timer: 120 seconds maximum TX time, automatic release.
 
 ### 11.1 Reference Implementation
 
-The reference implementation is written in Python 3 and licensed
-under the GNU General Public License v3.
+The production reference implementation is written in C++17/Qt6 (the
+`cpp-rewrite` branch) and licensed under the GNU General Public License
+v3. The original Python 3 prototype validated the mode specification and
+on-air viability but is preserved only as a historical reference on the
+`main` branch; it is not maintained or developed further, and its DSP
+behavior has diverged from this specification in places (e.g. it uses
+plain non-zero-padded FFT detection, whereas this spec and the C++
+implementation use 8x zero-padding — see §3.5).
 
 **Repository:** https://github.com/WD9N/Haven-FSK
 
-**Files:**
-- `haven_fsk.py`  — main application (GUI, audio engine, TX/RX)
-- `modem.py`      — MFSK modulator and demodulator
-- `fec.py`        — LDPC(192,96) encoder and decoder
-- `frame.py`      — frame assembly and CRC-16
-- `tci.py`        — TCI WebSocket radio control client
+**C++ implementation files (`src/`):**
+- `dsp/Modulator.{h,cpp}`, `dsp/Demodulator.{h,cpp}` — CPMFSK modulator/demodulator
+- `dsp/Preamble.{h,cpp}` — preamble generation and soft correlation detection
+- `dsp/DCD.{h,cpp}` — carrier detect
+- `dsp/FEC.{h,cpp}` — LDPC(192,96) encoder/decoder
+- `dsp/Interleaver.{h,cpp}` — payload block interleaver (protocol v2+)
+- `dsp/Frame.{h,cpp}` — frame assembly, header, CRC-16
+- `dsp/MfskModem.{h,cpp}`, `dsp/DspPipeline.{h,cpp}` — RX/TX state machine and AFC
+- `radio/RigctldClient.{h,cpp}`, `radio/TCIClient.{h,cpp}` — rig control
+- `ui/` — Qt6 application UI
 
 **Dependencies:**
-- Python 3.8+
-- numpy, scipy, sounddevice, matplotlib
-- ldpc (Python LDPC library)
-- websocket-client
-- tkinter (included with Python)
+- C++17 compiler (MSVC/MinGW/GCC/Clang)
+- Qt 6.11.1+ (Core, Widgets, Network, WebSockets, SerialPort, Multimedia,
+  MultimediaWidgets, Charts, Sql)
+- KissFFT (vendored, BSD-3-Clause, `src/third_party/kissfft/`)
 
 ### 11.2 Compatibility
 
 Implementable on any platform with:
 - A sound card or virtual audio cable
-- An SSB transceiver capable of USB/DIGU mode
-- Python 3.8+ or equivalent DSP environment
+- An SSB transceiver capable of USB/data-USB mode
+- A C++17 toolchain and Qt 6.11.1+, or an equivalent DSP environment
+  implementing this specification independently
 
 No proprietary hardware or software is required.
 
@@ -418,6 +548,7 @@ No proprietary hardware or software is required.
 
 | Version     | Date     | Changes                                         |
 |-------------|----------|-------------------------------------------------|
+| 0.2.0-beta  | Jul 2026 | Protocol v2: header sent 3x with bit-level majority vote (was 2x, "prefer copy 1"); payload interleaving across LDPC blocks added — both are wire-format-breaking changes, gated by the header VERSION field. Modulator confirmed/documented as continuous-phase (CPMFSK) — phase accumulator never resets at a symbol boundary. Detection description corrected to match actual soft-correlation + multi-hypothesis frequency search implementation. Reference implementation moved from Python prototype to production C++17/Qt6 (`cpp-rewrite` branch). Hamlib/rigctld support completed (reconnect, split, power level, mode polling) — no longer "Planned". §7.2 transmit backoff documented as not-yet-implemented in the C++ version. Effective NBLOCKS maximum corrected to 125 (receiver-enforced sanity cap), not the 255 the field width alone would allow. |
 | 0.1.1-alpha | Jun 2026 | Software: inline station bar, POTA/SOTA/FD logging, ADIF export, macro tags, UDP broadcast, performance optimisations |
 | 0.1.0-alpha | Jun 2026 | Initial specification, pre-release alpha        |
 

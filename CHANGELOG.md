@@ -66,6 +66,93 @@ replacing the Python/tkinter prototype. No Python dependency.
 
 ---
 
+### Phase 9 — License Correction, PSK31 Mode, Protocol v2 (July 2026)
+
+**License**
+- Project corrected to GPLv3 from inception (ADR-101 supersedes ADR-004's
+  since-incorrect GPL-rejection reasoning); `Qt6::Charts` (already linked)
+  is GPLv3-only in Qt's open-source distribution, so the app was already
+  implicitly GPL-obligated before this correction
+- Added `LICENSE` (canonical GPLv3 text) and `THIRD_PARTY_LICENSES.md`
+  (KissFFT BSD-3-Clause, Qt6 tri-license, fldigi GPLv3 attribution for
+  consulted varicode table and modulation convention)
+
+**Modem abstraction**
+- New `IModem` interface (Qt-free) so the RX/TX pipeline can host more
+  than one mode; `DspPipeline` refactored from an MFSK-only monolith into
+  a thin Qt-facing delegator over the active `IModem`
+- `MfskModem` — the existing 16-tone CPMFSK stack relocated behind
+  `IModem` (state machine, AFC, tone monitor, diagnostics), not rewritten
+- `Constants.h` split into shared constants and `MfskConstants.h`
+  (MFSK-only) so a second mode can't collide with MFSK-specific globals
+
+**PSK31 mode (new)**
+- BPSK31/63/125 modem: `Varicode` (G3PLX table, transcribed
+  programmatically from fldigi source for interop fidelity),
+  `Psk31Modulator` (differential BPSK, continuous carrier phase,
+  raised-cosine constellation-transition shaping), `Psk31Demodulator`
+  (Costas loop carrier tracking, integrate-and-dump matched filter,
+  energy-based timing nudge)
+- Verified via a standalone Qt-free test build (not just app-level
+  smoke test) — this caught and fixed two real bugs: matched-filter ISI
+  from integrating the full raised-cosine transition window instead of
+  just its settled tail, and the demodulator silently dropping the first
+  transmitted character by treating it as a reference symbol instead of
+  comparing it against the modulator's known initial state
+- Known limitation: carrier frequency pull-in is non-monotonic at larger
+  offsets (clean at 0/5 Hz, fails at 15 Hz, recovers at 30 Hz) — a
+  Costas-loop/timing-recovery interaction not yet resolved; only tested
+  via internal loopback, not against real hardware or another PSK31
+  implementation
+
+**MFSK protocol v2**
+- Payload interleaving: row/column block interleaver spanning all LDPC
+  blocks of a message, so an HF fade lands as scattered single-bit errors
+  after deinterleaving rather than a burst concentrated in one block
+- Header now sent 3x with bit-level majority vote (was 2x "prefer copy 1"
+  since a prior, separately-dated fix — see `DECISIONS.md` ADR-099);
+  3 copies is the minimum for genuine majority voting
+- Both are wire-format-breaking changes bundled into one
+  `PROTOCOL_VERSION` bump (1 -> 2), rejected cleanly by version mismatch
+  rather than silently misdecoded
+- Fine timing recovery added as an experimental, disabled-by-default
+  refinement (early-late-style energy comparison during frame collection,
+  separate from the existing preamble-time coarse timing sweep)
+
+**Rig control**
+- `RigctldClient` reconnect with exponential backoff on dropped
+  connections, real `setSplit()` implementation (was a stub), TX power
+  level get/set (`RadioInterface::getPowerLevel()`/`setPowerLevel()`,
+  normalized 0.0-1.0 matching rigctld's own protocol), periodic mode
+  polling with `modeChanged()` now actually emitted
+- Fixed a bug where `pttChanged()` fired even when the PTT command failed
+- Corrected `RadioInterface::setMode()` doc comment: Hamlib rigctld mode
+  tokens for Kenwood-family data mode are `PKTUSB`/`PKTLSB`, not
+  `DIGU`/`DIGL` (those are Icom front-panel labels, not Hamlib tokens)
+- Optional "set radio to data mode on connect" setting in
+  `RadioConfigDialog` (opt-in, off by default)
+
+**UI**
+- Mode selector (MFSK-16 / PSK31) in the status bar, persisted across
+  restarts; `WaterfallWidget::setPassband()` replaces the hardcoded
+  MFSK-only passband overlay so the waterfall correctly reflects
+  whichever mode is active
+
+**Documentation**
+- `HAVEN-FSK_Specification.md` corrected against actual current code
+  behavior in multiple places that had drifted independently of this
+  session's changes: continuous-phase (CPFSK) modulator description was
+  entirely missing, preamble/detection description still described an
+  old hard-decision 0-16 correlation scheme rather than the current soft
+  correlation + multi-hypothesis AFC frequency search, header/CRC timing
+  math, effective NBLOCKS cap (125, not the 255 the field width alone
+  implies), and the radio-interface table's "Hamlib/rigctld: Planned"
+  (long since implemented). Transmit backoff (§7.2) is now explicitly
+  documented as not-yet-implemented in the C++ version rather than
+  silently describing nonexistent behavior.
+
+---
+
 ### Architecture
 
 - **C++17 / Qt6** — native binary, no interpreter
