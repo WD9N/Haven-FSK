@@ -81,7 +81,11 @@ void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
         if (ev.symbolsExpected > 0)
             emit rxProgress(ev.symbolsReceived, ev.symbolsExpected);
 
-        if (ev.hasMessage) {
+        if (ev.hasMessage && !ev.isFramedMessage) {
+            // Continuous character stream (PSK31) — not a discrete
+            // message, skip the RxMessage/CRC-cache machinery entirely.
+            emit textCharacterReceived(QString::fromStdString(ev.text));
+        } else if (ev.hasMessage) {
             RxMessage msg;
             msg.text          = QString::fromStdString(ev.text);
             msg.crcOk         = ev.crcOk;

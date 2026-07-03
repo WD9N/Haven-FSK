@@ -8,13 +8,20 @@ namespace HavenFSK {
 // QSettings keys for radio control configuration
 namespace RadioSettingsKeys {
     static constexpr const char* RIG_METHOD   = "radio/method";
-    // method values: "rigctld", "tci", "none"
+    // method values: "rigctld", "tci", "hamlib", "none"
 
     static constexpr const char* RIGCTLD_HOST = "radio/rigctld/host";
     static constexpr const char* RIGCTLD_PORT = "radio/rigctld/port";
 
     static constexpr const char* TCI_HOST     = "radio/tci/host";
     static constexpr const char* TCI_PORT     = "radio/tci/port";
+
+    // Direct Hamlib linking (CAT over USB/serial, no external rigctld
+    // process). RIG_MODEL is Hamlib's numeric rig_model_t ID — see
+    // HamlibClient::availableRigs().
+    static constexpr const char* HAMLIB_RIG_MODEL = "radio/hamlib/rig_model";
+    static constexpr const char* HAMLIB_PORT      = "radio/hamlib/port";
+    static constexpr const char* HAMLIB_BAUD      = "radio/hamlib/baud";
 
     static constexpr const char* PTT_LEAD_MS = "radio/ptt_lead_ms";
     static constexpr const char* TX_TAIL_MS  = "radio/tx_tail_ms";
@@ -125,6 +132,20 @@ inline uint16_t tciPort() {
     QSettings s;
     return static_cast<uint16_t>(
         s.value(RadioSettingsKeys::TCI_PORT, 50001).toInt());
+}
+
+// Direct Hamlib connection settings
+inline int hamlibRigModel() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::HAMLIB_RIG_MODEL, 0).toInt();
+}
+inline QString hamlibPort() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::HAMLIB_PORT, QString()).toString();
+}
+inline int hamlibBaud() {
+    QSettings s;
+    return s.value(RadioSettingsKeys::HAMLIB_BAUD, 9600).toInt();
 }
 
 // Set radio to a data mode automatically on connect (opt-in)

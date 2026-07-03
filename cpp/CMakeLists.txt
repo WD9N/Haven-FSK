@@ -32,6 +32,25 @@ find_package(Qt6 REQUIRED COMPONENTS
 # Add cmake helpers
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Direct Hamlib linking (CAT control without a separate rigctld process —
+# see DECISIONS.md for the ADR). Optional: gracefully degrades to
+# HamlibClient's stub behavior if not found, never breaks the build for
+# RigctldClient/TCIClient-only users. Windows: set HAMLIB_DIR to an
+# extracted Hamlib release SDK. Linux/Pi: install libhamlib-dev.
+option(HAVEN_ENABLE_HAMLIB "Build with direct Hamlib rig-control support" ON)
+if(HAVEN_ENABLE_HAMLIB)
+    find_package(Hamlib)
+    if(NOT Hamlib_FOUND)
+        message(WARNING
+            "Hamlib not found — building without direct Hamlib rig control "
+            "(RigctldClient/TCIClient are unaffected). On Windows, set "
+            "HAMLIB_DIR to an extracted Hamlib release SDK "
+            "(https://github.com/Hamlib/Hamlib/releases). On Linux/Raspberry "
+            "Pi, install libhamlib-dev.")
+        set(HAVEN_ENABLE_HAMLIB OFF)
+    endif()
+endif()
+
 # Platform-specific settings
 if(WIN32)
     set(APP_ICON_RESOURCE_WINDOWS "resources/haven_fsk.rc")
@@ -149,6 +168,32 @@ target_link_libraries(HavenFSK PRIVATE
     Qt6::Sql
     kissfft
 )
+
+# Direct Hamlib rig control (optional — see HAVEN_ENABLE_HAMLIB above)
+if(HAVEN_ENABLE_HAMLIB)
+    target_link_libraries(HavenFSK PRIVATE Hamlib::Hamlib)
+    target_compile_definitions(HavenFSK PRIVATE HAVEN_HAMLIB_ENABLED)
+    if(WIN32)
+        # Copy libhamlib-4.dll and its full runtime dependency set as
+        # Hamlib itself shipped them (see cmake/FindHamlib.cmake for why
+        # this must be Hamlib's own libwinpthread-1.dll/libgcc_s_seh-1.dll,
+        # not whichever same-named DLL windeployqt already placed here —
+        # confirmed by testing that assumption caused a real launch
+        # failure). copy_if_different means Hamlib's copies take
+        # precedence over Qt's for these two filenames.
+        foreach(dll IN ITEMS
+                HAMLIB_DLL HAMLIB_LIBUSB_DLL
+                HAMLIB_LIBWINPTHREAD_DLL HAMLIB_LIBGCC_DLL)
+            if(${dll})
+                add_custom_command(TARGET HavenFSK POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                            "${${dll}}" "$<TARGET_FILE_DIR:HavenFSK>"
+                    COMMENT "Copying ${dll} (Hamlib runtime dependency)"
+                )
+            endif()
+        endforeach()
+    endif()
+endif()
 
 # Include directories
 target_include_directories(HavenFSK PRIVATE

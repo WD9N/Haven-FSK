@@ -85,3 +85,49 @@ No other fldigi source was copied or adapted; `Psk31Demodulator` (Costas
 loop, matched filter, timing recovery) is an independent implementation
 using standard textbook BPSK receiver technique, not fldigi's generalized
 multi-carrier correlator/FIR-filterbank approach.
+
+---
+
+## Hamlib
+
+**License:** LGPL v2.1 (`COPYING.LIB` in Hamlib's own repository)
+**Upstream:** https://github.com/Hamlib/Hamlib
+
+`HamlibClient` (`src/radio/HamlibClient.h`/`.cpp`) links directly against
+libhamlib for native CAT control over USB/serial (e.g. a Kenwood
+TS-590SG), as an alternative to `RigctldClient`'s TCP connection to a
+separately-launched `rigctld` process — see `DECISIONS.md` ADR-103 (which
+extends, not supersedes, ADR-017's original rigctld-only decision).
+
+**Linked dynamically, not statically** — the simpler LGPL v2.1 compliance
+path, since it avoids the "provide relinkable object files" obligation
+static linking carries, and matches HAVEN-FSK's existing pattern of
+bundling DLLs alongside the executable (`windeployqt` already does this
+for Qt/FFmpeg). No Hamlib source is modified or embedded in this
+repository; `HamlibClient.cpp` is original code calling Hamlib's public
+C API (`rig_init`, `rig_open`, `rig_set_freq`, `rig_set_ptt`,
+`rig_set_mode`, `rig_set_split_vfo`, `rig_set_level`, `rig_close`,
+`rig_cleanup`, `rig_list_foreach`, etc.) — confirmed against the actual
+`include/hamlib/rig.h` header, not assumed from memory. LGPL v2.1 is
+compatible with distribution alongside a GPLv3 application.
+
+**Windows:** built against an externally-installed Hamlib SDK located via
+the `HAMLIB_DIR` variable (see `build.bat`, `cmake/FindHamlib.cmake`) —
+official pre-built release archives are available at
+https://github.com/Hamlib/Hamlib/releases (e.g. `hamlib-w64-4.7.2.zip`).
+The runtime DLL is copied next to `HavenFSK.exe` at build time, same
+pattern as `windeployqt`'s Qt DLL bundling. **Not vendored into this
+repository** — contrast KissFFT (`ADR-005`), whose vendoring was
+justified specifically by its small size (~1200 lines total); that
+reasoning doesn't transfer to Hamlib's much larger rig-backend source
+tree, so it's treated as an external dependency the same way Qt6 itself
+already is.
+
+**Linux / Raspberry Pi:** located via `pkg-config` against the
+distribution's `libhamlib-dev` package (not vendored).
+
+**Optional dependency:** if Hamlib isn't found at build time (Windows:
+`HAMLIB_DIR` unset/wrong; Linux/Pi: `libhamlib-dev` not installed), the
+build proceeds without it (`HAVEN_ENABLE_HAMLIB` auto-disables) —
+`HamlibClient` falls back to stub behavior and `RigctldClient`/
+`TCIClient` are entirely unaffected.

@@ -43,4 +43,39 @@ constexpr double psk31PassbandHalfWidthHz(double baud) {
     return baud * 1.5;
 }
 
+// ── TX preamble ────────────────────────────────────────────────
+// Symbol count for the leading phase-reversal preamble sent before any
+// real data — matches fldigi's PSK31/63/125 "dcdbits" table exactly
+// (src/psk/psk.cxx: MODE_PSK31->32, MODE_PSK63->64, MODE_PSK125->128),
+// confirmed by fetching and reading that source this session. This is
+// NOT unmodulated/silent carrier: it's dcdbits repetitions of bit=0
+// (continuous 180-degree phase reversals — the standard PSK31
+// convention), which is what gives a receiving station's Costas loop,
+// AGC, and bit/symbol timing recovery something to lock onto before
+// real data arrives. Without it, the first several characters of a
+// transmission are typically lost — confirmed via real interop testing
+// against fldigi (HAVEN TX -> fldigi RX dropped the opening characters
+// until this was added).
+constexpr int psk31PreambleSymbols(double baud) {
+    return (baud >= PSK31_BAUD_125) ? 128
+         : (baud >= PSK31_BAUD_63)  ? 64
+         : 32;
+}
+
+// ── Squelch ────────────────────────────────────────────────────
+// Runtime-adjustable, not a fixed constant here — see
+// Psk31Modem::setSquelchThreshold() / IModem::setSquelchThreshold().
+// A decoded character is only surfaced to the UI if the average Costas-
+// loop lock quality (Psk31Demodulator::Result::lockQuality, 0..1) across
+// the bits that made it up meets the configured threshold. Defaults to
+// 0.0 (off): a fixed compile-time default of 0.7 was tried first and
+// silently suppressed real over-the-air decodes entirely (confirmed —
+// fldigi decoded the same signal fine, HAVEN's RX showed nothing) since
+// real-world frequency drift/phase noise/timing jitter legitimately
+// lowers lock quality even on correctly decoded characters, more than a
+// noiseless loopback test revealed. lockQuality on pure noise isn't
+// reliably near 0 either (it's |cos(random phase)| in expectation), so
+// DCD gating — not lockQuality alone — is the primary noise defense;
+// the lock-quality threshold is a secondary, operator-tuned refinement.
+
 } // namespace HavenFSK

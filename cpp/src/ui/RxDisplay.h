@@ -27,6 +27,16 @@ public:
     // Append a transmitted message in amber [TX] styling
     void appendTxMessage(const QString& text, const QString& myCallsign);
 
+    // Continuous character-stream RX (PSK31) — appends text in place on
+    // the current line (no timestamp, no CRC/FEC badges; those don't
+    // apply to a mode with no framing or FEC). Starts a fresh line with
+    // a one-time timestamp marker if not already mid-stream. Call
+    // endStreamingLine() at a natural break point (mode change, carrier
+    // drop) so the next transmission starts its own line rather than
+    // running on from the previous one.
+    void appendStreamingText(const QString& text);
+    void endStreamingLine();
+
     void clearMessages();
 
 signals:
@@ -48,4 +58,6 @@ private:
 
     int m_messageCount = 0;
     static constexpr int MAX_MESSAGES = 500;
+
+    bool m_streamingActive = false;  // mid-line of streaming (PSK31) text
 };

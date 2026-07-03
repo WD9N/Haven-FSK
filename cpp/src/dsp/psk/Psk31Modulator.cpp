@@ -21,6 +21,14 @@ std::vector<float> Psk31Modulator::modulateText(const std::string& text) {
 }
 
 std::vector<float> Psk31Modulator::modulateBits(const std::vector<bool>& bits) {
+    // Each call is a fresh, standalone transmission — reset the
+    // differential reference so this transmission's first real symbol
+    // is encoded relative to (1,0), matching what a receiver starting a
+    // new decode always assumes. (Carrier phase is deliberately NOT
+    // reset here — see class comment.)
+    m_prevI = 1.0;
+    m_prevQ = 0.0;
+
     std::vector<float> out;
     out.reserve(bits.size() * static_cast<size_t>(m_samplesPerSymbol));
 

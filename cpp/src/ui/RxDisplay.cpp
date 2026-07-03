@@ -17,12 +17,48 @@ RxDisplay::RxDisplay(QWidget* parent)
             this, &RxDisplay::onAnchorClicked);
 }
 
+void RxDisplay::appendStreamingText(const QString& text) {
+    if (text.isEmpty()) return;
+
+    QTextCursor c = textCursor();
+    c.movePosition(QTextCursor::End);
+
+    if (!m_streamingActive) {
+        QString ts = QDateTime::currentDateTimeUtc().toUTC().toString("hh:mm:ss");
+        c.insertHtml(QString(
+            "<span style='color:gray'>[%1]</span> ").arg(ts));
+        m_streamingActive = true;
+    }
+
+    // insertText(), not insertHtml(): HTML parsing collapses whitespace
+    // runs and treats a bare '\n' as insignificant rather than a line
+    // break, so single spaces and CR/LF from the decoded PSK31 stream
+    // were silently disappearing. insertText() preserves both exactly
+    // and creates a new block on '\n' — normalize a lone '\r' (some
+    // PSK31 stations send CR, not LF, as their line ending) to '\n' so
+    // it gets the same treatment.
+    QString plain = text;
+    plain.replace('\r', '\n');
+    c.insertText(plain);
+    verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+}
+
+void RxDisplay::endStreamingLine() {
+    if (!m_streamingActive) return;
+    QTextCursor c = textCursor();
+    c.movePosition(QTextCursor::End);
+    c.insertHtml("<br>");
+    m_streamingActive = false;
+}
+
 void RxDisplay::appendMessage(const QString& text,
                                const QString& senderCallsign,
                                const QDateTime& timestamp,
                                bool crcOk,
                                bool converged)
 {
+    endStreamingLine();  // don't let a framed message run onto a streaming line
+
     if (m_messageCount >= MAX_MESSAGES) {
         QTextCursor c = textCursor();
         c.movePosition(QTextCursor::Start);
@@ -62,12 +98,14 @@ void RxDisplay::appendMessage(const QString& text,
 void RxDisplay::clearMessages() {
     clear();
     m_messageCount = 0;
+    m_streamingActive = false;
 }
 
 void RxDisplay::appendTxMessage(const QString& text,
                                  const QString& myCallsign)
 {
     if (text.trimmed().isEmpty()) return;
+    endStreamingLine();  // don't let a TX message run onto a streaming line
 
     QString ts     = QDateTime::currentDateTimeUtc().toString("hh:mm:ss");
     QString caller = myCallsign.isEmpty() ? "TX" : myCallsign.toUpper();

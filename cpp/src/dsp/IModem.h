@@ -29,6 +29,17 @@ struct ModemRxEvent {
     int         nBlocks       = 0;       // MFSK only
     int         fecIterations = 0;       // 0 for PSK31
 
+    // true (default): `text` is a complete, discrete decoded message
+    // (MFSK: one full frame) — DspPipeline emits messageReceived() and
+    // the UI shows it as its own timestamped row with CRC/FEC badges.
+    // false: `text` is a fragment of a continuous character stream
+    // (PSK31: one or a few decoded characters at a time, with no CRC/FEC
+    // concept at all) — DspPipeline emits textCharacterReceived() instead,
+    // and the UI appends it in place as flowing text with no per-fragment
+    // timestamp or badges. crcOk/converged/nBlocks/fecIterations are
+    // meaningless and ignored when this is false.
+    bool        isFramedMessage = true;
+
     // Optional live-progress info, mirrors what the pre-refactor
     // DspPipeline exposed via preambleDetected()/rxProgress() signals.
     bool        preambleDetected = false;
@@ -76,6 +87,13 @@ public:
     virtual void  setAfcEnabled(bool enabled) = 0;
     virtual bool  afcEnabled()  const = 0;
     virtual float afcOffsetHz() const = 0;
+
+    // ── Squelch — optional, default no-op/0 for modes without a concept
+    //    of a confidence-based decode squelch (e.g. MFSK relies on its
+    //    own CRC/FEC convergence instead). Meaning of the 0.0-1.0 range
+    //    is mode-specific; UI should treat 0.0 as "squelch off". ────────
+    virtual void  setSquelchThreshold(float) {}
+    virtual float squelchThreshold() const { return 0.0f; }
 
     // ── Optional diagnostics — default no-op for modes without them ───────
     virtual void setToneMonitor(bool) {}

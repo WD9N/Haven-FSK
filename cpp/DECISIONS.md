@@ -2131,3 +2131,216 @@ failure would `return 1` before reaching that point — see `main.cpp`).
 simulated fading HF channel to confirm the interleaver measurably
 improves decode success versus the v1 baseline — the self-test only
 proves the encode/decode path is bit-exact on a clean channel.
+
+---
+
+## ADR-103 — HamlibClient links libhamlib directly (extends ADR-017)
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `HamlibClient` links the Hamlib C library (`<hamlib/rig.h>`)
+directly into HavenFSK's own process for native CAT control over a
+USB/serial port (e.g. a Kenwood TS-590SG), rather than requiring a
+separately-launched `rigctld` process. Gated by a new `HAVEN_ENABLE_HAMLIB`
+CMake option (default `ON`) that **never hard-breaks the build** if the
+Hamlib SDK isn't found — `HamlibClient` falls back to stub behavior
+(matching its pre-existing unimplemented-stub state) and the rest of the
+app is unaffected. Windows locates Hamlib via a `HAMLIB_DIR`-pointed
+externally-installed SDK (mirroring how `QT_DIR` already works in
+`build.bat`); Linux/Raspberry Pi via `pkg-config` against the
+distribution's `libhamlib-dev` package. Linked dynamically, not
+statically (see `THIRD_PARTY_LICENSES.md` for the LGPL v2.1 reasoning).
+
+**This explicitly extends rather than supersedes ADR-017.** ADR-017's
+reasoning for TCP-to-external-`rigctld` — "No Hamlib library dependency
+in the HAVEN-FSK build" — was itself the tradeoff being reconsidered
+here, not a mistake to correct. `RigctldClient` and `TCIClient` remain
+fully intact and are still the right choice for remote/networked rig
+control, or a radio already shared with other software (WSJT-X, fldigi,
+JS8Call) via one running `rigctld` instance. `HamlibClient` is for the
+locally-attached-serial-radio case those two don't cover well: it
+matches this project's own "single executable deployment" rationale
+(ADR-001) for leaving Python, and avoids a second external process being
+a runtime dependency on low-budget/older machines and Raspberry Pi used
+for field operation without internet connectivity — everything needed
+must already be on the machine before heading out, and a second binary
+is one more thing that can go missing.
+
+**Rig list is never hand-maintained.** `HamlibClient::availableRigs()`
+calls Hamlib's own `rig_load_all_backends()` + `rig_list_foreach()` at
+runtime to enumerate every compiled-in rig model (confirmed present via
+Hamlib's actual `include/hamlib/rig.h`, not assumed) — new radios appear
+automatically whenever the linked Hamlib version is upgraded, with zero
+HAVEN-FSK code changes.
+
+**Considered and rejected: auto-managing `rigctld` as a background
+subprocess** (spawn/monitor it internally, still connect via the
+existing `RigctldClient` TCP code). Runtime CPU/RAM overhead between the
+two approaches is negligible either way at HAVEN-FSK's rig-poll rate
+(~0.5–1 Hz) — the DSP/audio/UI stack dominates resource use on a Pi
+regardless. The deciding factor was deployment robustness for offline
+field use, not performance: a subprocess is a second moving part
+(external binary, port, path-finding) more likely to break quietly on
+constrained hardware than to save meaningful cycles.
+
+**Not vendored into git** (contrast KissFFT, ADR-005). KissFFT's
+vendoring was justified by its small size (~1200 lines total); Hamlib's
+rig-backend source tree is far larger, so that justification doesn't
+transfer. Treated as an externally-installed dependency instead, the
+same way Qt6 itself already is.
+
+**Verification:** actually build-tested against the real Hamlib 4.7.2
+w64 SDK (downloaded, inspected, and extracted to `C:\HamRadio\` —
+`build.bat`'s `HAMLIB_DIR` default), not just compile-tested against the
+stub fallback path. This caught four real bugs before/as they reached a
+user — the app genuinely failed to launch twice in the field before all
+four were found — all now fixed:
+
+1. `HamlibClient.h`'s forward declaration guessed `struct rig` for
+   Hamlib's opaque `RIG` type; the actual tag is `struct s_rig`
+   (`typedef struct s_rig RIG;`), confirmed in `include/hamlib/rig.h`.
+   Compile error until fixed.
+2. `libhamlib-4.dll` depends on `libusb-1.0.dll` at load time — the
+   `POST_BUILD` step only copied the Hamlib DLL itself; the app failed
+   to start ("cannot open shared object file") until `libusb-1.0.dll`
+   was also copied next to `HavenFSK.exe`.
+3. **This entry originally claimed `libgcc_s_seh-1.dll`/`libwinpthread-1.dll`
+   didn't need copying because Qt's `windeployqt`-bundled same-named
+   DLLs would satisfy them — that assumption was wrong and caused a real
+   user-visible launch failure** ("The code execution cannot proceed
+   because (null).DLL was not found"). Qt's bundled copies (May 2023,
+   ~53-109KB) and Hamlib's own (~325-955KB) are completely different
+   MinGW-w64 builds, not interchangeable — confirmed via file
+   size/hash comparison. Fix: copy Hamlib's own matching
+   `libwinpthread-1.dll`/`libgcc_s_seh-1.dll` from its `bin/` alongside
+   `libhamlib-4.dll`/`libusb-1.0.dll` (`cmake/FindHamlib.cmake`'s
+   `HAMLIB_LIBWINPTHREAD_DLL`/`HAMLIB_LIBGCC_DLL`, `CMakeLists.txt`'s
+   `foreach` over all four). General lesson: use the runtime a
+   third-party binary actually shipped and was tested with, not
+   whichever same-named DLL happens to already be in the output
+   directory.
+4. Fixing #3 didn't resolve the "(null).DLL" error — a second, unrelated
+   bug was still present: `cmake/FindHamlib.cmake`'s `find_library()`
+   picked `lib/gcc/libhamlib-4.lib` over `lib/gcc/libhamlib.dll.a`.
+   Both exist in that directory, but only `.dll.a` is the proper
+   GNU-ld-native import library — `.lib` is MSVC-style format despite
+   living in the "gcc" folder. Linking against it "succeeded" with no
+   error but produced a corrupted PE import table in `HavenFSK.exe`
+   itself (a literal empty `DLL Name: (null)` entry, confirmed via
+   `objdump -p HavenFSK.exe` — Hamlib wasn't even listed as a
+   dependency). Fixed by switching to `find_file()` targeting
+   `libhamlib.dll.a` explicitly rather than relying on
+   `find_library()`'s NAMES-based suffix search order.
+
+After all four fixes: clean build, all four DLLs copied and confirmed
+via hash match, `objdump -p HavenFSK.exe` shows a clean import table
+with `libhamlib-4.dll` properly listed, app launches and stays running
+(confirmed via both automated polling and the user's own direct test).
+Rig enumeration (`HamlibClient::availableRigs()`) and actual CAT control
+against a live TS-590SG have not yet been exercised — that's the next
+verification step.
+
+---
+
+## ADR-104 — PSK31 real-signal fixes: streaming display, squelch, TX preamble
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Four fixes, all found via real over-the-air PSK31 use
+(live band signal, and interop testing against fldigi) rather than
+self-test/loopback alone — the first time this codebase's PSK31 mode
+was exercised against anything other than its own loopback.
+
+**1. RX display was unreadable — one row per character.** `Psk31Modem`
+emits one `ModemRxEvent` per decoded character (PSK31 is a continuous
+stream, unlike MFSK's discrete framed messages), but `DspPipeline`/
+`RxDisplay` treated every event as a complete framed message worth its
+own timestamped row with `[CRC]`/`[NC]` badges — badges that don't even
+apply to PSK31 (no CRC or FEC at all). Fixed by adding
+`ModemRxEvent::isFramedMessage` (default `true`, so MFSK is untouched;
+`Psk31Modem` sets it `false`), routing non-framed events through a new
+`DspPipeline::textCharacterReceived()` signal instead of
+`messageReceived()`, and a new `RxDisplay::appendStreamingText()` that
+appends in place on the current line (one timestamp per stream, ended on
+carrier drop/mode change/a real framed message arriving mid-stream via
+`endStreamingLine()`).
+
+**1b. Spaces and newlines were being silently dropped** even after the
+above fix — `appendStreamingText()` used `QTextCursor::insertHtml()` per
+character; HTML parsing collapses whitespace runs and treats a bare
+`\n` as insignificant rather than a line break. Switched to
+`insertText()` (plain-text cursor insertion, preserves both exactly and
+creates a new block on `\n`); also normalize `\r` to `\n` since some
+PSK31 stations send CR-only line endings.
+
+**2. Squelch: needed, first attempt broke real RX entirely.**
+`Psk31Demodulator` already computed a per-bit Costas-loop lock-quality
+value (0.0-1.0) that nothing used. Added two-stage squelch in
+`Psk31Modem::processAudioChunk()`: (a) DCD gate — no carrier present,
+don't even run the demodulator, and reset decode state on the falling
+edge so a real signal starts clean; (b) per-character average
+lock-quality threshold. **First attempt used a fixed `constexpr 0.7`
+threshold, validated only against a noiseless loopback test — it
+silently suppressed all real over-the-air decoding** (confirmed: fldigi
+decoded the same live signal fine, HAVEN's RX showed nothing). Real
+signals have frequency drift/phase noise/timing jitter that legitimately
+lowers lock quality even on correctly-decoded characters more than a
+perfect loopback reveals. Fixed by making the threshold a runtime value
+(`IModem::setSquelchThreshold()`/`squelchThreshold()`, default `0.0` =
+off) exposed as a "Squelch:" spinbox in the status bar, persisted via
+`QSettings`, and re-applied after a mode switch (which constructs a
+fresh `IModem` instance that would otherwise silently reset it to
+default). DCD gating remains the primary noise defense; lock-quality is
+an operator-tuned secondary refinement, off by default until a working
+baseline is confirmed.
+
+**3. Missing opening characters — no TX preamble.** Interop testing
+against fldigi (HAVEN TX -> fldigi RX) consistently dropped the first
+few characters of every transmission. Confirmed by fetching and reading
+fldigi's actual `src/psk/psk.cxx` (not assumed): its `tx_init()` sets
+`preamble = dcdbits`, and for `MODE_PSK31` specifically `dcdbits = 32`
+— i.e. fldigi sends 32 symbols of continuous phase-reversal (`bit=0`
+repeated) before any real data, scaling to 64/128 for PSK63/125. This is
+*not* unmodulated/silent carrier — it's active phase-reversal modulation,
+which is what a receiving Costas loop/AGC/timing-recovery actually needs
+to lock onto. HAVEN's TX had no preamble at all. Fixed by prepending
+`psk31PreambleSymbols(baud)` `false` bits (matching fldigi's table
+exactly) before the real Varicode-encoded data in
+`Psk31Modem::modulateText()`. No RX-side change needed: the existing
+Varicode decoder already treats runs of phase-reversal bits as harmless
+idle (a `"00"` terminator with an empty accumulated codeword returns
+`nullopt`), so the preamble is silently absorbed rather than producing
+garbage characters.
+
+**3b. Related latent bug found while implementing the above, fixed
+alongside it:** `Psk31Modulator`'s differential BPSK reference point
+(`m_prevI`/`m_prevQ`) persisted across separate `modulateText()` calls
+rather than resetting per transmission. Differential BPSK only ever sits
+at exactly `(1,0)` or `(-1,0)` (each bit multiplies by `+1` or `-1`), so
+a second message sent later in the same session had a 50/50 chance of
+starting from the wrong polarity relative to what a fresh receiver
+decode always assumes — which, by the math of differential decoding,
+only corrupts that transmission's *first* bit (subsequent bits are
+self-correcting since the polarity flip cancels between consecutive
+symbol comparisons), but that first bit sits inside the new preamble
+fix's absorption window anyway, so this was effectively already masked
+by fix #3 — fixed explicitly regardless, for correctness clarity rather
+than relying on that interaction: `modulateBits()` now resets
+`m_prevI=1.0, m_prevQ=0.0` at the start of every call (carrier phase is
+*not* reset — continuous-phase discipline is unrelated and still
+applies).
+
+**Verification:** all four fixes tested via standalone Qt-free
+compiles against the real `Psk31Modem` code path (not just
+`Varicode`/`Psk31Modulator`/`Psk31Demodulator` in isolation, which
+wouldn't exercise squelch or preamble at all): clean-signal loopback
+still decodes perfectly; DCD-gated squelch reduced 5 seconds of loud
+synthetic white noise from continuous garbage to 1 false character;
+five consecutive transmissions from the same modem instance (including
+a single-character message, the case most likely to expose the
+differential-polarity bug) all round-trip correctly. **Not yet
+re-verified against fldigi after these fixes** — the original interop
+test that found the missing-preamble bug should be re-run to confirm
+fldigi now decodes HAVEN's TX cleanly from the first character.

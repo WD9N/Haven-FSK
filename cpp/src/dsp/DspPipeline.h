@@ -77,6 +77,10 @@ public:
     bool  afcEnabled()      const     { return m_modem->afcEnabled(); }
     float afcOffsetHz()     const     { return m_modem->afcOffsetHz(); }
 
+    // ── Squelch (mode-specific meaning; 0.0 = off) ─────────────────────────
+    void  setSquelchThreshold(float threshold) { m_modem->setSquelchThreshold(threshold); }
+    float squelchThreshold() const             { return m_modem->squelchThreshold(); }
+
     bool lastTxWasCQ() const {
         return m_lastTxText.contains("CQ", Qt::CaseInsensitive);
     }
@@ -111,6 +115,11 @@ public slots:
 
 signals:
     void messageReceived(const HavenFSK::RxMessage& msg);
+    // Continuous character-stream RX (PSK31) — one or a few decoded
+    // characters at a time, not a discrete framed message. UI should
+    // append this in place as flowing text, not as its own timestamped
+    // row with CRC/FEC badges (those don't apply — see ModemRxEvent).
+    void textCharacterReceived(const QString& text);
     void dcdChanged(bool active);
     void rxStateChanged(HavenFSK::RxState state);
     void txAudioReady(const std::vector<float>& samples);

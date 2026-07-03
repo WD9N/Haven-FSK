@@ -25,6 +25,11 @@ public:
                              double carrierHz = PSK31_CARRIER_HZ);
 
     // Modulate a pre-encoded bitstream (see Varicode::encode()) to audio.
+    // Each call is treated as a fresh, standalone transmission: the
+    // differential BPSK reference point (m_prevI/m_prevQ) resets to
+    // (1,0) at the start, matching what a receiver always assumes for a
+    // new transmission. This is separate from the carrier phase
+    // (m_carrierPhase), which never resets — see class comment.
     std::vector<float> modulateBits(const std::vector<bool>& bits);
 
     // Convenience: varicode-encode text, then modulate.

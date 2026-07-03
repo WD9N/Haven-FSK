@@ -5,6 +5,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QAction>
 #include <QSplitter>
 #include <QCloseEvent>
@@ -64,6 +65,7 @@ private slots:
     void onOpenRadioConfig();
     void onToneSweepTx();
     void onModeChanged(int index);
+    void onSquelchChanged(double value);
 
 private:
     void setupUi();
@@ -91,6 +93,7 @@ private:
     QLabel*            m_rigLabel     {nullptr};
     QProgressBar*      m_rxLevel      {nullptr};
     QComboBox*         m_modeCombo    {nullptr};
+    QDoubleSpinBox*    m_squelchSpin  {nullptr};
 
     // ── Menu actions ──────────────────────────────────────────────────────
     QAction* m_settingsAction {nullptr};

@@ -18,6 +18,7 @@
 #include "../radio/RadioInterface.h"
 #include "../radio/RigctldClient.h"
 #include "../radio/TCIClient.h"
+#include "../radio/HamlibClient.h"
 #include "../dsp/DspPipeline.h"
 #include "../dsp/Constants.h"
 // TODO(Phase 5): BASE_FREQ usages below are MFSK-specific tuning-offset
@@ -73,6 +74,11 @@ MainWindow::MainWindow(QWidget* parent)
             static_cast<int>(HavenFSK::ModemMode::Mfsk16)).toInt();
         int idx = m_modeCombo->findData(savedMode);
         m_modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+        // Restore squelch before onModeChanged() below, which re-applies
+        // whatever m_squelchSpin currently holds to the fresh modem.
+        m_squelchSpin->setValue(s.value("mode/squelch", 0.0).toDouble());
+
         // setCurrentIndex() is a no-op (no signal fired) when the target
         // index equals the combo's default (0) — call explicitly so the
         // waterfall/labels are always initialized on first run.
@@ -364,6 +370,19 @@ void MainWindow::setupUi() {
     m_modeCombo->setToolTip("Operating mode");
     statusLayout->addWidget(m_modeCombo);
 
+    statusLayout->addWidget(new QLabel("Squelch:"));
+    m_squelchSpin = new QDoubleSpinBox(statusBar);
+    m_squelchSpin->setRange(0.0, 1.0);
+    m_squelchSpin->setSingleStep(0.05);
+    m_squelchSpin->setDecimals(2);
+    m_squelchSpin->setToolTip(
+        "Minimum decode confidence to display a character (0 = off).\n"
+        "Only affects modes with a confidence-based squelch (PSK31); "
+        "has no effect on MFSK, which uses CRC/FEC instead.\n"
+        "Raise this if noise is decoding as garbage text; lower it "
+        "(or set to 0) if real signal isn't showing up.");
+    statusLayout->addWidget(m_squelchSpin);
+
     m_rigLabel = new QLabel("No rig");
     m_rigLabel->setStyleSheet("color: gray;");
     statusLayout->addWidget(m_rigLabel);
@@ -454,6 +473,9 @@ void MainWindow::setupConnections() {
     // Waterfall tuning line movement → status bar preview
     connect(m_modeCombo, &QComboBox::currentIndexChanged,
             this, &MainWindow::onModeChanged);
+
+    connect(m_squelchSpin, &QDoubleSpinBox::valueChanged,
+            this, &MainWindow::onSquelchChanged);
 
     connect(m_waterfall, &WaterfallWidget::tuningLineAt,
             this, [this](float hz) {
@@ -550,6 +572,17 @@ void MainWindow::setupConnections() {
     // DspPipeline → UI
     connect(m_pipeline, &HavenFSK::DspPipeline::messageReceived,
             this, &MainWindow::onMessageReceived);
+
+    connect(m_pipeline, &HavenFSK::DspPipeline::textCharacterReceived,
+            m_rxDisplay, &RxDisplay::appendStreamingText);
+
+    // Carrier drop = natural break between transmissions for a
+    // continuous-stream mode (PSK31) — start the next one on a fresh
+    // line rather than running on from the last.
+    connect(m_pipeline, &HavenFSK::DspPipeline::dcdChanged,
+            this, [this](bool active) {
+                if (!active) m_rxDisplay->endStreamingLine();
+            });
 
     connect(m_pipeline, &HavenFSK::DspPipeline::preambleDetected,
             this, [this](float score) {
@@ -677,6 +710,11 @@ void MainWindow::startRadio() {
         m_radio = new TCIClient(
             HavenFSK::tciHost(),
             HavenFSK::tciPort(), this);
+    } else if (method == "hamlib") {
+        m_radio = new HamlibClient(
+            HavenFSK::hamlibPort(),
+            HavenFSK::hamlibBaud(),
+            HavenFSK::hamlibRigModel(), this);
     } else {
         m_rigLabel->setText("No rig control");
         m_rigLabel->setStyleSheet("color: gray;");
@@ -944,6 +982,8 @@ void MainWindow::onOpenRadioConfig() {
 void MainWindow::onModeChanged(int index) {
     if (!m_pipeline || index < 0) return;
 
+    if (m_rxDisplay) m_rxDisplay->endStreamingLine();
+
     auto mode = static_cast<HavenFSK::ModemMode>(
         m_modeCombo->itemData(index).toInt());
     m_pipeline->setMode(mode);
@@ -957,7 +997,19 @@ void MainWindow::onModeChanged(int index) {
             static_cast<float>(m_pipeline->passbandHighHz()));
     }
 
+    // setMode() constructs a fresh IModem instance, which loses any
+    // previously-set squelch threshold — re-apply the saved value so
+    // switching modes and back doesn't silently reset it.
+    m_pipeline->setSquelchThreshold(static_cast<float>(m_squelchSpin->value()));
+
     m_statusLabel->setText("Mode: " + m_pipeline->modeName());
+}
+
+void MainWindow::onSquelchChanged(double value) {
+    if (!m_pipeline) return;
+    m_pipeline->setSquelchThreshold(static_cast<float>(value));
+    QSettings s;
+    s.setValue("mode/squelch", value);
 }
 
 void MainWindow::onToneSweepTx() {

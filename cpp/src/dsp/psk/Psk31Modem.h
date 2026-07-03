@@ -33,6 +33,19 @@ public:
     bool  afcEnabled()  const override { return true; }
     float afcOffsetHz() const override { return m_lastCarrierOffsetHz; }
 
+    // Squelch: minimum average Costas-loop lock quality (0.0-1.0) a
+    // decoded character's bits must meet to be surfaced to the UI.
+    // Default 0.0 = off (every DCD-gated decode passes through) — real
+    // over-the-air signals have frequency drift/phase noise/timing
+    // jitter that legitimately lowers lock quality even on correctly
+    // decoded characters, and an aggressive default silently broke RX
+    // entirely on a real signal fldigi decoded fine. Off-by-default
+    // until the operator has a working baseline to tune up from.
+    void  setSquelchThreshold(float threshold) override {
+        m_squelchThreshold = threshold;
+    }
+    float squelchThreshold() const override { return m_squelchThreshold; }
+
     ModemMode   mode()     const override { return ModemMode::Psk31; }
     std::string modeName() const override { return "PSK31"; }
     double passbandLowHz()  const override {
@@ -50,7 +63,15 @@ private:
 
     ModemRxState m_rxState   = ModemRxState::Idle;
     bool         m_dcdActive = false;
+    bool         m_hadSignal = false;  // m_dcdActive on the previous chunk
     float        m_lastCarrierOffsetHz = 0.0f;
+
+    // Squelch: running lock-quality average across the bits composing
+    // the character currently being decoded (reset each time a
+    // character boundary is reached — see processAudioChunk()).
+    float m_qualitySum   = 0.0f;
+    int   m_qualityCount = 0;
+    float m_squelchThreshold = 0.0f;  // 0.0 = off; see setSquelchThreshold() doc
 
     // Simple RMS-threshold DCD — PSK31 has no preamble/sync-tone concept
     // to key off, unlike MFSK's carrier-detect band. Placeholder until

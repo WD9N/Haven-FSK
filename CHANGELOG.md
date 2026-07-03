@@ -153,6 +153,65 @@ replacing the Python/tkinter prototype. No Python dependency.
 
 ---
 
+### Phase 10 — Direct Hamlib Linking, PSK31 Real-Signal Fixes (July 2026)
+
+**Direct Hamlib rig control (new)**
+- `HamlibClient` rewritten from an unimplemented stub into a full
+  `RadioInterface` implementation linking `libhamlib` directly — CAT
+  control over USB/serial (e.g. a Kenwood TS-590SG) without needing a
+  separately-launched `rigctld` process. Chosen over auto-managing
+  `rigctld` as a background subprocess specifically for field-deployment
+  robustness on low-budget/Pi-class hardware with no runtime internet
+  access — matches the project's original "single executable deployment"
+  rationale for leaving Python (ADR-001).
+- Cross-platform dependency discovery: Windows via a `HAMLIB_DIR`-pointed
+  externally-installed SDK (mirrors the existing `QT_DIR` pattern, not
+  vendored into git); Linux/Raspberry Pi via `pkg-config`/`libhamlib-dev`.
+  Gracefully degrades to stub behavior if not found — never breaks the
+  build for `RigctldClient`/`TCIClient`-only users.
+- Dynamic rig-model enumeration via Hamlib's own `rig_list_foreach()` —
+  no hand-maintained radio list; new radios appear automatically as
+  Hamlib is upgraded. Searchable rig-model combo, COM-port dropdown, and
+  baud selector added to Radio → Configure.
+- Real build-tested against the official Hamlib 4.7.2 w64 SDK, not just
+  the stub fallback path — this found and fixed four real bugs,
+  including two that caused the app to fail to launch entirely on a
+  clean Windows machine (a corrupted PE import table from linking the
+  wrong-format import library, and two MinGW runtime DLLs silently
+  substituted with an incompatible version from Qt's own bundle). Full
+  detail in `DECISIONS.md` ADR-103 — worth reading if touching
+  `cmake/FindHamlib.cmake` again, since both bugs were the kind that
+  compile and "link successfully" with no error at all.
+
+**PSK31 real-signal fixes**
+- RX display was showing one character per line with `[CRC]`/`[NC]`
+  badges that don't even apply to PSK31 (no CRC/FEC) — added a proper
+  continuous-stream display path (`DspPipeline::textCharacterReceived()`,
+  `RxDisplay::appendStreamingText()`) alongside the existing framed-
+  message path, so MFSK is completely unaffected.
+- Spaces and newlines were being silently dropped from decoded PSK31
+  text — an HTML-insertion whitespace-collapsing bug, fixed by switching
+  to plain-text cursor insertion.
+- Added a decode squelch (DCD gate + per-character Costas-loop
+  lock-quality threshold) since background noise was decoding as a
+  constant stream of garbage characters. First attempt used a fixed,
+  loopback-only-validated threshold that turned out to be so aggressive
+  it silently suppressed all real signal too (confirmed against fldigi
+  decoding the same live signal fine) — now a user-adjustable spinbox
+  in the status bar, off by default.
+- Interop testing against fldigi found the first few characters of every
+  HAVEN PSK31 transmission were being lost. Root cause confirmed
+  directly against fldigi's own source: PSK31 needs a leading preamble
+  of continuous phase-reversal symbols (32 for standard 31.25 baud) so
+  the receiving station's Costas loop has something to lock onto before
+  real data arrives — HAVEN had no preamble at all. Fixed, along with a
+  related latent bug found in the process (the differential BPSK
+  reference point wasn't resetting between separate transmissions in the
+  same session).
+- Full detail in `DECISIONS.md` ADR-104.
+
+---
+
 ### Architecture
 
 - **C++17 / Qt6** — native binary, no interpreter

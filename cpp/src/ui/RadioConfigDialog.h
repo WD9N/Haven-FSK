@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QSpinBox>
+#include <QComboBox>
 #include <QGroupBox>
 #include <QPushButton>
 
@@ -29,6 +30,7 @@ private slots:
     void onDisconnect();
     void onSave();
     void onMethodChanged();
+    void onRefreshHamlibPorts();
 
 private:
     void setupUi();
@@ -38,6 +40,7 @@ private:
     QRadioButton* m_radioNone    {nullptr};
     QRadioButton* m_radioRigctld {nullptr};
     QRadioButton* m_radioTCI     {nullptr};
+    QRadioButton* m_radioHamlib  {nullptr};
 
     QGroupBox*  m_rigctldGroup {nullptr};
     QLineEdit*  m_rigctldHost  {nullptr};
@@ -46,6 +49,13 @@ private:
     QGroupBox*  m_tciGroup     {nullptr};
     QLineEdit*  m_tciHost      {nullptr};
     QSpinBox*   m_tciPort      {nullptr};
+
+    // Direct Hamlib linking (CAT over USB/serial, no external rigctld)
+    QGroupBox*   m_hamlibGroup        {nullptr};
+    QComboBox*   m_hamlibRigModel     {nullptr};  // searchable, itemData = numeric model ID
+    QComboBox*   m_hamlibPort         {nullptr};  // itemData = QSerialPortInfo::portName()
+    QPushButton* m_hamlibRefreshPorts {nullptr};
+    QComboBox*   m_hamlibBaud         {nullptr};
 
     QSpinBox*    m_pttLeadMs    {nullptr};
     QSpinBox*    m_txTailMs    {nullptr};

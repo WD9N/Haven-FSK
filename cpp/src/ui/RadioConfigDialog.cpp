@@ -1,11 +1,14 @@
 #include "RadioConfigDialog.h"
 #include "../radio/RadioSettings.h"
+#include "../radio/HamlibClient.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QPushButton>
 #include <QSettings>
 #include <QLabel>
+#include <QSerialPortInfo>
+#include <QCompleter>
 
 RadioConfigDialog::RadioConfigDialog(QWidget* parent)
     : QDialog(parent)
@@ -29,15 +32,26 @@ void RadioConfigDialog::setupUi() {
         "rigctld  —  Hamlib server (covers most radios)");
     m_radioTCI     = new QRadioButton(
         "TCI WebSocket  —  Thetis / ExpertSDR / HPSDR");
+    m_radioHamlib  = new QRadioButton(
+        "Direct / Hamlib  —  CAT over USB/serial, no external rigctld");
+    m_radioHamlib->setEnabled(HamlibClient::isAvailable());
+    if (!HamlibClient::isAvailable()) {
+        m_radioHamlib->setToolTip(
+            "Not available — this build was compiled without Hamlib "
+            "support. See build.bat / HAMLIB_DIR.");
+    }
 
     methodLayout->addWidget(m_radioNone);
     methodLayout->addWidget(m_radioRigctld);
     methodLayout->addWidget(m_radioTCI);
+    methodLayout->addWidget(m_radioHamlib);
 
     auto* methodNote = new QLabel(
         "VOX: radio handles PTT via audio level — no rig control needed.\n"
         "rigctld: start Hamlib rigctld before connecting.\n"
-        "TCI: enable TCI server in your SDR software first.");
+        "TCI: enable TCI server in your SDR software first.\n"
+        "Direct/Hamlib: connects straight to a USB/serial CAT port — no "
+        "separate process to run.");
     methodNote->setStyleSheet("color: gray; font-size: 9pt;");
     methodNote->setWordWrap(true);
     methodLayout->addWidget(methodNote);
@@ -86,6 +100,48 @@ void RadioConfigDialog::setupUi() {
     tciNote->setWordWrap(true);
     tciForm->addRow("", tciNote);
     layout->addWidget(m_tciGroup);
+
+    // Direct Hamlib settings
+    m_hamlibGroup = new QGroupBox("Direct / Hamlib Connection");
+    auto* hamlibForm = new QFormLayout(m_hamlibGroup);
+
+    m_hamlibRigModel = new QComboBox;
+    m_hamlibRigModel->setEditable(true);
+    m_hamlibRigModel->setInsertPolicy(QComboBox::NoInsert);
+    for (const auto& rig : HamlibClient::availableRigs())
+        m_hamlibRigModel->addItem(
+            QString("%1 %2").arg(rig.mfgName, rig.modelName), rig.model);
+    auto* rigCompleter = new QCompleter(m_hamlibRigModel->model(), m_hamlibRigModel);
+    rigCompleter->setCaseSensitivity(Qt::CaseInsensitive);
+    rigCompleter->setFilterMode(Qt::MatchContains);
+    rigCompleter->setCompletionMode(QCompleter::PopupCompletion);
+    m_hamlibRigModel->setCompleter(rigCompleter);
+    hamlibForm->addRow("Rig model:", m_hamlibRigModel);
+
+    auto* portRow = new QHBoxLayout;
+    m_hamlibPort = new QComboBox;
+    m_hamlibRefreshPorts = new QPushButton("Refresh");
+    portRow->addWidget(m_hamlibPort, 1);
+    portRow->addWidget(m_hamlibRefreshPorts);
+    hamlibForm->addRow("Port:", portRow);
+    connect(m_hamlibRefreshPorts, &QPushButton::clicked,
+            this, &RadioConfigDialog::onRefreshHamlibPorts);
+
+    m_hamlibBaud = new QComboBox;
+    m_hamlibBaud->setEditable(true);
+    for (int baud : {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200})
+        m_hamlibBaud->addItem(QString::number(baud));
+    hamlibForm->addRow("Baud:", m_hamlibBaud);
+
+    auto* hamlibNote = new QLabel(
+        "Links Hamlib directly — no separate rigctld process to run. "
+        "Type to search the rig model list (e.g. \"590\" or \"kenwood\").");
+    hamlibNote->setStyleSheet("color: gray; font-size: 9pt;");
+    hamlibNote->setWordWrap(true);
+    hamlibForm->addRow("", hamlibNote);
+
+    layout->addWidget(m_hamlibGroup);
+    onRefreshHamlibPorts();
 
     // TX sequencing timing
     auto* timingGroup = new QGroupBox("TX Sequencing Timing");
@@ -169,6 +225,21 @@ void RadioConfigDialog::setupUi() {
             this, &RadioConfigDialog::onMethodChanged);
     connect(m_radioTCI,     &QRadioButton::toggled,
             this, &RadioConfigDialog::onMethodChanged);
+    connect(m_radioHamlib,  &QRadioButton::toggled,
+            this, &RadioConfigDialog::onMethodChanged);
+}
+
+void RadioConfigDialog::onRefreshHamlibPorts() {
+    QString previous = m_hamlibPort->currentData().toString();
+    m_hamlibPort->clear();
+    for (const auto& info : QSerialPortInfo::availablePorts()) {
+        QString label = info.portName();
+        if (!info.description().isEmpty())
+            label += QString(" (%1)").arg(info.description());
+        m_hamlibPort->addItem(label, info.portName());
+    }
+    int idx = m_hamlibPort->findData(previous);
+    if (idx >= 0) m_hamlibPort->setCurrentIndex(idx);
 }
 
 void RadioConfigDialog::loadSettings() {
@@ -177,12 +248,21 @@ void RadioConfigDialog::loadSettings() {
         HavenFSK::RadioSettingsKeys::RIG_METHOD, "none").toString();
     if      (method == "rigctld") m_radioRigctld->setChecked(true);
     else if (method == "tci")     m_radioTCI->setChecked(true);
+    else if (method == "hamlib" && HamlibClient::isAvailable())
+                                   m_radioHamlib->setChecked(true);
     else                          m_radioNone->setChecked(true);
 
     m_rigctldHost->setText(HavenFSK::rigctldHost());
     m_rigctldPort->setValue(HavenFSK::rigctldPort());
     m_tciHost->setText(HavenFSK::tciHost());
     m_tciPort->setValue(HavenFSK::tciPort());
+
+    int rigIdx = m_hamlibRigModel->findData(HavenFSK::hamlibRigModel());
+    if (rigIdx >= 0) m_hamlibRigModel->setCurrentIndex(rigIdx);
+    int portIdx = m_hamlibPort->findData(HavenFSK::hamlibPort());
+    if (portIdx >= 0) m_hamlibPort->setCurrentIndex(portIdx);
+    m_hamlibBaud->setCurrentText(QString::number(HavenFSK::hamlibBaud()));
+
     m_pttLeadMs->setValue(HavenFSK::pttLeadMs());
     m_txTailMs->setValue(HavenFSK::txTailMs());
     m_setModeOnConnect->setChecked(HavenFSK::setModeOnConnect());
@@ -196,6 +276,7 @@ void RadioConfigDialog::saveSettings() {
     QString method = "none";
     if      (m_radioRigctld->isChecked()) method = "rigctld";
     else if (m_radioTCI->isChecked())     method = "tci";
+    else if (m_radioHamlib->isChecked())  method = "hamlib";
     s.setValue(HavenFSK::RadioSettingsKeys::RIG_METHOD, method);
     s.setValue(HavenFSK::RadioSettingsKeys::RIGCTLD_HOST,
                m_rigctldHost->text().trimmed());
@@ -205,6 +286,12 @@ void RadioConfigDialog::saveSettings() {
                m_tciHost->text().trimmed());
     s.setValue(HavenFSK::RadioSettingsKeys::TCI_PORT,
                m_tciPort->value());
+    s.setValue(HavenFSK::RadioSettingsKeys::HAMLIB_RIG_MODEL,
+               m_hamlibRigModel->currentData().toInt());
+    s.setValue(HavenFSK::RadioSettingsKeys::HAMLIB_PORT,
+               m_hamlibPort->currentData().toString());
+    s.setValue(HavenFSK::RadioSettingsKeys::HAMLIB_BAUD,
+               m_hamlibBaud->currentText().toInt());
     s.setValue(HavenFSK::RadioSettingsKeys::PTT_LEAD_MS,
                m_pttLeadMs->value());
     s.setValue(HavenFSK::RadioSettingsKeys::TX_TAIL_MS,
@@ -224,6 +311,7 @@ void RadioConfigDialog::setConnected(bool connected) {
 void RadioConfigDialog::onMethodChanged() {
     m_rigctldGroup->setEnabled(m_radioRigctld->isChecked());
     m_tciGroup->setEnabled(m_radioTCI->isChecked());
+    m_hamlibGroup->setEnabled(m_radioHamlib->isChecked());
 }
 
 void RadioConfigDialog::onConnect() {
