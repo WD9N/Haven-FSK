@@ -9,12 +9,14 @@
 #ifdef QT_DEBUG
 #include "dsp/FecSelfTest.h"
 #include "dsp/FrameSelfTest.h"
+#include "dsp/MfskLoopbackSelfTest.h"
 #include "audio/AudioSelfTest.h"
 #include "dsp/psk/Psk31SelfTest.h"
 #endif
 
 static QFile     g_logFile;
 static QMutex    g_logMutex;
+static int       g_debugLinesSinceFlush = 0;
 
 static void messageHandler(QtMsgType type, const QMessageLogContext&,
                             const QString& msg)
@@ -31,7 +33,22 @@ static void messageHandler(QtMsgType type, const QMessageLogContext&,
     QMutexLocker lk(&g_logMutex);
     if (g_logFile.isOpen()) {
         g_logFile.write(line.toUtf8());
-        g_logFile.flush();
+        // flush() forces a real disk sync -- doing that on every single
+        // DEBUG line was expensive enough to compete with the main
+        // thread's real-time job of pulling audio chunks off the OS
+        // buffer promptly (AudioEngine's RX path has no dedicated
+        // thread — see DECISIONS.md). MfskModem alone can log 100+
+        // DEBUG lines during a single message's frame collection.
+        // WARN/CRIT/FATAL are rare and worth persisting immediately;
+        // DEBUG is buffered and flushed periodically instead (plus an
+        // unconditional flush on app exit — see main(), below).
+        if (type != QtDebugMsg) {
+            g_logFile.flush();
+            g_debugLinesSinceFlush = 0;
+        } else if (++g_debugLinesSinceFlush >= 50) {
+            g_logFile.flush();
+            g_debugLinesSinceFlush = 0;
+        }
     }
 
     // Also write to stderr so Qt Creator output pane still works
@@ -60,15 +77,23 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
 
+    // Buffered DEBUG lines (see messageHandler) could otherwise leave the
+    // last <50 lines unflushed at clean shutdown.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
+        QMutexLocker lk(&g_logMutex);
+        if (g_logFile.isOpen()) g_logFile.flush();
+    });
+
     QApplication::setOrganizationName("WD9N");
     QApplication::setOrganizationDomain("github.com/WD9N");
     QApplication::setApplicationName("HAVEN-FSK");
     QApplication::setApplicationVersion(HavenFSK::APP_VERSION);
 
 #ifdef QT_DEBUG
-    if (!HavenFSK::runFecSelfTest())   return 1;
-    if (!HavenFSK::runFrameSelfTest()) return 1;
-    if (!HavenFSK::runAudioSelfTest()) return 1;
+    if (!HavenFSK::runFecSelfTest())            return 1;
+    if (!HavenFSK::runFrameSelfTest())          return 1;
+    if (!HavenFSK::runMfskLoopbackSelfTest())   return 1;
+    if (!HavenFSK::runAudioSelfTest())          return 1;
 #endif
 
     MainWindow window;

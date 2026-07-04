@@ -67,6 +67,8 @@ set(SOURCES
     src/dsp/Modulator.cpp
     src/dsp/Demodulator.cpp
     src/dsp/Preamble.cpp
+    src/dsp/SlidingDft.cpp
+    src/dsp/PreambleSync.cpp
     src/dsp/DCD.cpp
     src/dsp/FEC.cpp
     src/dsp/Frame.cpp
@@ -112,6 +114,8 @@ set(HEADERS
     src/dsp/Modulator.h
     src/dsp/Demodulator.h
     src/dsp/Preamble.h
+    src/dsp/SlidingDft.h
+    src/dsp/PreambleSync.h
     src/dsp/DCD.h
     src/dsp/FEC.h
     src/dsp/Frame.h

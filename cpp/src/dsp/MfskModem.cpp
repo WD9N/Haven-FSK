@@ -92,14 +92,29 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
 
     if (m_rxSuspended) return events;
 
+    // ── Continuous preamble sync ────────────────────────────────────────
+    // Fed every sample regardless of RX state — see PreambleSync.h /
+    // DECISIONS.md ADR-105 for why this replaced the old discrete-offset
+    // block-FFT search. Running it unconditionally (rather than pausing
+    // during Collecting) means Idle never resumes with a stale or
+    // discontinuous history: only the lock result is ignored while busy.
+    PreambleLock lock;
+    bool gotLock = false;
+    for (float s : corrected) {
+        if (m_sync.pushSample(s, lock))
+            gotLock = true;   // keep the most recent lock found this chunk
+    }
+
     // ── Collecting ────────────────────────────────────────────────────────
     if (m_rxState == ModemRxState::Collecting) {
         m_rxBuffer.insert(m_rxBuffer.end(), corrected.begin(), corrected.end());
 
         m_preTrigger.insert(m_preTrigger.end(), corrected.begin(), corrected.end());
-        if (static_cast<int>(m_preTrigger.size()) > PRE_TRIGGER_SAMPLES)
-            m_preTrigger.erase(m_preTrigger.begin(),
-                               m_preTrigger.end() - PRE_TRIGGER_SAMPLES);
+        if (static_cast<int>(m_preTrigger.size()) > PRE_TRIGGER_SAMPLES) {
+            int trim = static_cast<int>(m_preTrigger.size()) - PRE_TRIGGER_SAMPLES;
+            m_preTrigger.erase(m_preTrigger.begin(), m_preTrigger.begin() + trim);
+            m_preTriggerDropped += trim;
+        }
 
         if (static_cast<int>(m_rxBuffer.size()) > MAX_BUFFER_SAMPLES) {
             qWarning() << "MfskModem: buffer limit — resetting";
@@ -115,17 +130,33 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
         return events;
     }
 
-    // ── Idle: rolling buffer + continuous preamble scan ───────────────────
+    // ── Idle: rolling raw-audio buffer (handoff source once locked) ────────
     m_preTrigger.insert(m_preTrigger.end(), corrected.begin(), corrected.end());
-    if (static_cast<int>(m_preTrigger.size()) > PRE_TRIGGER_SAMPLES)
-        m_preTrigger.erase(m_preTrigger.begin(),
-                           m_preTrigger.end() - PRE_TRIGGER_SAMPLES);
+    if (static_cast<int>(m_preTrigger.size()) > PRE_TRIGGER_SAMPLES) {
+        int trim = static_cast<int>(m_preTrigger.size()) - PRE_TRIGGER_SAMPLES;
+        m_preTrigger.erase(m_preTrigger.begin(), m_preTrigger.begin() + trim);
+        m_preTriggerDropped += trim;
+    }
 
-    if (++m_scanTicks % SCAN_INTERVAL_CHUNKS == 0) {
-        m_rxBuffer = m_preTrigger;
-        ModemRxEvent preambleEvent;
-        tryFindPreamble(preambleEvent);
-        if (preambleEvent.preambleDetected) {
+    if (++m_diagChunkCount >= DIAG_LOG_INTERVAL_CHUNKS) {
+        m_diagChunkCount = 0;
+        qDebug() << "MfskModem: preamble sync idle — best score"
+                 << m_sync.lastScore() << "(threshold="
+                 << PreambleSync::SCORE_THRESHOLD << ")";
+    }
+
+    if (gotLock) {
+        long long offset = lock.sampleIndex - m_preTriggerDropped;
+        long long need    = static_cast<long long>(PREAMBLE_LENGTH) * SAMPLES_PER_SYMBOL;
+        if (offset < 0 || offset + need > static_cast<long long>(m_preTrigger.size())) {
+            qWarning() << "MfskModem: preamble lock offset" << offset
+                       << "out of pretrigger range (size="
+                       << m_preTrigger.size() << ") — dropping";
+        } else {
+            m_rxBuffer.assign(m_preTrigger.begin() + offset, m_preTrigger.end());
+
+            ModemRxEvent preambleEvent;
+            onPreambleLocked(lock, preambleEvent);
             events.push_back(preambleEvent);
             tryCompleteFrame(events);
         }
@@ -141,7 +172,6 @@ void MfskModem::resetRx() {
     m_nBlocks          = -1;
     m_symsNeeded       = 0;
     m_demodBinOffset   = 0;
-    m_scanTicks        = SCAN_INTERVAL_CHUNKS - 1;
     m_collectTicks     = 0;
     m_lastCheckSamples = 0;
     setRxState(ModemRxState::Idle);
@@ -149,224 +179,58 @@ void MfskModem::resetRx() {
 
 // ── Preamble-triggered RX pipeline ───────────────────────────────────────
 
-void MfskModem::tryFindPreamble(ModemRxEvent& outEvent) {
-    if (static_cast<int>(m_rxBuffer.size()) <
-        SAMPLES_PER_SYMBOL * PREAMBLE_LENGTH)
-        return;
+// Called once PreambleSync has reported a lock and MfskModem has sliced
+// m_rxBuffer to start exactly at the preamble's first sample (so, unlike
+// the old block-search code, m_timingOffset/m_preambleSymOff are always 0
+// here — the whole point of the sliding-DFT redesign is that we already
+// know the precise sample alignment, with no further offset search needed).
+void MfskModem::onPreambleLocked(const PreambleLock& lock, ModemRxEvent& outEvent) {
+    m_demodBinOffset = static_cast<int>(
+        std::round(lock.freqOffsetHz * FFT_SIZE / SAMPLE_RATE));
 
-    if (m_scanTicks % 40 == 0) {
-        float peak = 0.0f;
-        for (float s : m_rxBuffer) peak = std::max(peak, std::abs(s));
-        float dbFS = (peak > 1e-10f) ? 20.0f * std::log10(peak) : -96.0f;
-        qDebug() << "MfskModem: scan buffer peak" << dbFS << "dBFS";
-    }
-
-    float hypCenter = m_afcEnabled ? m_afcOffsetHz : 0.0f;
-    const std::vector<float> HYP_HZ = {
-        hypCenter,
-        hypCenter +  20.0f, hypCenter -  20.0f,
-        hypCenter +  40.0f, hypCenter -  40.0f,
-        hypCenter +  60.0f, hypCenter -  60.0f,
-        hypCenter +  80.0f, hypCenter -  80.0f,
-        hypCenter + 100.0f, hypCenter - 100.0f,
-        hypCenter + 120.0f, hypCenter - 120.0f,
-        hypCenter + 140.0f, hypCenter - 140.0f,
-        hypCenter + 160.0f, hypCenter - 160.0f,
-    };
-
-    constexpr int TIMING_STEPS        = 16;
-    constexpr int TIMING_STEP_SAMPLES = SAMPLES_PER_SYMBOL / TIMING_STEPS;
-
-    int   bestSymOff  = -1;
-    float bestScore   = 0.0f;
-    int   bestTiming  = 0;
-    float bestHypHz   = 0.0f;
-
-    struct HypResult { float hz; float coarse; };
-    std::vector<HypResult> hypResults;
-    hypResults.reserve(HYP_HZ.size());
-
-    float bestCoarseScore = 0.0f;
-    float bestCoarseHz    = 0.0f;
-
-    const int COARSE_SOFF_A = 0;
-    const int COARSE_SOFF_B = SAMPLES_PER_SYMBOL / 2;
-
-    for (float hypHz : HYP_HZ) {
-        int afcBin = static_cast<int>(
-            std::round(hypHz * FFT_SIZE / SAMPLE_RATE));
-
-        float coarseBest = 0.0f;
-        for (int csOff : {COARSE_SOFF_A, COARSE_SOFF_B}) {
-            auto softCoarse = m_demodulator.demodulateToSoft(
-                m_rxBuffer, csOff, afcBin);
-            if (softCoarse.empty()) continue;
-            for (int i = 0;
-                 i <= static_cast<int>(softCoarse.size()) - PREAMBLE_LENGTH; ++i)
-            {
-                float s = m_preamble.softCorrelate(softCoarse, i);
-                if (s > coarseBest) coarseBest = s;
-            }
-        }
-        hypResults.push_back({hypHz, coarseBest});
-        if (coarseBest > bestCoarseScore) {
-            bestCoarseScore = coarseBest;
-            bestCoarseHz    = hypHz;
-        }
-    }
-
-    if (bestCoarseScore >= COARSE_PREAMBLE_THRESHOLD) {
-        int afcBin = static_cast<int>(
-            std::round(bestCoarseHz * FFT_SIZE / SAMPLE_RATE));
-
-        for (int t = 0; t < TIMING_STEPS; ++t) {
-            int sOff = t * TIMING_STEP_SAMPLES;
-            auto softTry = m_demodulator.demodulateToSoft(
-                m_rxBuffer, sOff, afcBin);
-            if (softTry.empty()) continue;
-
-            for (int i = 0;
-                 i <= static_cast<int>(softTry.size()) - PREAMBLE_LENGTH; ++i)
-            {
-                float score = m_preamble.softCorrelate(softTry, i);
-                if (score > bestScore) {
-                    bestScore  = score;
-                    bestSymOff = i;
-                    bestTiming = sOff;
-                    bestHypHz  = bestCoarseHz;
-                }
-            }
-        }
-    }
-
-    const bool logThisScan =
-        (m_scanTicks % 24 == 0) ||
-        (bestScore >= 0.15f);
-
-    if (logThisScan) {
-        if (bestScore > 0.0f) {
-            qDebug() << "MfskModem: preamble scan: soft=" << bestScore
-                     << "sym=" << bestSymOff << "sampleOff=" << bestTiming
-                     << "afc=" << bestHypHz << "Hz";
-
-            if (bestScore >= 0.25f) {
-                int afcBin = static_cast<int>(
-                    std::round(bestHypHz * FFT_SIZE / SAMPLE_RATE));
-                auto softBestDbg = m_demodulator.demodulateToSoft(
-                    m_rxBuffer, bestTiming, afcBin);
-
-                QString got, want, frac, maxf;
-                for (int i = 0; i < PREAMBLE_LENGTH; ++i) {
-                    int idx = bestSymOff + i;
-                    if (idx < 0 || idx >= static_cast<int>(softBestDbg.size())) {
-                        got  += "? ";
-                        want += QString::number(PREAMBLE_SYMBOLS[i]) + " ";
-                        frac += "? ";
-                        maxf += "? ";
-                        continue;
-                    }
-                    const auto& e = softBestDbg[idx];
-                    int argMax = static_cast<int>(
-                        std::max_element(e.begin(), e.end()) - e.begin());
-                    float total = 0.0f;
-                    for (float x : e) total += x;
-                    float f  = (total > 1e-10f) ? e[PREAMBLE_SYMBOLS[i]] / total : 0.0f;
-                    float mf = (total > 1e-10f) ? e[argMax]               / total : 0.0f;
-                    got  += QString::number(argMax) + " ";
-                    want += QString::number(PREAMBLE_SYMBOLS[i]) + " ";
-                    frac += QString::number(f,  'f', 2) + " ";
-                    maxf += QString::number(mf, 'f', 2) + " ";
-                }
-                qDebug() << "  got :" << got;
-                qDebug() << "  want:" << want;
-                qDebug() << "  frac:" << frac;
-                qDebug() << "  maxf:" << maxf;
-            }
-
-            QString coarseInfo;
-            for (const auto& r : hypResults)
-                coarseInfo += QString("%1Hz:%2 ")
-                    .arg(r.hz, 0, 'f', 0).arg(r.coarse, 0, 'f', 2);
-            qDebug() << "  coarse:" << coarseInfo;
-
-        } else {
-            qDebug() << "MfskModem: preamble scan: ALL coarse checks failed"
-                     << "(threshold=" << COARSE_PREAMBLE_THRESHOLD << "). Scores:";
-            for (const auto& r : hypResults)
-                qDebug() << "  hyp=" << r.hz << "Hz coarse=" << r.coarse;
-
-            if (m_scanTicks % 24 == 0) {
-                auto toneBalance = [](const std::vector<std::vector<float>>& syms) -> QString {
-                    std::vector<float> toneSum(NUM_TONES, 0.0f);
-                    float totalAll = 0.0f;
-                    for (const auto& sym : syms) {
-                        for (int t = 0; t < NUM_TONES; ++t) toneSum[t] += sym[t];
-                        for (float x : sym) totalAll += x;
-                    }
-                    QString out;
-                    if (totalAll > 1e-10f)
-                        for (int t = 0; t < NUM_TONES; ++t)
-                            out += QString::number(
-                                NUM_TONES * toneSum[t] / totalAll, 'f', 2) + " ";
-                    return out;
-                };
-                auto softDiag = m_demodulator.demodulateToSoft(m_rxBuffer, 0, 0);
-                if (!softDiag.empty()) {
-                    qDebug() << "  tonebal (1.0=flat):" << toneBalance(softDiag);
-                }
-            }
-        }
-    }
-
-    if (bestScore < SOFT_PREAMBLE_THRESHOLD || bestSymOff < 0)
-        return;
-
-    // Refine frequency estimate from preamble soft symbols.
+    // Refine the frequency estimate using the block Demodulator's finer
+    // (zero-padded) bins over the now-precisely-aligned preamble symbols —
+    // PreambleSync's own bin resolution is exactly SYMBOL_RATE (31.25 Hz),
+    // so this centroid refinement recovers sub-bin residual offset the
+    // same way the old code did after its coarse hypothesis search.
+    float total = lock.freqOffsetHz;
     {
-        int afcBin = static_cast<int>(
-            std::round(bestHypHz * FFT_SIZE / SAMPLE_RATE));
-        auto softBest = m_demodulator.demodulateToSoft(
-            m_rxBuffer, bestTiming, afcBin);
-        int preambleEnd = bestSymOff + PREAMBLE_LENGTH;
-        if (preambleEnd <= static_cast<int>(softBest.size())) {
+        auto softPreamble = m_demodulator.demodulateToSoft(
+            m_rxBuffer, 0, m_demodBinOffset);
+        if (static_cast<int>(softPreamble.size()) >= PREAMBLE_LENGTH) {
             std::vector<std::vector<float>> preambleSoft(
-                softBest.begin() + bestSymOff,
-                softBest.begin() + preambleEnd);
+                softPreamble.begin(), softPreamble.begin() + PREAMBLE_LENGTH);
             float residual = measureToneOffset(preambleSoft);
-            float total    = bestHypHz + residual;
-
+            total = lock.freqOffsetHz + residual;
             m_demodBinOffset = static_cast<int>(
                 std::round(total * FFT_SIZE / SAMPLE_RATE));
-
-            if (m_afcEnabled) {
-                m_afcOffsetHz = std::max(-AFC_MAX_HZ,
-                                std::min(AFC_MAX_HZ, total));
-                qDebug() << "MfskModem: AFC hyp=" << bestHypHz
-                         << "residual=" << residual
-                         << "total=" << m_afcOffsetHz << "Hz"
-                         << "binOff=" << m_demodBinOffset;
-            } else {
-                qDebug() << "MfskModem: AFC disabled — hyp=" << bestHypHz
-                         << "residual=" << residual
-                         << "total=" << total << "Hz"
-                         << "binOff=" << m_demodBinOffset << "(not persisted)";
-            }
         }
     }
 
-    m_timingOffset     = bestTiming;
-    m_timingOffsetBase = bestTiming;
+    if (m_afcEnabled) {
+        m_afcOffsetHz = std::max(-AFC_MAX_HZ, std::min(AFC_MAX_HZ, total));
+        qDebug() << "MfskModem: AFC hyp=" << lock.freqOffsetHz
+                 << "total=" << m_afcOffsetHz << "Hz"
+                 << "binOff=" << m_demodBinOffset;
+    } else {
+        qDebug() << "MfskModem: AFC disabled — hyp=" << lock.freqOffsetHz
+                 << "total=" << total << "Hz"
+                 << "binOff=" << m_demodBinOffset << "(not persisted)";
+    }
+
+    m_timingOffset     = 0;
+    m_timingOffsetBase = 0;
     m_fineTimingTick   = 0;
-    m_preambleSymOff   = bestSymOff;
+    m_preambleSymOff   = 0;
     m_nBlocks          = -1;
     m_symsNeeded       = 0;
     m_collectTicks     = 0;
     m_lastCheckSamples = 0;
 
-    qDebug() << "MfskModem: preamble found (score=" << bestScore
-             << ") — collecting frame";
+    qDebug() << "MfskModem: preamble locked (score=" << lock.score
+             << ") freq=" << lock.freqOffsetHz << "Hz — collecting frame";
     outEvent.preambleDetected = true;
-    outEvent.preambleScore    = bestScore;
+    outEvent.preambleScore    = lock.score;
     setRxState(ModemRxState::Collecting);
 }
 
@@ -393,9 +257,16 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
     // constants like this are kept in sync by convention, not shared).
     constexpr int HDR_TOTAL = 12;
     if (static_cast<int>(softSymbols.size()) < frameStart + HDR_TOTAL) {
-        qDebug() << "MfskModem: waiting for header —"
-                 << softSymbols.size() << "syms, need"
-                 << (frameStart + HDR_TOTAL);
+        // Throttled — this fires on nearly every audio chunk while
+        // waiting (once every ~42ms), and unthrottled qDebug() calls are
+        // expensive enough (disk flush + console write, all on the main
+        // thread — see main.cpp's messageHandler) to compete with timely
+        // audio consumption. m_collectTicks already increments once per
+        // chunk in processAudioChunk(), so it's a free throttle counter.
+        if (m_collectTicks % 10 == 0)
+            qDebug() << "MfskModem: waiting for header —"
+                     << softSymbols.size() << "syms, need"
+                     << (frameStart + HDR_TOTAL);
         return;
     }
 
@@ -461,8 +332,10 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
     }
 
     if (static_cast<int>(softSymbols.size()) < m_symsNeeded) {
-        qDebug() << "MfskModem: collecting"
-                 << softSymbols.size() << "/" << m_symsNeeded;
+        // Throttled — see the "waiting for header" comment above.
+        if (m_collectTicks % 10 == 0)
+            qDebug() << "MfskModem: collecting"
+                     << softSymbols.size() << "/" << m_symsNeeded;
         return;
     }
 
@@ -711,8 +584,8 @@ void MfskModem::runDiagnosticSelfTest() {
              << "= symbol" << expectedSym;
     qDebug() << QString("  Best softCorrelate = %1 at sym=%2  (threshold=%3)")
                 .arg(bestScore, 0, 'f', 4).arg(bestSym)
-                .arg(SOFT_PREAMBLE_THRESHOLD);
-    qDebug() << (bestScore >= SOFT_PREAMBLE_THRESHOLD
+                .arg(PreambleSync::SCORE_THRESHOLD);
+    qDebug() << (bestScore >= PreambleSync::SCORE_THRESHOLD
         ? "  Result: WOULD DETECT — scanner and threshold are correct"
         : "  Result: WOULD MISS — scanner or threshold has an issue");
 

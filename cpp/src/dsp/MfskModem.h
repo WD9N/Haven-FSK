@@ -4,6 +4,7 @@
 #include "Demodulator.h"
 #include "DCD.h"
 #include "Preamble.h"
+#include "PreambleSync.h"
 #include "Frame.h"
 #include "MfskConstants.h"
 
@@ -72,6 +73,17 @@ private:
     std::vector<float> m_rxBuffer;
     std::vector<float> m_preTrigger;
 
+    // Continuous per-sample preamble sync — see PreambleSync.h / ADR-105.
+    // Fed every sample regardless of RX state (so it never has a stale,
+    // discontinuous history when Idle resumes after a Collecting period);
+    // lock results are only acted on while Idle.
+    PreambleSync m_sync;
+
+    // How many raw samples have been trimmed off the front of m_preTrigger
+    // since it started accumulating — needed to map a PreambleSync lock's
+    // absolute sample index back into m_preTrigger's current contents.
+    long long m_preTriggerDropped = 0;
+
     static constexpr int MAX_BUFFER_SAMPLES = SAMPLE_RATE * 30;
 
     int m_timingOffset     = 0;
@@ -79,16 +91,18 @@ private:
     int m_nBlocks          = -1;
     int m_symsNeeded       = 0;
     int m_demodBinOffset   = 0;
-    int m_scanTicks        = 0;
     int m_collectTicks     = 0;
     int m_lastCheckSamples = 0;
 
-    static constexpr int SCAN_INTERVAL_CHUNKS = 8;
     static constexpr int COLLECT_TIMEOUT_CHUNKS =
         static_cast<int>(SAMPLE_RATE * 20.0 / AUDIO_CHUNK_SAMPLES);
-    static constexpr float COARSE_PREAMBLE_THRESHOLD = 0.10f;
-    static constexpr float SOFT_PREAMBLE_THRESHOLD    = 0.45f;
     static constexpr int   PRE_TRIGGER_SAMPLES = SAMPLE_RATE * 3;
+
+    // Periodic "still idle, best score seen" diagnostic — throttled so it
+    // doesn't spam once per sample now that sync runs continuously.
+    int m_diagChunkCount = 0;
+    static constexpr int DIAG_LOG_INTERVAL_CHUNKS =
+        static_cast<int>(SAMPLE_RATE * 1.0 / AUDIO_CHUNK_SAMPLES); // ~1s
 
     // ── Tone monitor ─────────────────────────────────────────────────────
     bool               m_toneMonitorActive = false;
@@ -100,9 +114,9 @@ private:
     bool  m_afcEnabled  = false;
 
     // ── Fine timing recovery (experimental, disabled by default) ───────────
-    // Preamble detection already does an 8-step coarse timing sweep
-    // (tryFindPreamble()) that sets m_timingOffset once. This adds an
-    // additional, continuous nudge during Collecting, comparing decode
+    // Preamble sync (PreambleSync/onPreambleLocked()) already sets
+    // m_timingOffset to the exact sample-accurate preamble start. This adds
+    // an additional, continuous nudge during Collecting, comparing decode
     // confidence at the current offset against +/- a small probe step and
     // drifting toward whichever wins — intended to track sample-clock
     // drift between TX/RX over a multi-second transmission. Kept off by
@@ -129,7 +143,7 @@ private:
     void applyFineTimingCorrection();
 
     // ── Helpers ───────────────────────────────────────────────────────────
-    void tryFindPreamble(ModemRxEvent& outEvent);
+    void onPreambleLocked(const PreambleLock& lock, ModemRxEvent& outEvent);
     void tryCompleteFrame(std::vector<ModemRxEvent>& outEvents);
     void processFrame(const std::vector<std::vector<float>>& softSymbols,
                        ModemRxEvent& outEvent);
