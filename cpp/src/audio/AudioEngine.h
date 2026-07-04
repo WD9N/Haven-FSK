@@ -7,8 +7,8 @@
 #include <QBuffer>
 #include <QStringList>
 #include <QByteArray>
-#include <QMediaPlayer>
-#include <QAudioOutput>
+#include <QAudioSink>
+#include <QTimer>
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -16,23 +16,30 @@
 #include <cstring>
 
 // GainedAudioDevice — QIODevice wrapper that applies a real-time gain
-// multiplier to int16 PCM samples as QMediaPlayer reads them.
+// multiplier to int16 PCM samples as QAudioSink reads them (pull mode).
 //
-// WAV header (44 bytes) passes through unchanged. PCM data after the
-// header has gain applied per-sample on every read cycle.
+// Any header bytes (see headerBytes below) pass through unchanged. PCM
+// data after that has gain applied per-sample on every read cycle.
 // m_gain is std::atomic<float> — safe to update from the main thread
-// while QMediaPlayer reads from its audio rendering thread.
+// while QAudioSink reads from its audio rendering thread.
 // Changes take effect within one read cycle (~100-200ms).
 class GainedAudioDevice : public QIODevice {
     Q_OBJECT
 public:
+    // headerBytes: how many leading bytes of wavData to pass through
+    // unmodified (and un-gained) before treating the rest as int16 PCM —
+    // 44 for a WAV container (QMediaPlayer path), 0 for raw PCM with no
+    // container (QAudioSink path, which gets format via QAudioFormat
+    // instead of parsing a header).
     explicit GainedAudioDevice(const QByteArray& wavData,
                                 float initialGain = 1.0f,
-                                QObject* parent = nullptr)
+                                QObject* parent = nullptr,
+                                qint64 headerBytes = 44)
         : QIODevice(parent)
         , m_data(wavData)
         , m_pos(0)
         , m_gain(std::max(0.0f, std::min(1.0f, initialGain)))
+        , m_headerBytes(headerBytes)
     {}
 
     void setGain(float linear) {
@@ -57,10 +64,8 @@ protected:
         qint64 available = static_cast<qint64>(m_data.size()) - m_pos;
         qint64 toRead    = std::min(maxSize, available);
 
-        static constexpr qint64 WAV_HEADER = 44;
-
-        if (m_pos < WAV_HEADER) {
-            qint64 headerRemain = std::min(toRead, WAV_HEADER - m_pos);
+        if (m_pos < m_headerBytes) {
+            qint64 headerRemain = std::min(toRead, m_headerBytes - m_pos);
             std::memcpy(data, m_data.constData() + m_pos,
                         static_cast<size_t>(headerRemain));
             m_pos += headerRemain;
@@ -105,6 +110,7 @@ private:
     const QByteArray&  m_data;
     qint64             m_pos;
     std::atomic<float> m_gain;
+    qint64             m_headerBytes;
 };
 
 class AudioEngine : public QObject
@@ -123,8 +129,12 @@ public:
     bool startRx(const QString& deviceName = QString());
 
     // ── TX ────────────────────────────────────────────────────────────────
-    // Convert samples to an in-memory WAV, wrap in GainedAudioDevice,
-    // play via QMediaPlayer. StoppedState signals completion.
+    // Convert samples to raw int16 PCM, wrap in GainedAudioDevice, play via
+    // QAudioSink pull mode. Completion is a computed-duration QTimer, not
+    // QAudioSink::stateChanged()/IdleState — see ADR-107: that signal fires
+    // as soon as data is handed to the driver, not when playback genuinely
+    // finishes (the same unreliability that previously ruled QAudioSink out
+    // for TX — this works around it instead of depending on it).
     bool startTx(const QString& deviceName,
                  const std::vector<float>& samples,
                  float initialGain = 1.0f);
@@ -138,7 +148,7 @@ public:
     bool isTransmitting() const;
 
     // Update TX gain in real time — atomic, safe from main thread.
-    // Takes effect within one QMediaPlayer read cycle (~100-200ms).
+    // Takes effect within one QAudioSink read cycle (~100-200ms).
     void setTxGain(float linear) {
         if (m_txGainDevice)
             m_txGainDevice->setGain(linear);
@@ -152,7 +162,7 @@ signals:
 
 private slots:
     void onRxDataAvailable();
-    void onTxPlaybackStateChanged(QMediaPlayer::PlaybackState state);
+    void onTxCompletionTimer();
 
 private:
     // ── RX members ────────────────────────────────────────────────────────
@@ -160,11 +170,11 @@ private:
     QIODevice*                    m_rxDevice = nullptr;
     QByteArray                    m_rxBuffer;
 
-    // ── TX members (QMediaPlayer + GainedAudioDevice) ────────────────────
-    QMediaPlayer*      m_txPlayer     {nullptr};
-    QAudioOutput*      m_txAudioOut   {nullptr};
-    GainedAudioDevice* m_txGainDevice {nullptr};
-    QByteArray         m_txWavData;   // WAV data — must outlive GainedAudioDevice
+    // ── TX members (QAudioSink + GainedAudioDevice) ──────────────────────
+    QAudioSink*        m_txAudioSink       {nullptr};
+    GainedAudioDevice* m_txGainDevice      {nullptr};
+    QByteArray         m_txPcmData;   // raw PCM — must outlive GainedAudioDevice
+    QTimer*            m_txCompletionTimer {nullptr};
 
     // ── State ─────────────────────────────────────────────────────────────
     std::atomic<bool> m_receiving    {false};
@@ -176,6 +186,8 @@ private:
     static std::vector<float> pcmToFloat(const QByteArray& pcm);
     static float computeRms(const std::vector<float>& samples);
 
-    // Build a complete WAV file in memory from float32 samples
-    QByteArray buildWav(const std::vector<float>& samples) const;
+    // Convert float32 samples to raw int16 PCM bytes (no container/header —
+    // QAudioSink gets its format from the QAudioFormat passed at
+    // construction, not by parsing one).
+    static QByteArray floatToPcm16(const std::vector<float>& samples);
 };

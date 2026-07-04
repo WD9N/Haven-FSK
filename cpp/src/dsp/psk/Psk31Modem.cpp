@@ -22,6 +22,24 @@ std::vector<float> Psk31Modem::modulateText(const std::string& text) {
         static_cast<size_t>(psk31PreambleSymbols(m_baudRate)), false);
     auto textBits = Varicode::encode(text);
     bits.insert(bits.end(), textBits.begin(), textBits.end());
+
+    // Trailing postamble: steady carrier (bit=true, no phase transitions)
+    // for the same symbol count as the leading preamble — matches
+    // fldigi's tx_flush() postamble exactly (confirmed by reading
+    // src/psk/psk.cxx's standard-BPSK case: `for (i<dcdbits) tx_symbol(2)`,
+    // i.e. dcdbits repetitions of "0 degrees" = no phase change). Without
+    // this, TX audio stopped the instant the last real bit's symbol
+    // ended, giving the RX demodulator's matched-filter/timing-recovery
+    // no settling time to fully process it — the last character (and
+    // sometimes the one before it) was being silently lost. Safe for
+    // Varicode: the real text's trailing "00" terminator was already sent
+    // as part of textBits above, so these extra bit=true symbols just
+    // accumulate harmlessly in the decoder (a run of 1s never forms a
+    // "00" terminator) until the next DCD-drop reset clears them.
+    std::vector<bool> postamble(
+        static_cast<size_t>(psk31PreambleSymbols(m_baudRate)), true);
+    bits.insert(bits.end(), postamble.begin(), postamble.end());
+
     return m_modulator.modulateBits(bits);
 }
 

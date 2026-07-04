@@ -163,15 +163,15 @@ bool AudioEngine::isReceiving() const {
     return m_receiving.load();
 }
 
-// ── TX (QMediaPlayer with in-memory WAV) ─────────────────────────────────
+// ── TX (QAudioSink, pull mode, computed-duration completion) ──────────────
 //
-// PCM samples are converted to a WAV file in memory, wrapped in a QBuffer,
-// and played via QMediaPlayer::setSourceDevice(). QMediaPlayer handles all
-// platform audio complexity. StoppedState fires when playback genuinely
-// finishes — the correct completion signal on all platforms.
+// PCM samples are converted to raw int16 bytes (no container) and played
+// via QAudioSink::start(QIODevice*) in pull mode — see ADR-107. Completion
+// is a computed-duration QTimer rather than QAudioSink's own state signal,
+// which is unreliable for one-shot playback (fires as soon as data is
+// handed to the driver, not when playback genuinely finishes).
 
-QByteArray AudioEngine::buildWav(const std::vector<float>& samples) const {
-    // Convert float32 → int16 PCM
+QByteArray AudioEngine::floatToPcm16(const std::vector<float>& samples) {
     QByteArray pcm;
     pcm.resize(static_cast<int>(samples.size() * sizeof(int16_t)));
     int16_t* dst = reinterpret_cast<int16_t*>(pcm.data());
@@ -179,42 +179,7 @@ QByteArray AudioEngine::buildWav(const std::vector<float>& samples) const {
         float s = std::max(-1.0f, std::min(1.0f, samples[i]));
         dst[i] = static_cast<int16_t>(s * 32767.0f);
     }
-
-    uint32_t sampleRate    = HavenFSK::SAMPLE_RATE;
-    uint16_t channels      = 1;
-    uint16_t bitsPerSample = 16;
-    uint32_t byteRate      = sampleRate * channels * bitsPerSample / 8;
-    uint16_t blockAlign    = channels * bitsPerSample / 8;
-    uint32_t dataSize      = static_cast<uint32_t>(pcm.size());
-    uint32_t fileSize      = 36 + dataSize;
-
-    QByteArray wav;
-    wav.reserve(44 + static_cast<int>(pcm.size()));
-
-    auto appendU32 = [&](uint32_t v) {
-        wav.append(static_cast<char>(v         & 0xFF));
-        wav.append(static_cast<char>((v >>  8) & 0xFF));
-        wav.append(static_cast<char>((v >> 16) & 0xFF));
-        wav.append(static_cast<char>((v >> 24) & 0xFF));
-    };
-    auto appendU16 = [&](uint16_t v) {
-        wav.append(static_cast<char>(v        & 0xFF));
-        wav.append(static_cast<char>((v >> 8) & 0xFF));
-    };
-
-    wav.append("RIFF", 4);   appendU32(fileSize);
-    wav.append("WAVE", 4);
-    wav.append("fmt ", 4);   appendU32(16);
-    appendU16(1);             // PCM format
-    appendU16(channels);
-    appendU32(sampleRate);
-    appendU32(byteRate);
-    appendU16(blockAlign);
-    appendU16(bitsPerSample);
-    wav.append("data", 4);   appendU32(dataSize);
-    wav.append(pcm);
-
-    return wav;
+    return pcm;
 }
 
 bool AudioEngine::startTx(const QString& deviceName,
@@ -228,21 +193,25 @@ bool AudioEngine::startTx(const QString& deviceName,
         return false;
     }
 
+    double durationSec = samples.size() /
+        static_cast<double>(HavenFSK::SAMPLE_RATE);
     qDebug() << "AudioEngine: startTx"
              << "samples=" << samples.size()
-             << "duration=" << (samples.size() /
-                static_cast<double>(HavenFSK::SAMPLE_RATE)) << "s"
+             << "duration=" << durationSec << "s"
              << "gain=" << initialGain;
 
-    // Build WAV at full scale — gain applied by GainedAudioDevice
-    m_txWavData = buildWav(samples);
+    // Raw PCM at full scale — gain applied by GainedAudioDevice. No WAV
+    // header: QAudioSink gets its format from the QAudioFormat passed to
+    // its constructor below, not by parsing a container (see ADR-107).
+    m_txPcmData = floatToPcm16(samples);
 
-    m_txGainDevice = new GainedAudioDevice(m_txWavData, initialGain, this);
+    m_txGainDevice = new GainedAudioDevice(
+        m_txPcmData, initialGain, this, /*headerBytes=*/0);
     if (!m_txGainDevice->open(QIODevice::ReadOnly)) {
         qWarning() << "AudioEngine: failed to open GainedAudioDevice";
         delete m_txGainDevice;
         m_txGainDevice = nullptr;
-        m_txWavData.clear();
+        m_txPcmData.clear();
         return false;
     }
 
@@ -256,105 +225,84 @@ bool AudioEngine::startTx(const QString& deviceName,
                    << "using default:" << dev.description();
     }
 
-    m_txPlayer   = new QMediaPlayer(this);
-    m_txAudioOut = new QAudioOutput(dev, this);
-    m_txAudioOut->setVolume(1.0f);  // full — gain lives in GainedAudioDevice
-    m_txPlayer->setAudioOutput(m_txAudioOut);
-
-    connect(m_txPlayer, &QMediaPlayer::playbackStateChanged,
-            this, &AudioEngine::onTxPlaybackStateChanged);
-
-    // Log when QMediaPlayer reports the actual audio format it negotiated
-    // with the output device.  A sample rate other than 48000 Hz means the
-    // OS audio engine resampled the WAV — all Haven tones would be shifted
-    // by the ratio and the remote receiver would fail to decode.
-    connect(m_txAudioOut, &QAudioOutput::deviceChanged,
-            this, [this]() {
-        if (m_txAudioOut) {
-            auto fmt = m_txAudioOut->device().preferredFormat();
-            qDebug() << "AudioEngine: TX output device preferred format —"
-                     << fmt.sampleRate() << "Hz,"
-                     << fmt.channelCount() << "ch,"
-                     << fmt.sampleFormat();
-            if (fmt.sampleRate() != HavenFSK::SAMPLE_RATE)
-                qWarning() << "AudioEngine: TX sample rate mismatch — device prefers"
-                           << fmt.sampleRate() << "Hz, WAV is"
-                           << HavenFSK::SAMPLE_RATE
-                           << "Hz. OS will resample and shift all Haven tones.";
-        }
-    });
-
-    m_txPlayer->setSourceDevice(m_txGainDevice, QUrl("audio/wav"));
-
-    m_transmitting = true;
-    m_txPlayer->play();
-
-    // Log the TX output device's preferred format immediately (deviceChanged
-    // may not fire if the device was already set).
-    {
-        auto fmt = dev.preferredFormat();
-        qDebug() << "AudioEngine: TX output device preferred format —"
-                 << fmt.sampleRate() << "Hz,"
-                 << fmt.channelCount() << "ch,"
-                 << fmt.sampleFormat();
-        if (fmt.sampleRate() != HavenFSK::SAMPLE_RATE)
-            qWarning() << "AudioEngine: TX sample rate mismatch — device prefers"
-                       << fmt.sampleRate() << "Hz, WAV is"
-                       << HavenFSK::SAMPLE_RATE
-                       << "Hz. OS will resample and shift all Haven tones.";
+    QAudioFormat fmt = havenFormat();
+    if (!dev.isFormatSupported(fmt)) {
+        QAudioFormat nearest = dev.preferredFormat();
+        qWarning() << "AudioEngine: TX device does not support"
+                   << fmt.sampleRate() << "Hz" << fmt.channelCount()
+                   << "ch Int16 — device prefers" << nearest.sampleRate()
+                   << "Hz" << nearest.channelCount() << "ch."
+                   << "OS may resample and shift all Haven tones.";
+        emit audioError(
+            QString("TX audio format mismatch (device wants %1 Hz). "
+                    "See debug log for details.").arg(nearest.sampleRate()));
     }
 
-    qDebug() << "AudioEngine: TX started with real-time gain"
-             << initialGain << "(" << m_txWavData.size() << "bytes)";
+    m_txAudioSink = new QAudioSink(dev, fmt, this);
+    m_transmitting = true;
+    m_txAudioSink->start(m_txGainDevice);   // pull mode
+
+    // Completion detection: QAudioSink::stateChanged()/IdleState is
+    // unreliable for one-shot playback (fires as soon as data is handed to
+    // the driver, not when playback genuinely finishes — see ADR-107 for
+    // the full history; this is the same behavior that previously ruled
+    // QAudioSink out for TX). Since this PCM is generated by HAVEN itself
+    // with an exactly-known sample count and rate, a computed-duration
+    // timer is accurate here (unlike arbitrary/unknown media duration
+    // estimation). +150ms safety margin: declaring TX complete too EARLY
+    // (before the last symbol has actually drained through hardware) is
+    // the failure mode to avoid, not a little late — TX_TAIL_MS already
+    // adds further PTT-hold margin on top of this at the caller.
+    if (!m_txCompletionTimer) {
+        m_txCompletionTimer = new QTimer(this);
+        m_txCompletionTimer->setSingleShot(true);
+        connect(m_txCompletionTimer, &QTimer::timeout,
+                this, &AudioEngine::onTxCompletionTimer);
+    }
+    int timerMs = static_cast<int>(durationSec * 1000.0) + 150;
+    m_txCompletionTimer->start(timerMs);
+
+    qDebug() << "AudioEngine: TX started (QAudioSink) with real-time gain"
+             << initialGain << "(" << m_txPcmData.size() << "bytes),"
+             << "completion timer=" << timerMs << "ms";
     return true;
 }
 
-void AudioEngine::onTxPlaybackStateChanged(
-    QMediaPlayer::PlaybackState state)
-{
-    qDebug() << "AudioEngine: TX playback state=" << state
-             << "transmitting=" << m_transmitting.load();
-
-    if (state == QMediaPlayer::StoppedState && m_transmitting) {
-        qDebug() << "AudioEngine: TX complete (QMediaPlayer stopped)";
-        m_transmitting = false;
-
-        if (m_txPlayer) {
-            delete m_txPlayer;   // already stopped — StoppedState just fired
-            m_txPlayer = nullptr;
-        }
-        if (m_txAudioOut) {
-            delete m_txAudioOut;
-            m_txAudioOut = nullptr;
-        }
-        if (m_txGainDevice) {
-            m_txGainDevice->close();
-            delete m_txGainDevice;
-            m_txGainDevice = nullptr;
-        }
-        m_txWavData.clear();
-
-        emit txComplete();
-    }
-}
-
-void AudioEngine::stopTx() {
+void AudioEngine::onTxCompletionTimer() {
+    if (!m_transmitting) return;
+    qDebug() << "AudioEngine: TX complete (computed duration elapsed)";
     m_transmitting = false;
-    if (m_txPlayer) {
-        m_txPlayer->stop();
-        delete m_txPlayer;
-        m_txPlayer = nullptr;
-    }
-    if (m_txAudioOut) {
-        delete m_txAudioOut;
-        m_txAudioOut = nullptr;
+
+    if (m_txAudioSink) {
+        m_txAudioSink->stop();
+        delete m_txAudioSink;
+        m_txAudioSink = nullptr;
     }
     if (m_txGainDevice) {
         m_txGainDevice->close();
         delete m_txGainDevice;
         m_txGainDevice = nullptr;
     }
-    m_txWavData.clear();
+    m_txPcmData.clear();
+
+    emit txComplete();
+}
+
+void AudioEngine::stopTx() {
+    m_transmitting = false;
+    if (m_txCompletionTimer)
+        m_txCompletionTimer->stop();
+    if (m_txAudioSink) {
+        m_txAudioSink->stop();
+        delete m_txAudioSink;
+        m_txAudioSink = nullptr;
+    }
+    if (m_txGainDevice) {
+        m_txGainDevice->close();
+        delete m_txGainDevice;
+        m_txGainDevice = nullptr;
+    }
+    m_txPcmData.clear();
 }
 
 bool AudioEngine::isTransmitting() const {

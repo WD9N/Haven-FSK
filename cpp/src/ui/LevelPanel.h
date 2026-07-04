@@ -319,7 +319,7 @@ public:
     void setRxLevel(float dbFS) { m_rx->setMeterLevel(dbFS + 6.0f); }
     void setTxLevel(float dbFS) { m_tx->setMeterLevel(dbFS + 6.0f); }
 
-    // TX fader as dBFS (for QAudioOutput::setVolume)
+    // TX fader as dBFS (converted to linear gain for GainedAudioDevice)
     float txFaderDbFS() const { return m_tx->faderDb() - 6.0f; }
 
     // RX fader as linear gain multiplier (0 dBu = 1.0)
