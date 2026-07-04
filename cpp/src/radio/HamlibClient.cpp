@@ -4,6 +4,8 @@
 #ifdef HAVEN_HAMLIB_ENABLED
 
 #include <hamlib/rig.h>
+#include <QMetaObject>
+#include <QThreadPool>
 #include <algorithm>
 
 // Verified against Hamlib's actual include/hamlib/rig.h this session
@@ -59,39 +61,100 @@ QString HamlibClient::rigName() const {
 bool HamlibClient::connect() {
     m_userDisconnected = false;
     if (m_connected) return true;
+    if (m_connectInProgress) return true;  // attempt already in flight
 
-    m_rig = rig_init(static_cast<rig_model_t>(m_rigModel));
-    if (!m_rig) {
-        QString msg = QString("Hamlib: rig_init failed for model %1")
-                      .arg(m_rigModel);
-        qWarning() << msg;
-        emit rigError(msg);
-        scheduleReconnect();
-        return false;
+    m_connectInProgress = true;
+    m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+
+    // rig_init/rig_open block on serial I/O — run them on a worker thread
+    // so a bad/nonexistent COM port can never freeze the UI (or, worse,
+    // application startup itself: MainWindow's constructor calls
+    // startRadio() before the window is shown). Only primitive values and
+    // the cancellation flag are captured; `self` is used solely as the
+    // context object for the queued invoke back onto the main thread —
+    // it is never dereferenced on the worker thread, so it's safe even if
+    // this HamlibClient is destroyed while the attempt is in flight (see
+    // applyConnectResult()/disconnect()/~HamlibClient()).
+    QString portPath  = m_portPath;
+    int     baudRate  = m_baudRate;
+    int     rigModel  = m_rigModel;
+    auto    cancelFlag = m_cancelFlag;
+    HamlibClient* self = this;
+
+    QThreadPool::globalInstance()->start([portPath, baudRate, rigModel,
+                                           cancelFlag, self]() {
+        ConnectResult result;
+
+        RIG* rig = rig_init(static_cast<rig_model_t>(rigModel));
+        if (!rig) {
+            result.errorMessage =
+                QString("Hamlib: rig_init failed for model %1").arg(rigModel);
+        } else {
+            // Configure port path and baud via the token API (stable
+            // across Hamlib versions) before opening, rather than writing
+            // rig_state struct fields directly.
+            hamlib_token_t pathToken = rig_token_lookup(rig, "rig_pathname");
+            hamlib_token_t rateToken = rig_token_lookup(rig, "serial_speed");
+            rig_set_conf(rig, pathToken, portPath.toUtf8().constData());
+            rig_set_conf(rig, rateToken,
+                         QByteArray::number(baudRate).constData());
+
+            int err = rig_open(rig);
+            if (err != RIG_OK) {
+                result.errorMessage = QString("Hamlib: cannot open %1 — %2")
+                                       .arg(portPath, rigerror(err));
+                rig_cleanup(rig);
+            } else {
+                result.ok  = true;
+                result.rig = rig;
+            }
+        }
+
+        if (cancelFlag->load()) {
+            // disconnect() or ~HamlibClient() ran while this attempt was
+            // in flight — clean up here rather than touching a possibly-
+            // destroyed `self`.
+            if (result.ok && result.rig) {
+                rig_close(result.rig);
+                rig_cleanup(result.rig);
+            }
+            return;
+        }
+
+        // Context-object overload: if `self` has been destroyed by the
+        // time this is delivered, Qt simply drops the call rather than
+        // invoking it on a dangling pointer.
+        QMetaObject::invokeMethod(self, [self, result]() {
+            self->applyConnectResult(result);
+        }, Qt::QueuedConnection);
+    });
+
+    return true;
+}
+
+void HamlibClient::applyConnectResult(const ConnectResult& result) {
+    m_connectInProgress = false;
+
+    if (m_userDisconnected) {
+        // Disconnected while this attempt was in flight — discard
+        // whatever it found rather than silently connecting anyway.
+        if (result.ok && result.rig) {
+            rig_close(result.rig);
+            rig_cleanup(result.rig);
+        }
+        return;
     }
 
-    // Configure port path and baud via the token API (stable across
-    // Hamlib versions) before opening, rather than writing rig_state
-    // struct fields directly.
-    hamlib_token_t pathToken = rig_token_lookup(m_rig, "rig_pathname");
-    hamlib_token_t rateToken = rig_token_lookup(m_rig, "serial_speed");
-    rig_set_conf(m_rig, pathToken, m_portPath.toUtf8().constData());
-    rig_set_conf(m_rig, rateToken,
-                 QByteArray::number(m_baudRate).constData());
-
-    int err = rig_open(m_rig);
-    if (err != RIG_OK) {
-        QString msg = QString("Hamlib: cannot open %1 — %2")
-                      .arg(m_portPath, rigerror(err));
-        qWarning() << msg;
-        emit rigError(msg);
-        rig_cleanup(m_rig);
-        m_rig = nullptr;
+    if (!result.ok) {
+        qWarning() << result.errorMessage;
+        emit rigError(result.errorMessage);
         scheduleReconnect();
-        return false;
+        return;
     }
 
+    m_rig = result.rig;
     m_connected = true;
+    m_everConnected = true;
     m_reconnectAttempt = 0;
     m_reconnectTimer->stop();
     m_pollTick = 0;
@@ -101,11 +164,12 @@ bool HamlibClient::connect() {
              << "at" << m_baudRate << "baud, model" << m_rigModel;
     emit connected();
     requestFrequency();
-    return true;
 }
 
 void HamlibClient::disconnect() {
     m_userDisconnected = true;
+    if (m_cancelFlag) m_cancelFlag->store(true);
+    m_connectInProgress = false;
     m_reconnectTimer->stop();
     m_reconnectAttempt = 0;
     m_pollTimer->stop();
@@ -128,6 +192,23 @@ void HamlibClient::disconnect() {
 
 void HamlibClient::scheduleReconnect() {
     if (m_userDisconnected) return;
+
+    // A connection that has never succeeded gets a bounded number of
+    // attempts, then gives up cleanly instead of retrying forever — a bad
+    // COM port/rig model is a configuration error, not a transient
+    // outage. A connection that WAS working and later drops keeps
+    // retrying indefinitely below (m_everConnected true skips this).
+    if (!m_everConnected && m_reconnectAttempt >= MAX_INITIAL_CONNECT_ATTEMPTS) {
+        QString msg = QString(
+            "Hamlib: giving up after %1 failed attempts to open %2 — "
+            "check COM port and rig model in Radio -> Configure")
+            .arg(m_reconnectAttempt).arg(m_portPath);
+        qWarning() << msg;
+        m_reconnectAttempt = 0;  // so a later manual connect() starts fresh
+        emit connectFailed(msg);
+        return;
+    }
+
     int shift = std::min(m_reconnectAttempt, 10);
     int delayMs = std::min(RECONNECT_MIN_MS << shift, RECONNECT_MAX_MS);
     m_reconnectAttempt++;
@@ -137,12 +218,8 @@ void HamlibClient::scheduleReconnect() {
 }
 
 void HamlibClient::onReconnectTimer() {
-    if (m_userDisconnected || m_connected) return;
+    if (m_userDisconnected || m_connected || m_connectInProgress) return;
     qDebug() << "HamlibClient: attempting reconnect";
-    // Blocking — Hamlib has no non-blocking-connect equivalent to
-    // QTcpSocket::connectToHost(); bounded by Hamlib's own serial
-    // timeout and capped reconnect interval (30s), same accepted
-    // tradeoff as this class's poll-timer reads.
     connect();
 }
 

@@ -42,6 +42,7 @@ bool TCIClient::connect() {
 
 void TCIClient::disconnect() {
     m_reconnTimer->stop();
+    m_reconnectAttempt = 0;
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
         m_socket->close();
     m_connected = false;
@@ -56,9 +57,29 @@ void TCIClient::onConnected() {
 void TCIClient::onDisconnected() {
     m_connected = false;
     m_ready     = false;   // must re-handshake on reconnect
+    emit disconnected();
+
+    // A connection that has never completed the TCI handshake gets a
+    // bounded number of attempts, then gives up cleanly instead of
+    // retrying forever — a bad host/port is a configuration error, not a
+    // transient outage. A connection that WAS working and later drops
+    // keeps retrying indefinitely (m_everConnected true skips this).
+    if (!m_everConnected) {
+        ++m_reconnectAttempt;
+        if (m_reconnectAttempt >= MAX_INITIAL_CONNECT_ATTEMPTS) {
+            QString msg = QString(
+                "TCI: giving up after %1 failed attempts to connect to "
+                "%2:%3 — check host/port in Radio -> Configure")
+                .arg(m_reconnectAttempt).arg(m_host).arg(m_port);
+            qWarning() << msg;
+            m_reconnectAttempt = 0;  // so a later manual connect() starts fresh
+            emit connectFailed(msg);
+            return;
+        }
+    }
+
     qDebug() << "TCIClient: disconnected — will retry in"
              << RECONNECT_INTERVAL_MS / 1000 << "seconds";
-    emit disconnected();
     m_reconnTimer->start();
 }
 
@@ -101,6 +122,8 @@ void TCIClient::parseTCIMessage(const QString& msg) {
             m_inInit    = false;
             m_ready     = true;
             m_connected = true;
+            m_everConnected    = true;
+            m_reconnectAttempt = 0;
             m_reconnTimer->stop();
             qDebug() << "TCIClient: ready — connected to"
                      << m_deviceName << "protocol" << m_protocolVer;

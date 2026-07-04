@@ -36,6 +36,8 @@
 #include <QSettings>
 #include <QVariantMap>
 #include <QDebug>
+#include <QFile>
+#include <QCoreApplication>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -172,6 +174,13 @@ void MainWindow::setupMenu() {
         if (!on)
             m_waterfall->setAfcOffset(0.0f);
     });
+
+    opMenu->addSeparator();
+    m_recordRxAction = new QAction("Record RX Audio to WAV (debug)", this);
+    m_recordRxAction->setCheckable(true);
+    opMenu->addAction(m_recordRxAction);
+    connect(m_recordRxAction, &QAction::toggled,
+            this, &MainWindow::onRecordRxToggled);
 
     // Help menu
     QMenu* helpMenu   = menuBar()->addMenu("&Help");
@@ -447,6 +456,22 @@ void MainWindow::setupConnections() {
     // AudioEngine → DspPipeline (AFC-corrected path)
     connect(m_audio, &AudioEngine::rxDataReady,
             m_pipeline, &HavenFSK::DspPipeline::onAudioChunk);
+    // Debug RX capture — see onRecordRxToggled(). Taps the exact same
+    // signal/samples the modem receives, not a separately-recorded file.
+    connect(m_audio, &AudioEngine::rxDataReady,
+            this, [this](const std::vector<float>& samples) {
+                if (!m_recordingRx) return;
+                for (float s : samples) {
+                    float clamped = std::max(-1.0f, std::min(1.0f, s));
+                    m_rxRecordBuffer.push_back(
+                        static_cast<int16_t>(clamped * 32767.0f));
+                }
+                if (static_cast<int>(m_rxRecordBuffer.size()) >= RX_RECORD_MAX_SAMPLES) {
+                    m_statusLabel->setText(
+                        "RX recording hit 60s cap — saved to rx_capture.wav");
+                    m_recordRxAction->setChecked(false);  // triggers save via onRecordRxToggled
+                }
+            });
     connect(m_audio, &AudioEngine::txComplete,
             this, &MainWindow::onTxComplete);
     // Pipeline clears its transmitting flag when audio finishes.
@@ -748,6 +773,8 @@ void MainWindow::startRadio() {
             this, [this](const QString& msg) {
                 m_statusLabel->setText("Rig: " + msg);
             });
+    connect(m_radio, &RadioInterface::connectFailed,
+            this, &MainWindow::onRadioConnectFailed);
 
     m_radio->connect();
 }
@@ -912,6 +939,95 @@ void MainWindow::onRadioDisconnected() {
     m_freqControl->setFrequency(0);
 }
 
+void MainWindow::onRadioConnectFailed(const QString& reason) {
+    // Distinct from onRadioDisconnected(): this means the connection
+    // never succeeded at all and has stopped retrying automatically —
+    // e.g. a wrong COM port/host in Radio -> Configure — rather than a
+    // previously-working connection that dropped and is still retrying
+    // in the background. Surfaced in red (vs. disconnected's orange) so
+    // it reads as "needs operator action", not "will reconnect itself".
+    m_rigLabel->setText("Rig: connection failed");
+    m_rigLabel->setStyleSheet("color: red;");
+    m_statusLabel->setText(reason);
+    m_freqControl->setFrequency(0);
+}
+
+void MainWindow::onRecordRxToggled(bool on) {
+    if (on) {
+        m_rxRecordBuffer.clear();
+        m_rxRecordBuffer.reserve(static_cast<size_t>(RX_RECORD_MAX_SAMPLES));
+        m_recordingRx = true;
+        m_statusLabel->setText(
+            "Recording RX audio to rx_capture.wav (up to 60s)…");
+    } else {
+        m_recordingRx = false;
+        saveRxRecording();
+    }
+}
+
+void MainWindow::saveRxRecording() {
+    if (m_rxRecordBuffer.empty()) return;
+
+    const QString path =
+        QCoreApplication::applicationDirPath() + "/rx_capture.wav";
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        qWarning() << "MainWindow: could not open" << path << "for writing";
+        m_statusLabel->setText("Failed to save rx_capture.wav — see debug log");
+        m_rxRecordBuffer.clear();
+        return;
+    }
+
+    // Standard 44-byte PCM WAV header — mono, 16-bit, 48000 Hz, matching
+    // exactly what AudioEngine::rxDataReady delivers (see ADR-100).
+    const uint32_t sampleRate   = static_cast<uint32_t>(HavenFSK::SAMPLE_RATE);
+    const uint16_t numChannels  = 1;
+    const uint16_t bitsPerSample = 16;
+    const uint32_t byteRate     = sampleRate * numChannels * bitsPerSample / 8;
+    const uint16_t blockAlign   = numChannels * bitsPerSample / 8;
+    const uint32_t dataSize     =
+        static_cast<uint32_t>(m_rxRecordBuffer.size() * sizeof(int16_t));
+    const uint32_t riffSize     = 36 + dataSize;
+
+    auto writeU32 = [&f](uint32_t v) {
+        char b[4] = { char(v & 0xFF), char((v >> 8) & 0xFF),
+                      char((v >> 16) & 0xFF), char((v >> 24) & 0xFF) };
+        f.write(b, 4);
+    };
+    auto writeU16 = [&f](uint16_t v) {
+        char b[2] = { char(v & 0xFF), char((v >> 8) & 0xFF) };
+        f.write(b, 2);
+    };
+
+    f.write("RIFF", 4);
+    writeU32(riffSize);
+    f.write("WAVE", 4);
+    f.write("fmt ", 4);
+    writeU32(16);       // fmt chunk size
+    writeU16(1);        // PCM
+    writeU16(numChannels);
+    writeU32(sampleRate);
+    writeU32(byteRate);
+    writeU16(blockAlign);
+    writeU16(bitsPerSample);
+    f.write("data", 4);
+    writeU32(dataSize);
+    f.write(reinterpret_cast<const char*>(m_rxRecordBuffer.data()),
+            static_cast<qint64>(dataSize));
+    f.close();
+
+    qDebug() << "MainWindow: saved" << m_rxRecordBuffer.size()
+             << "samples (" << (m_rxRecordBuffer.size() / (double)HavenFSK::SAMPLE_RATE)
+             << "s) to" << path;
+    m_statusLabel->setText(
+        QString("Saved %1s RX recording to %2")
+        .arg(m_rxRecordBuffer.size() / (double)HavenFSK::SAMPLE_RATE, 0, 'f', 1)
+        .arg(path));
+
+    m_rxRecordBuffer.clear();
+}
+
 void MainWindow::onFrequencyChanged(uint64_t hz) {
     m_freqControl->setFrequency(hz);
 }
@@ -970,12 +1086,35 @@ void MainWindow::onFieldDayToggled(bool enabled) {
 void MainWindow::onOpenRadioConfig() {
     RadioConfigDialog dlg(this);
     dlg.setConnected(m_radio && m_radio->isConnected());
+
+    // startRadio() destroys and rebuilds m_radio, so live feedback has to
+    // be (re)wired to whatever m_radio ends up being *after* each call —
+    // wiring it once up front would only cover an already-active m_radio
+    // from before the dialog opened, not a fresh Connect click inside it.
+    // Auto-disconnects when dlg is destroyed at the end of exec().
+    auto startRadioAndWire = [this, &dlg]() {
+        startRadio();
+        if (m_radio) {
+            connect(m_radio, &RadioInterface::connected,
+                    &dlg, &RadioConfigDialog::onConnectSucceeded);
+            connect(m_radio, &RadioInterface::connectFailed,
+                    &dlg, &RadioConfigDialog::onConnectFailed);
+        }
+    };
+
     connect(&dlg, &RadioConfigDialog::configChanged,
-            this, &MainWindow::startRadio);
+            this, startRadioAndWire);
     connect(&dlg, &RadioConfigDialog::connectRequested,
-            this, &MainWindow::startRadio);
+            this, startRadioAndWire);
     connect(&dlg, &RadioConfigDialog::disconnectRequested,
             this, &MainWindow::stopRadio);
+
+    if (m_radio) {
+        connect(m_radio, &RadioInterface::connected,
+                &dlg, &RadioConfigDialog::onConnectSucceeded);
+        connect(m_radio, &RadioInterface::connectFailed,
+                &dlg, &RadioConfigDialog::onConnectFailed);
+    }
     dlg.exec();
 }
 

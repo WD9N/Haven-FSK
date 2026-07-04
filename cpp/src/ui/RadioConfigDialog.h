@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QGroupBox>
 #include <QPushButton>
+#include <QLabel>
 
 // RadioConfigDialog — radio control method, connection settings, and
 // Connect/Disconnect controls. Opened directly from the Radio menu bar item.
@@ -19,6 +20,15 @@ public:
 
     // Call after construction to reflect current connection state
     void setConnected(bool connected);
+
+public slots:
+    // Live feedback while the dialog is open — wire the active
+    // RadioInterface's connected()/connectFailed() signals to these
+    // (see MainWindow::onOpenRadioConfig()) so a failed attempt is
+    // visible right where the operator is looking, not just in the main
+    // window's status bar behind this modal dialog.
+    void onConnectSucceeded();
+    void onConnectFailed(const QString& reason);
 
 signals:
     void configChanged();       // settings saved
@@ -65,6 +75,7 @@ private:
 
     QPushButton* m_connectBtn    {nullptr};
     QPushButton* m_disconnectBtn {nullptr};
+    QLabel*      m_connectStatusLabel {nullptr};
 
     bool m_isConnected {false};
 };

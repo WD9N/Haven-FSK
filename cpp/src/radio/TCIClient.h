@@ -79,5 +79,15 @@ private:
     // Buffer for init block parsing
     bool        m_inInit {true};
 
+    // True once the TCI handshake ("ready;") has ever completed — see
+    // HamlibClient.h for the "bounded retries vs. retry forever"
+    // rationale this drives in onDisconnected().
+    bool        m_everConnected    {false};
+    int         m_reconnectAttempt {0};
+
     static constexpr int RECONNECT_INTERVAL_MS = 10000;
+
+    // How many attempts to make on a connection that has never succeeded
+    // before giving up and emitting connectFailed() — see HamlibClient.h.
+    static constexpr int MAX_INITIAL_CONNECT_ATTEMPTS = 5;
 };

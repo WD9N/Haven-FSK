@@ -210,6 +210,11 @@ void RadioConfigDialog::setupUi() {
 
     layout->addLayout(btnLayout);
 
+    m_connectStatusLabel = new QLabel;
+    m_connectStatusLabel->setWordWrap(true);
+    m_connectStatusLabel->setStyleSheet("color: gray;");
+    layout->addWidget(m_connectStatusLabel);
+
     connect(m_connectBtn,    &QPushButton::clicked,
             this, &RadioConfigDialog::onConnect);
     connect(m_disconnectBtn, &QPushButton::clicked,
@@ -318,14 +323,38 @@ void RadioConfigDialog::onConnect() {
     saveSettings();
     emit configChanged();
     emit connectRequested();
+    // Connecting is async (and, for Hamlib, may take a few bounded
+    // background retries) — don't claim success yet. onConnectSucceeded()/
+    // onConnectFailed() (wired to the live RadioInterface by
+    // MainWindow::onOpenRadioConfig()) update the buttons/label once the
+    // real outcome is known.
     m_connectBtn->setEnabled(false);
     m_disconnectBtn->setEnabled(true);
+    m_connectStatusLabel->setStyleSheet("color: gray;");
+    m_connectStatusLabel->setText("Connecting…");
 }
 
 void RadioConfigDialog::onDisconnect() {
     emit disconnectRequested();
     m_connectBtn->setEnabled(true);
     m_disconnectBtn->setEnabled(false);
+    m_connectStatusLabel->clear();
+}
+
+void RadioConfigDialog::onConnectSucceeded() {
+    setConnected(true);
+    m_connectStatusLabel->setStyleSheet("color: #88cc88;");
+    m_connectStatusLabel->setText("Connected.");
+}
+
+void RadioConfigDialog::onConnectFailed(const QString& reason) {
+    // Gave up retrying (see RadioInterface::connectFailed) — return the
+    // buttons to "not connected" so the operator can fix settings (e.g.
+    // COM port) and hit Connect again, rather than being stuck looking
+    // "still trying" indefinitely.
+    setConnected(false);
+    m_connectStatusLabel->setStyleSheet("color: #cc8888;");
+    m_connectStatusLabel->setText(reason);
 }
 
 void RadioConfigDialog::onSave() {

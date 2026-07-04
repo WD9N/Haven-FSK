@@ -61,6 +61,18 @@ public:
 signals:
     void connected();
     void disconnected();
+
+    // Emitted when a connection that has NEVER succeeded gives up
+    // retrying (after a bounded number of attempts) — distinct from
+    // disconnected(), which implies a previously-live connection was
+    // lost. A bad host/port/COM-port setting should surface here, not
+    // retry forever in the background; a connection that WAS working and
+    // later drops keeps retrying indefinitely via the normal
+    // connected()/disconnected() cycle. UI should treat this as "give up
+    // and let the operator fix settings and try again", re-enabling
+    // manual Connect.
+    void connectFailed(const QString& reason);
+
     void pttChanged(bool active);
 
     // Emitted when radio reports a frequency change

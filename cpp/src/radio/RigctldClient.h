@@ -79,9 +79,18 @@ private:
     int         m_reconnectAttempt {0};
     bool        m_userDisconnected {false};
 
+    // True once connect() has ever actually succeeded — see
+    // HamlibClient.h for the "bounded retries vs. retry forever"
+    // rationale this drives in scheduleReconnect().
+    bool        m_everConnected {false};
+
     static constexpr int POLL_INTERVAL_MS       = 2000;
     static constexpr int MODE_POLL_EVERY_N_TICKS = 5;   // ~10s
     static constexpr int CONNECT_TIMEOUT_MS     = 5000;
     static constexpr int RECONNECT_MIN_MS       = 1000;
     static constexpr int RECONNECT_MAX_MS       = 30000;
+
+    // How many attempts to make on a connection that has never succeeded
+    // before giving up and emitting connectFailed() — see HamlibClient.h.
+    static constexpr int MAX_INITIAL_CONNECT_ATTEMPTS = 5;
 };

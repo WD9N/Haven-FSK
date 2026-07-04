@@ -11,6 +11,7 @@
 #include <QCloseEvent>
 #include <cstdint>
 #include <cmath>
+#include <vector>
 #include "../radio/PTTManager.h"
 #include "../dsp/IModem.h"
 
@@ -55,6 +56,7 @@ private slots:
     void onOpenSettings();
     void onRadioConnected();
     void onRadioDisconnected();
+    void onRadioConnectFailed(const QString& reason);
     void onFrequencyChanged(uint64_t hz);
     void onWatchdogTripped();
     void onElementClicked(const QString& scheme, const QString& value);
@@ -99,6 +101,20 @@ private:
     QAction* m_settingsAction {nullptr};
     QAction* m_exportAction   {nullptr};
     QAction* m_fdModeAction   {nullptr};
+    QAction* m_recordRxAction {nullptr};
+
+    // ── RX audio capture (debug tool) ───────────────────────────────────────
+    // Records exactly the samples MfskModem/Psk31Modem receive via
+    // AudioEngine::rxDataReady — not a separately-recorded file from
+    // external software, which would leave open the question of whether
+    // it used the same device/level/format HAVEN itself sees. Written to
+    // <exe dir>/rx_capture.wav (same convention as haven_debug.log) when
+    // stopped, either manually or via the size cap below.
+    bool                 m_recordingRx {false};
+    std::vector<int16_t> m_rxRecordBuffer;
+    static constexpr int RX_RECORD_MAX_SAMPLES = 48000 * 60;  // 60s cap
+    void onRecordRxToggled(bool on);
+    void saveRxRecording();
 
     // ── Backend objects ───────────────────────────────────────────────────
     AudioEngine*           m_audio      {nullptr};

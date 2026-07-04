@@ -64,6 +64,7 @@ void RigctldClient::disconnect() {
 
 void RigctldClient::onConnected() {
     m_connected = true;
+    m_everConnected = true;
     m_reconnectAttempt = 0;
     m_reconnectTimer->stop();
     m_pollTick = 0;
@@ -93,6 +94,23 @@ void RigctldClient::onError(QAbstractSocket::SocketError error) {
 
 void RigctldClient::scheduleReconnect() {
     if (m_userDisconnected) return;
+
+    // A connection that has never succeeded gets a bounded number of
+    // attempts, then gives up cleanly instead of retrying forever — a bad
+    // host/port is a configuration error, not a transient outage. A
+    // connection that WAS working and later drops keeps retrying
+    // indefinitely below (m_everConnected true skips this).
+    if (!m_everConnected && m_reconnectAttempt >= MAX_INITIAL_CONNECT_ATTEMPTS) {
+        QString msg = QString(
+            "rigctld: giving up after %1 failed attempts to connect to "
+            "%2:%3 — check host/port in Radio -> Configure")
+            .arg(m_reconnectAttempt).arg(m_host).arg(m_port);
+        qWarning() << msg;
+        m_reconnectAttempt = 0;  // so a later manual connect() starts fresh
+        emit connectFailed(msg);
+        return;
+    }
+
     int shift = std::min(m_reconnectAttempt, 10);  // avoid shift overflow on long outages
     int delayMs = std::min(RECONNECT_MIN_MS << shift, RECONNECT_MAX_MS);
     m_reconnectAttempt++;
