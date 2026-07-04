@@ -468,7 +468,7 @@ void MainWindow::setupConnections() {
                 }
                 if (static_cast<int>(m_rxRecordBuffer.size()) >= RX_RECORD_MAX_SAMPLES) {
                     m_statusLabel->setText(
-                        "RX recording hit 60s cap — saved to rx_capture.wav");
+                        "RX recording hit 5 min cap — saved to rx_capture.wav");
                     m_recordRxAction->setChecked(false);  // triggers save via onRecordRxToggled
                 }
             });
@@ -958,7 +958,7 @@ void MainWindow::onRecordRxToggled(bool on) {
         m_rxRecordBuffer.reserve(static_cast<size_t>(RX_RECORD_MAX_SAMPLES));
         m_recordingRx = true;
         m_statusLabel->setText(
-            "Recording RX audio to rx_capture.wav (up to 60s)…");
+            "Recording RX audio to rx_capture.wav (up to 5 min)…");
     } else {
         m_recordingRx = false;
         saveRxRecording();

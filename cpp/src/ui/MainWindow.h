@@ -112,7 +112,7 @@ private:
     // stopped, either manually or via the size cap below.
     bool                 m_recordingRx {false};
     std::vector<int16_t> m_rxRecordBuffer;
-    static constexpr int RX_RECORD_MAX_SAMPLES = 48000 * 60;  // 60s cap
+    static constexpr int RX_RECORD_MAX_SAMPLES = 48000 * 300;  // 5 min cap
     void onRecordRxToggled(bool on);
     void saveRxRecording();
 
