@@ -2344,3 +2344,306 @@ differential-polarity bug) all round-trip correctly. **Not yet
 re-verified against fldigi after these fixes** — the original interop
 test that found the missing-preamble bug should be re-run to confirm
 fldigi now decodes HAVEN's TX cleanly from the first character.
+
+---
+
+## ADR-105 — MFSK preamble sync rewritten as a continuous per-sample sliding DFT
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `MfskModem::tryFindPreamble()` — a discrete-offset search that
+recomputed a block FFT (`Demodulator::demodulateToSoft`) at a small number of
+candidate (frequency, timing) combinations — is replaced by a new
+`PreambleSync` (`src/dsp/PreambleSync.{h,cpp}`) built on a new `SlidingDft`
+(`src/dsp/SlidingDft.{h,cpp}`). `SlidingDft` maintains a bank of recursive
+resonator bins (one complex accumulator per tracked bin, updated by a single
+multiply-add every sample — the well-known "sliding DFT" recursion, see
+Jacobsen & Lyons) covering the 16 HAVEN tone bins plus an AFC search margin.
+Because bin energies refresh after *every* sample rather than only at a
+handful of discrete block alignments, `PreambleSync::pushSample()` checks
+every possible symbol-timing alignment continuously, at O(1) amortized cost
+per sample, with no gap between tested alignments.
+
+**Root cause being fixed:** the old coarse/fine split tried only 2 timing
+offsets (`0`, `SAMPLES_PER_SYMBOL/2`) across 17 AFC hypotheses before a
+`COARSE_PREAMBLE_THRESHOLD` gate decided whether to even attempt the full
+16-step fine sweep. With no guard-bin tolerance for timing (unlike frequency),
+a true symbol boundary landing near the worst-case ~25%-of-symbol midpoint
+between those two coarse candidates could fail to clear even the generous
+0.10 coarse threshold — meaning the fine sweep, which *would* have found the
+real signal, never ran at all. This was a pure code/architecture bug,
+reproducible on a clean, noiseless signal, independent of RF conditions —
+confirmed by the operator's own observation that HAVEN's tones were clearly
+visible on its own waterfall while decode still failed.
+
+**Why this technique, not just a wider coarse grid:** investigated by reading
+fldigi's actual MFSK/Olivia receiver source (`src/mfsk/mfsk.cxx`,
+`src/filters/filters.cxx`'s `sfft` class — a GPLv3 codebase, same license as
+HAVEN post-ADR-101) rather than assuming from general DSP knowledge. fldigi
+sidesteps the discrete-offset-search problem entirely: `mfsk::rx_process()`
+calls a per-sample sliding FFT and stores each result in a circular history
+(`pipe[2*symlen]`); `mfsk::synchronize()` then scans that history for the
+peak. This HAVEN implementation is written independently (own bin layout,
+own preamble-correlation logic, own C++ style) — the fldigi source was the
+reference point for the *technique*, not a code port.
+
+**Simplification this enabled:** because `windowLen == SAMPLES_PER_SYMBOL`
+(1536 samples) puts one sliding-DFT bin exactly on every HAVEN tone with
+*zero* zero-padding needed (bin width = `SAMPLE_RATE/SAMPLES_PER_SYMBOL` =
+31.25 Hz = `SYMBOL_RATE`, exactly), and because a lock reports the exact
+sample index of the preamble's first symbol, `MfskModem::onPreambleLocked()`
+(replacing `tryFindPreamble()`) no longer needs any post-lock timing search —
+`m_timingOffset`/`m_preambleSymOff` are always `0` by construction, since
+`m_rxBuffer` is sliced to start exactly there. The old 16-step fine timing
+sweep and 17-hypothesis AFC grid are both gone; the block `Demodulator` is
+now only used for the post-lock frequency-residual refinement
+(`measureToneOffset`, unchanged) and for actual data-symbol decode in
+`tryCompleteFrame()` (unchanged — once timing is known exactly, block FFT at
+the single correct offset is the right tool).
+
+**Peak-picking, not first-threshold-crossing:** an early implementation
+fired the lock on the very first sample where the correlation score crossed
+`SCORE_THRESHOLD` (0.45). Verified via a standalone diagnostic
+(`diag_sync.cpp`, compiled directly against the Qt-free `SlidingDft`/
+`PreambleSync`/`Preamble` sources) that the score curve, while trending
+sharply upward toward the true alignment, is not perfectly monotonic
+sample-to-sample — so this fired early on a mediocre ~0.45–0.66 score
+instead of riding the climb to the true peak (which the same diagnostic
+confirmed reaches exactly `1.0000` at the true preamble-start sample for a
+clean signal). Fixed by tracking the best point across the entire
+above-threshold run and only finalizing once the run ends (score drops back
+below threshold, or a `MAX_RUN_SAMPLES` safety cap is hit) — the same
+"scan for the true peak, don't jump at the first candidate" principle
+fldigi's `synchronize()` uses.
+
+**Continuous across RX state, not just Idle:** `PreambleSync::pushSample()`
+is fed every sample regardless of `MfskModem`'s RX state (Idle or
+Collecting) — lock results are only *acted on* while Idle. This avoids
+reintroducing a version of the dead-zone bug fixed by the pre-refactor
+`resetRx()` change (see prior RX-pipeline-overhaul commit): pausing the feed
+during Collecting and resuming after would leave `PreambleSync`'s internal
+ring buffer discontinuous (stitching pre-collection and post-collection
+audio together as if adjacent), degrading detection for a window after every
+decode. Feeding continuously costs nothing extra (the per-sample update is
+already O(1)) and keeps history genuinely continuous.
+
+**Verification:** new `runMfskLoopbackSelfTest()`
+(`src/dsp/MfskLoopbackSelfTest.h`, wired into the `QT_DEBUG` self-test chain
+in `main.cpp`) feeds `MfskModem::modulateText()`'s output through a second
+`MfskModem` instance's `processAudioChunk()` in real `AUDIO_CHUNK_SAMPLES`
+chunks — the same 2048-sample chunking `AudioEngine::onRxDataAvailable()`
+uses — rather than calling `Frame::assemble()`/`parse()` directly the way
+`FrameSelfTest.h` does (which bypasses `PreambleSync` and the chunked state
+machine entirely; this gap is exactly the class of bug that also bit the
+PSK31 squelch/preamble work in ADR-104's session, so closing it here was
+deliberate). Confirmed passing: full round trip through the live chunked
+pipeline decodes `"CQ POTA DE WD9N K-1234 K"` with correct text, CRC OK, and
+FEC converged. **Not yet verified against a real over-the-air or live-VAC
+signal** — this closes the specific reproducible-in-software bug (confirmed
+via the standalone diagnostic reaching a perfect `1.0000` score at the exact
+correct sample on a clean synthetic signal), but real-world SNR/frequency
+drift/timing-drift behavior of the new continuous sync has not yet been
+exercised against actual radio hardware.
+
+---
+
+## ADR-106 — Bounded connect retries + off-UI-thread Hamlib connect
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Two related fixes to `RadioInterface`'s connect/reconnect
+handling, reported together from a real field failure (a misconfigured COM
+port on a laptop running the TS-590SG/Hamlib setup — separate from the
+Hermes/TCI development machine):
+
+**1. Bounded retries for a connection that has never succeeded.**
+`HamlibClient`, `RigctldClient`, and `TCIClient` all previously retried a
+failed connection forever with exponential (or, for TCIClient, fixed-
+interval) backoff, capped at a 30s delay but with no attempt limit — a
+permanently wrong COM port or host/port setting retried in an endless loop
+with no way for the operator to know it had given up, since the same
+`rigError()` message just got overwritten every cycle. A new
+`bool m_everConnected` flag (per client) distinguishes this from a
+connection that *was* working and later dropped: only the "never
+succeeded" case is bounded, via `MAX_INITIAL_CONNECT_ATTEMPTS = 5` (~31s of
+backoff for Hamlib/rigctld, 5×10s=50s for TCI's fixed interval) before
+emitting a new `RadioInterface::connectFailed(QString)` signal and stopping.
+A connection that was genuinely live and dropped (radio power-cycled, USB
+unplugged, rigctld restarted) keeps retrying indefinitely as before — that
+case is a real, worth-recovering-from outage, not a configuration error.
+
+**2. HamlibClient's connect attempts moved off the UI thread.** This is the
+more serious half of the bug: `rig_init()`/`rig_open()` are blocking calls
+(no async equivalent in Hamlib's API, per ADR-103), and `MainWindow`'s
+constructor calls `startRadio()` *before* the window is shown
+(`MainWindow.cpp`, end of constructor). On a wrong/nonexistent COM port,
+the first blocking `rig_open()` call — and, previously, every subsequent
+retry, since `onReconnectTimer()` called `connect()` synchronously too —
+could freeze application startup itself, not just "retry in the
+background" as the equivalent bug does for `RigctldClient`/`TCIClient`
+(both already async via `QTcpSocket`/`QWebSocket`, so bounded retries alone
+fully address the equivalent issue there). Fixed by dispatching the actual
+`rig_init`/`rig_open` work to `QThreadPool::globalInstance()`, delivering
+the result back to the main thread via
+`QMetaObject::invokeMethod(this, lambda, Qt::QueuedConnection)` — the
+context-object overload, which Qt guarantees silently drops the call
+rather than touching a destroyed object, so this is safe even if
+`disconnect()`/`~HamlibClient()` runs while an attempt is in flight. A
+`std::shared_ptr<std::atomic<bool>>` cancellation flag additionally lets a
+late-arriving *successful* `rig_open()` clean itself up on the worker
+thread (rather than leaking the `RIG*` or, worse, trying to hand it to a
+gone `this`) if the attempt was cancelled before it finished. Only the
+connect/reconnect path was moved off-thread — `setPTT`/`getFrequency`/poll
+calls remain on the UI thread, since those are fast and bounded on an
+already-open connection; the "wrong port entirely" case this fixes doesn't
+apply to them.
+
+**UI wiring:** `connectFailed` was previously unhandled — nothing told the
+operator a connection had given up versus "still trying". `MainWindow`
+now shows a distinct red "Rig: connection failed" status (vs. orange for a
+normal disconnect) so it reads as "needs action", not "will reconnect
+itself". More importantly, `RadioConfigDialog` — the actual place an
+operator is looking when fixing a bad port setting — previously only
+flipped its Connect/Disconnect buttons optimistically on click, with zero
+feedback about whether the attempt actually succeeded (the only error
+output went to `MainWindow`'s status bar, hidden behind the modal dialog).
+It now has its own status label and live-wires the active
+`RadioInterface`'s `connected()`/`connectFailed()` signals for the
+duration it's open (`MainWindow::onOpenRadioConfig()`), re-wiring after
+every `startRadio()` call since that call destroys and rebuilds `m_radio`.
+
+**Verification:** full rebuild clean; app launches and all `QT_DEBUG`
+self-tests (including `runMfskLoopbackSelfTest`, unaffected by this
+change) pass, confirming no regression. **Not yet verified against the
+actual failure case** (a real wrong COM port on Hamlib hardware) — that
+setup is on a separate machine from where this fix was developed. The
+reasoning above (moving the specific blocking calls off-thread, bounding
+retry count, the Qt-documented safety of the context-object
+`invokeMethod` overload) is sound but the field scenario that reported
+this bug hasn't been re-run yet to confirm the fix.
+
+---
+
+## ADR-107 — TX audio reverts to QAudioSink (pull mode) with computed-duration completion, replacing QMediaPlayer
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `AudioEngine::startTx()` plays TX audio via `QAudioSink::start(QIODevice*)`
+in pull mode (reusing the existing `GainedAudioDevice` QIODevice, now with a
+`headerBytes` parameter — `0` here, since `QAudioSink` gets its format from
+the `QAudioFormat` passed to its constructor, not by parsing a container) —
+replacing the `QMediaPlayer`-based approach from ADR-070/ADR-072-REVISED.
+Completion is a computed-duration `QTimer` (`samples.size() / SAMPLE_RATE`
+seconds + 150ms safety margin), not `QAudioSink::stateChanged()`/`IdleState`.
+`floatToPcm16()` replaces `buildWav()` — raw PCM bytes, no WAV header needed.
+
+**Root cause this fixes:** real over-the-air recordings (590SG → Hermes,
+analyzed via a standalone diagnostic built directly against `Demodulator`/
+`Frame`/`PreambleSync` — see session notes, not reproduced here) showed a
+strikingly consistent, exactly-reproducible **~680ms of true silence** at
+the start of every real transmission, before the actual modulated audio
+began — confirmed by RMS envelope analysis (a sharp *step* from noise floor
+to full signal level, not a gradual AGC ramp) and ruled out as PTT/relay/ALC
+settling by a manual pre-keyed-radio test that showed the identical gap.
+Since HAVEN's 16-symbol preamble is only 512ms, this ~680ms of dead air
+consumed the *entire* preamble before real audio ever reached the radio —
+explaining why real signals never produced a preamble lock (nothing to
+lock onto) while the payload, arriving after the gap, decoded at ~98%
+confidence. The gap was isolated to `AudioEngine::startTx()`'s `QMediaPlayer`
+path specifically (manually pre-keying PTT — bypassing `pttLeadMs` — didn't
+change it), consistent with `QMediaPlayer`'s heavier FFmpeg-backed demux/
+decode/format-negotiation pipeline (real overhead even for a trivial raw
+WAV) versus `QAudioSink`'s more direct PCM path.
+
+**Why QAudioSink is safe to revisit despite two prior rejections
+(ADR-072, ADR-072-REVISED):** both prior rejections were specifically about
+*completion* detection — `IdleState` firing the instant data is handed to
+the driver, not when playback genuinely finishes — never about *startup*
+latency, and never about the underlying full-duration playback being
+wrong. In fact pull mode was already established (in the original ADR-072,
+before being revised) as the fix for a *different*, separate WASAPI
+push-mode truncation bug, and that fix is reused unchanged here. This
+decision combines "the part already proven to work" (pull-mode full-
+duration playback) with a completion signal that doesn't depend on the
+part that was broken (a computed timer instead of `IdleState`).
+
+**Platform impact:** Windows is where the prior bug lived, but since this
+avoids `IdleState` entirely, that specific bug is sidestepped rather than
+fixed-in-place. Linux (PulseAudio/PipeWire) and Raspberry Pi (ALSA) have no
+documented `QAudioSink` issues in this codebase's history; `QAudioSink` is
+the more standard/native Qt6 Multimedia pattern on both, and avoiding
+`QMediaPlayer`'s demux/decode overhead is a plausible small win on the
+Pi's constrained CPU specifically.
+
+**Risk accepted and how it's bounded:** a computed-duration timer assumes
+playback finishes on schedule — if the OS output backend adds its own
+buffering latency, the timer could fire slightly before the last symbol
+has actually drained through hardware (same *shape* of risk as the
+original `IdleState` bug, much smaller in practice). Mitigated by the
+150ms margin added to the timer here, plus the pre-existing, unchanged
+`TX_TAIL_MS` operator setting that adds further PTT-hold margin after
+`txComplete()` fires — this decision only changes how "is playback done"
+is detected, not the existing PTT-release safety logic built on top of it.
+
+**Verification:** full rebuild clean, no new warnings; all `QT_DEBUG`
+self-tests (FEC, Frame, MFSK chunked loopback, Audio) pass, confirming no
+regression — these don't exercise real hardware TX playback timing though.
+**Not yet verified:** actual measured TX startup latency on the real
+590SG/Hermes hardware after this change — the next real-world test should
+confirm the ~680ms gap is gone (or much smaller) and that the preamble
+now survives intact.
+
+---
+
+## ADR-108 — Debug logging throttled and de-synced from the main thread's real-time audio path
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Two changes to reduce debug-logging overhead on the thread
+that also drives real-time audio consumption:
+
+1. `main.cpp`'s `messageHandler()` no longer calls `QFile::flush()` on
+   every single `DEBUG`-level line — that forces a real disk sync per
+   call. `WARN`/`CRIT`/`FATAL` still flush immediately (rare, worth
+   persisting right away); `DEBUG` lines are flushed every 50th line
+   instead, plus an unconditional flush wired to
+   `QCoreApplication::aboutToQuit` so a clean shutdown never loses the
+   last buffered lines.
+2. `MfskModem::tryCompleteFrame()`'s two per-chunk progress lines
+   (`"waiting for header"`, `"collecting X/Y"`) — which previously fired
+   on nearly *every* audio chunk during frame collection, ~100+ times
+   over a single message — are now throttled to once every 10 chunks
+   (reusing the existing `m_collectTicks` counter, already incremented
+   once per chunk for the collect-timeout check).
+
+**Reasoning:** `AudioEngine`'s RX path (`onRxDataAvailable()`) has no
+dedicated thread — it runs on the same main/GUI thread as everything
+else, including `qDebug()`'s full cost (mutex, `QDateTime::currentDateTime()`,
+file write + `flush()`, and an `fputs()` to the console). Reported symptom:
+decode reliability degrading over the course of a session (clean early on,
+progressively worse later — including manual Transmit-field entries, which
+naturally happen later in a session than a quick macro-button test),
+independent of measured SNR (verified same corruption at 3dB *and* 20dB
+above noise floor — see prior session notes) and independent of RX/TX DSP
+state (a dedicated soak test showed zero `PreambleSync` score degradation
+over a full simulated hour; `Frame::assemble()` was verified to produce
+byte-for-byte identical output across 50 repeated calls). That combination
+pointed at something outside the DSP layer entirely and specific to
+*session duration* — a live terminal's scrollback growing over a session
+is a plausible reason `fputs()`/console rendering gets slower over time,
+and disk `flush()` cost can similarly vary with log file size — either
+of which, run synchronously ~20-30 times/second on the same thread
+responsible for promptly draining the OS audio buffer, could cause the
+main thread to fall behind by more than that buffer's depth, resulting in
+genuine, silent sample loss at specific points in a transmission (not a
+decode bug — audio that was never actually processed).
+
+**Verification:** rebuild clean, self-tests pass (no DSP logic touched).
+**Not yet verified:** whether this resolves the real-world degradation —
+next live session should confirm decode reliability no longer declines
+over time, including a manually-typed (not macro-button) message late in
+a session.
