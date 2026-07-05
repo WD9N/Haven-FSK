@@ -155,9 +155,17 @@ QString RxDisplay::renderMessage(const QString& text,
                                   const QString& senderCallsign) const
 {
     // Regex for structured field tags: TAG:value
+    // The value is "anything, lazily, up to the next tag or end of string" —
+    // the lookahead assertion alone correctly bounds the match. An earlier
+    // version also excluded the individual letters N/Q/G/R/P/S/F from the
+    // value (a broken attempt at "don't match into the next tag name" —
+    // inside a character class, only a leading '^' negates; every '^'
+    // after that is a literal character to exclude, not a fresh negation).
+    // That silently truncated any value containing those very common
+    // letters, e.g. "Springfield" or "US-1234".
     static QRegularExpression tagRe(
         "(NAME:|QTH:|GRID:|RS:|POTA:|SOTA:|FD:)"
-        "([^\\s][^N^Q^G^R^P^S^F]*?)(?=\\s+(?:NAME:|QTH:|GRID:|"
+        "([^\\s].*?)(?=\\s+(?:NAME:|QTH:|GRID:|"
         "RS:|POTA:|SOTA:|FD:)|$)",
         QRegularExpression::CaseInsensitiveOption);
 

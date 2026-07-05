@@ -46,6 +46,11 @@ namespace StationKeys {
     static constexpr const char* FD_SECTION = "station/fd/section";
     static constexpr const char* STATE      = "station/state";
     static constexpr const char* COUNTY     = "station/county";
+    // Free text — "QTH" has no single fixed meaning in ham radio convention
+    // (grid, state, county, or city are all common), so this is whatever
+    // the operator chooses to type, not derived from the structured
+    // grid/state/county fields above.
+    static constexpr const char* QTH        = "station/qth";
 }
 
 // Station information — loaded from QSettings
@@ -59,6 +64,7 @@ struct StationInfo {
     QString     fdSection;
     QString     state;     // operator's state or province
     QString     county;    // operator's county
+    QString     qth;       // free-text location, operator's own choice of detail
 
     bool isActivator() const {
         return !potaRefs.isEmpty() || !sotaRef.isEmpty();
@@ -81,6 +87,7 @@ inline StationInfo loadStationInfo() {
     info.fdSection = s.value(StationKeys::FD_SECTION).toString().toUpper();
     info.state     = s.value(StationKeys::STATE).toString();
     info.county    = s.value(StationKeys::COUNTY).toString();
+    info.qth       = s.value(StationKeys::QTH).toString();
 
     info.potaRefs = s.value(StationKeys::POTA_REFS,
                              QStringList()).toStringList();
@@ -98,6 +105,7 @@ inline void saveStationInfo(const StationInfo& info) {
     s.setValue(StationKeys::FD_SECTION, info.fdSection);
     s.setValue(StationKeys::STATE,      info.state);
     s.setValue(StationKeys::COUNTY,     info.county);
+    s.setValue(StationKeys::QTH,        info.qth);
 
     s.setValue(StationKeys::POTA_REFS, info.potaRefs);
 }

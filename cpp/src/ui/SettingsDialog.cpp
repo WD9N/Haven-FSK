@@ -109,6 +109,10 @@ void SettingsDialog::setupStationTab() {
     m_county->setPlaceholderText("e.g. Cook");
     idForm->addRow("County:", m_county);
 
+    m_qth = new QLineEdit;
+    m_qth->setPlaceholderText("e.g. Springfield — whatever you want <myQTH> to send");
+    idForm->addRow("QTH:", m_qth);
+
     layout->addWidget(idGroup);
 
     // POTA group — dynamic unbounded list
@@ -268,6 +272,7 @@ void SettingsDialog::loadSettings() {
 
     m_state->setText(info.state);
     m_county->setText(info.county);
+    m_qth->setText(info.qth);
     m_sotaRef->setText(info.sotaRef);
     m_fdClass->setText(info.fdClass);
     m_fdSection->setText(info.fdSection);
@@ -286,6 +291,7 @@ void SettingsDialog::saveSettings() {
     info.opName    = m_opName->text().trimmed();
     info.state     = m_state->text().trimmed();
     info.county    = m_county->text().trimmed();
+    info.qth       = m_qth->text().trimmed();
     info.sotaRef   = m_sotaRef->text().trimmed().toUpper();
     info.fdClass   = m_fdClass->text().trimmed().toUpper();
     info.fdSection = m_fdSection->text().trimmed().toUpper();

@@ -9,7 +9,10 @@
 #include <QDialogButtonBox>
 #include <QLineEdit>
 #include <QTextEdit>
+#include <QTextCursor>
 #include <QLabel>
+#include <QVector>
+#include <QPair>
 #include <QDebug>
 
 MacroPanel::MacroPanel(QWidget* parent)
@@ -174,17 +177,56 @@ void MacroPanel::onMacroRightClicked(int index) {
     textEdit->setMinimumHeight(80);
     textEdit->setFont(QFont("Courier New", 9));
 
-    auto* hint = new QLabel(
-        "Tags:  <myCall>  <myName>  <myQTH>  <myGrid>\n"
-        "       <myParks> <mySOTA>  <myState> <myCounty>\n"
-        "       <myFD>    <theirCall>  <rstSent>\n"
-        "\n"
-        "<clr>  clear input before inserting\n"
-        "<TX>   auto-transmit after inserting");
-    hint->setTextFormat(Qt::PlainText);
+    // Clickable tag reference — inserts the tag at the text edit's cursor
+    // on click, so operators don't have to hand-type (and risk a typo in)
+    // a tag name. Link href is a plain identifier (not the literal tag
+    // text, which contains '<'/'>' that would need HTML-escaping inside
+    // an href attribute) — kTagLink below maps it back to the real tag.
+    static const QVector<QPair<QString, QString>> kTagLink = {
+        {"myCall", "<myCall>"}, {"myName", "<myName>"},
+        {"myQTH", "<myQTH>"},   {"myGrid", "<myGrid>"},
+        {"myParks", "<myParks>"}, {"mySOTA", "<mySOTA>"},
+        {"myState", "<myState>"}, {"myCounty", "<myCounty>"},
+        {"myFD", "<myFD>"}, {"theirCall", "<theirCall>"},
+        {"rstSent", "<rstSent>"},
+        {"clr", "<clr>"}, {"TX", "<TX>"},
+    };
+    auto tagLink = [](const QString& id, const QString& tag) {
+        return QString("<a href='%1' style='color:#4a9fd4;"
+                       "text-decoration:none'>%2</a>")
+            .arg(id, tag.toHtmlEscaped());
+    };
+    QString tagsHtml = "Tags (click to insert):<br>&nbsp;&nbsp;";
+    for (int i = 0; i < 11; i++) {
+        tagsHtml += tagLink(kTagLink[i].first, kTagLink[i].second) + "&nbsp;&nbsp;";
+        if (i == 3 || i == 7) tagsHtml += "<br>&nbsp;&nbsp;";
+    }
+    tagsHtml += "<br><br>"
+        + tagLink("clr", "<clr>") + "&nbsp;&nbsp;clear input before inserting<br>"
+        + tagLink("TX",  "<TX>")  + "&nbsp;&nbsp;auto-transmit after inserting";
+
+    auto* hint = new QLabel(tagsHtml);
+    hint->setTextFormat(Qt::RichText);
     hint->setWordWrap(true);
     hint->setStyleSheet(
         "color: #666; font-size: 8pt; font-family: 'Courier New';");
+    connect(hint, &QLabel::linkActivated, textEdit, [textEdit, kTagLink](const QString& id) {
+        for (const auto& entry : kTagLink) {
+            if (entry.first == id) {
+                // insertText() on a fetched cursor does modify the
+                // document (QTextCursor is a live handle, not a deep
+                // copy), but the widget's own tracked caret position
+                // needs setTextCursor() to advance past the inserted
+                // text — otherwise a second tag click would insert at
+                // the same old position instead of after the first.
+                QTextCursor cursor = textEdit->textCursor();
+                cursor.insertText(entry.second);
+                textEdit->setTextCursor(cursor);
+                textEdit->setFocus();
+                break;
+            }
+        }
+    });
 
     form->addRow("Button Label:", labelEdit);
     form->addRow("Macro Text:",   textEdit);
@@ -216,7 +258,7 @@ QString MacroPanel::expandMacro(const QString& text) const {
     result.replace("<mySOTA>",    info.sotaRef,    Qt::CaseInsensitive);
     result.replace("<myGrid>",    info.grid,       Qt::CaseInsensitive);
     result.replace("<myName>",    info.opName,     Qt::CaseInsensitive);
-    result.replace("<myQTH>",     info.opName,     Qt::CaseInsensitive);
+    result.replace("<myQTH>",     info.qth,        Qt::CaseInsensitive);
     result.replace("<myFD>",
         info.fdClass + (info.fdSection.isEmpty() ? "" : " " + info.fdSection),
         Qt::CaseInsensitive);
