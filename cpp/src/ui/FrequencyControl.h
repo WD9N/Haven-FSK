@@ -12,8 +12,10 @@
 #include <QKeyEvent>
 #include <QPainter>
 #include <QDebug>
+#include <QInputDialog>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 
 // ── DigitDisplay ──────────────────────────────────────────────────────────────
 // Custom frequency display with digit-scroll tuning.
@@ -30,13 +32,14 @@ public:
     explicit DigitDisplay(QWidget* parent = nullptr)
         : QWidget(parent)
     {
-        setFont(QFont("Courier New", 11, QFont::Bold));
+        setFont(QFont("Courier New", 17, QFont::Bold));  // 11pt * 1.5
         setCursor(Qt::ArrowCursor);
         setMouseTracking(true);
-        setMinimumWidth(115);
-        setMaximumWidth(155);
-        setFixedHeight(fontMetrics().height() + 8);
+        setMinimumWidth(173);  // 115 * 1.5
+        setMaximumWidth(233);  // 155 * 1.5
+        setFixedHeight(fontMetrics().height() + 12);  // padding scaled 8 * 1.5
         setFocusPolicy(Qt::ClickFocus);
+        setToolTip("Scroll a digit to tune, or right-click to type a frequency directly");
     }
 
     void setFrequencyHz(uint64_t hz) {
@@ -117,7 +120,7 @@ protected:
 
         // "MHz" suffix
         p.setPen(QColor(0x55, 0x55, 0x55));
-        p.setFont(QFont("Arial", 8));
+        p.setFont(QFont("Arial", 12));  // 8pt * 1.5
         p.drawText(textX + m_text.length() * charW + 4, textY, "MHz");
     }
 
@@ -184,8 +187,43 @@ protected:
         update();  // repaint with m_hoveredDigit unchanged
     }
 
-    void mousePressEvent(QMouseEvent*) override {
+    void mousePressEvent(QMouseEvent* e) override {
         setFocus();
+
+        if (e->button() == Qt::RightButton) {
+            promptForFrequency();
+            return;
+        }
+
+        // Bootstrap out of the "Enter MHz" placeholder state (hz==0 — the
+        // state MainWindow leaves this in with no radio connected). Without
+        // this, there was no way in: paintEvent() never draws digit
+        // positions while m_placeholder is set, mouseMoveEvent() never
+        // registers a hover for an empty m_text, and wheelEvent() refuses
+        // to act on m_hz==0 — three separate dead ends, no way to enter a
+        // frequency at all without a radio to seed the initial value.
+        if (m_placeholder || m_hz == 0) {
+            uint64_t defaultHz = 14000000ULL;  // 14 MHz — reasonable general HF start
+            setFrequencyHz(defaultHz);
+            emit frequencyRequested(defaultHz);
+        }
+    }
+
+    // Right-click direct entry — scrolling per-digit to jump from, say,
+    // 3.500.000 to 28.150.000 takes many wheel clicks. Works from any
+    // state, including the "Enter MHz" placeholder (hz==0, no radio
+    // connected), since it doesn't depend on m_text/m_hoveredDigit at all.
+    void promptForFrequency() {
+        bool ok = false;
+        double currentMhz = m_hz > 0 ? static_cast<double>(m_hz) / 1.0e6 : 14.0;
+        double mhz = QInputDialog::getDouble(
+            this, "Enter Frequency", "Frequency (MHz):",
+            currentMhz, 1.0, 30.0, 6, &ok);
+        if (!ok) return;
+
+        uint64_t hz = static_cast<uint64_t>(std::llround(mhz * 1.0e6));
+        setFrequencyHz(hz);
+        emit frequencyRequested(hz);
     }
 
     void keyPressEvent(QKeyEvent* e) override {
@@ -256,12 +294,12 @@ public:
         QString btnStyle =
             "QPushButton {"
             "  background: #1a1a2e; color: #ffaa00;"
-            "  border: 1px solid #2a2a3e; font-size: 8pt; padding: 0px;"
+            "  border: 1px solid #2a2a3e; font-size: 12pt; padding: 0px;"
             "}"
             "QPushButton:hover { background: #0f3460; }"
             "QPushButton:pressed { background: #162447; }";
         for (auto* btn : {m_upBtn, m_downBtn}) {
-            btn->setFixedSize(16, 11);
+            btn->setFixedSize(24, 17);  // 16x11 * 1.5
             btn->setStyleSheet(btnStyle);
             btn->setToolTip("Right-click to set step size");
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
