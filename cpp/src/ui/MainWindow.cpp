@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include <optional>
 #include "SettingsDialog.h"
 #include "StationInfoWidget.h"
 #include "RxDisplay.h"
@@ -50,6 +51,26 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_audio      = new AudioEngine(this);
     m_pipeline   = new HavenFSK::DspPipeline(this);
+
+    // Move real-time audio capture + DSP/modem processing off the GUI
+    // thread, onto their own dedicated worker thread — see DECISIONS.md
+    // (ADR-109) for why: GUI-thread work (the waterfall's per-chunk FFT +
+    // repaint at Fast speed, in particular) was starving AudioEngine's
+    // real-time audio draining, causing silent sample loss mid-transmission.
+    // Both objects move together (not split, not separate threads) so
+    // AudioEngine::rxDataReady -> DspPipeline::onAudioChunk resolves as a
+    // same-thread direct call (the hottest path in the app), and so
+    // DspPipeline::setMode()'s m_modem pointer swap can never run
+    // concurrently with onAudioChunk() -- a single thread's event loop only
+    // ever runs one queued call at a time. Must un-parent first: a QObject
+    // with a parent can't be moved to another thread.
+    m_audio->setParent(nullptr);
+    m_pipeline->setParent(nullptr);
+    m_dspThread = new QThread(this);
+    m_audio->moveToThread(m_dspThread);
+    m_pipeline->moveToThread(m_dspThread);
+    m_dspThread->start();
+
     m_logManager = new LogManager(this);
     if (!m_logManager->open()) {
         QMessageBox::warning(this, "Log Database",
@@ -108,6 +129,22 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 MainWindow::~MainWindow() {
+    // Worker-thread teardown first: m_audio/m_pipeline live on m_dspThread
+    // (see the constructor) and are no longer parent-owned (un-parented for
+    // the moveToThread() call), so they need an explicit, ordered shutdown
+    // rather than relying on QObject's automatic parent-child cleanup.
+    // BlockingQueuedConnection (not the usual AutoConnection) deliberately
+    // blocks this destructor until stop() has actually finished running on
+    // the worker thread, before quit()/wait() tear the thread down and it
+    // becomes unsafe to call into these objects at all.
+    if (m_dspThread) {
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::stop,
+                                   Qt::BlockingQueuedConnection);
+        m_dspThread->quit();
+        m_dspThread->wait();
+        delete m_pipeline;
+        delete m_audio;
+    }
     stopRadio();
 }
 
@@ -170,7 +207,8 @@ void MainWindow::setupMenu() {
     afcAction->setChecked(true);
     opMenu->addAction(afcAction);
     connect(afcAction, &QAction::toggled, this, [this](bool on) {
-        m_pipeline->setAfcEnabled(on);
+        QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setAfcEnabled,
+                                   Qt::AutoConnection, on);
         if (!on)
             m_waterfall->setAfcOffset(0.0f);
     });
@@ -438,7 +476,8 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onToneSweepTx);
     connect(m_monitorButton, &QPushButton::toggled,
             this, [this](bool on) {
-                m_pipeline->setToneMonitor(on);
+                QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setToneMonitor,
+                                           Qt::AutoConnection, on);
                 m_monitorButton->setText(on ? "Monitor ON" : "Monitor");
                 if (on)
                     m_statusLabel->setText(
@@ -458,14 +497,13 @@ void MainWindow::setupConnections() {
             m_pipeline, &HavenFSK::DspPipeline::onAudioChunk);
     // Debug RX capture — see onRecordRxToggled(). Taps the exact same
     // signal/samples the modem receives, not a separately-recorded file.
+    // Bulk float insert only — no per-sample conversion on the real-time
+    // path (see m_rxRecordBuffer's doc comment in MainWindow.h).
     connect(m_audio, &AudioEngine::rxDataReady,
             this, [this](const std::vector<float>& samples) {
                 if (!m_recordingRx) return;
-                for (float s : samples) {
-                    float clamped = std::max(-1.0f, std::min(1.0f, s));
-                    m_rxRecordBuffer.push_back(
-                        static_cast<int16_t>(clamped * 32767.0f));
-                }
+                m_rxRecordBuffer.insert(m_rxRecordBuffer.end(),
+                                         samples.begin(), samples.end());
                 if (static_cast<int>(m_rxRecordBuffer.size()) >= RX_RECORD_MAX_SAMPLES) {
                     m_statusLabel->setText(
                         "RX recording hit 5 min cap — saved to rx_capture.wav");
@@ -481,6 +519,14 @@ void MainWindow::setupConnections() {
             m_pipeline, &HavenFSK::DspPipeline::onTxComplete);
     connect(m_audio, &AudioEngine::audioError,
             this, &MainWindow::onAudioError);
+    // Separate handler for the specific case of startTx() failing right
+    // after PTT lead time — reacts to the same signal rather than startTx()'s
+    // bool return, since that becomes unusable once startTx() is invoked via
+    // a queued cross-thread call. Guarded by m_awaitingTxStart so unrelated
+    // audioError emissions (e.g. an RX format mismatch) aren't misattributed
+    // as a TX-start failure.
+    connect(m_audio, &AudioEngine::audioError,
+            this, &MainWindow::onTxStartError);
     connect(m_audio, &AudioEngine::rxLevelChanged,
             this, &MainWindow::onRxLevelChanged);
 
@@ -498,6 +544,8 @@ void MainWindow::setupConnections() {
     // Waterfall tuning line movement → status bar preview
     connect(m_modeCombo, &QComboBox::currentIndexChanged,
             this, &MainWindow::onModeChanged);
+    connect(m_pipeline, &HavenFSK::DspPipeline::modeReady,
+            this, &MainWindow::onModeReady);
 
     connect(m_squelchSpin, &QDoubleSpinBox::valueChanged,
             this, &MainWindow::onSquelchChanged);
@@ -547,6 +595,9 @@ void MainWindow::setupConnections() {
                 }
             });
 
+    connect(m_pipeline, &HavenFSK::DspPipeline::toneSweepAudioReady,
+            this, &MainWindow::onToneSweepAudioReady);
+
     // DspPipeline → AudioEngine (TX audio) — PTT lead then audio
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
             this, [this](const std::vector<float>& samples) {
@@ -569,7 +620,8 @@ void MainWindow::setupConnections() {
                     bool pttOk = m_pttManager->requestTX();
                     if (!pttOk) {
                         qWarning() << "TX: PTT request failed — aborting";
-                        m_pipeline->onTxComplete();
+                        QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::onTxComplete,
+                                                   Qt::AutoConnection);
                         onTxComplete();
                         return;
                     }
@@ -578,19 +630,22 @@ void MainWindow::setupConnections() {
                     QTimer::singleShot(leadMs, this,
                         [this, samples, outDev, initialGain]() {
                             qDebug() << "TX: lead time elapsed, starting audio";
-                            bool ok = m_audio->startTx(
-                                outDev, samples, initialGain);
-                            if (!ok) {
-                                qWarning() << "startTx failed — aborting TX";
-                                m_pipeline->onTxComplete();
-                                onTxComplete();
-                                if (m_pttManager) m_pttManager->txOff();
-                            }
+                            // Failure recovery happens in onTxStartError(),
+                            // connected to AudioEngine::audioError — not via
+                            // startTx()'s bool return (see connect() comment
+                            // in setupConnections() for why).
+                            m_awaitingTxStart = true;
+                            QMetaObject::invokeMethod(m_audio, &AudioEngine::startTx,
+                                                       Qt::AutoConnection,
+                                                       outDev, samples, initialGain);
                         });
                 } else {
                     // No rig control — VOX mode
                     qDebug() << "TX: no rig control — VOX mode";
-                    m_audio->startTx(outDev, samples, initialGain);
+                    m_awaitingTxStart = true;
+                    QMetaObject::invokeMethod(m_audio, &AudioEngine::startTx,
+                                               Qt::AutoConnection,
+                                               outDev, samples, initialGain);
                 }
             });
 
@@ -654,6 +709,9 @@ void MainWindow::setupConnections() {
                 m_rxDisplay->appendTxMessage(text, info.callsign);
             });
 
+    connect(m_pipeline, &HavenFSK::DspPipeline::transmitFailed,
+            this, &MainWindow::onTransmitFailed);
+
     // RX level meter — peak of each chunk after RX gain, matching demodulator input
     connect(m_audio, &AudioEngine::rxDataReady,
             this, [this](const std::vector<float>& samples) {
@@ -713,11 +771,13 @@ void MainWindow::setupConnections() {
 
 void MainWindow::startAudio() {
     QString inDev = HavenFSK::savedInputDevice();
-    if (!m_audio->startRx(inDev))
-        m_statusLabel->setText(
-            "Audio input error — check Settings → Audio");
-    else
-        m_statusLabel->setText("Listening...");
+    // Failure is reported via the existing onAudioError() (connected to
+    // AudioEngine::audioError, which startRx()'s failure paths already
+    // emit) rather than a synchronous bool check, which becomes unusable
+    // once startRx() is invoked via a queued cross-thread call.
+    m_statusLabel->setText("Listening...");
+    QMetaObject::invokeMethod(m_audio, &AudioEngine::startRx,
+                               Qt::AutoConnection, inDev);
 }
 
 void MainWindow::startRadio() {
@@ -816,7 +876,7 @@ void MainWindow::onSettingsChanged() {
     // Restart audio only — radio reconnects only from RadioConfigDialog
     // (onSettingsChanged has no radio tab; calling startRadio() here
     // would tear down and recreate TCI on every settings save)
-    m_audio->stop();
+    QMetaObject::invokeMethod(m_audio, &AudioEngine::stop, Qt::AutoConnection);
     startAudio();
 }
 
@@ -844,20 +904,54 @@ void MainWindow::onTransmit() {
         return;
     }
 
-    m_audio->stopRx();
+    QMetaObject::invokeMethod(m_audio, &AudioEngine::stopRx, Qt::AutoConnection);
     m_txButton->setEnabled(false);
     m_txInput->setEnabled(false);
     m_statusLabel->setText("Transmitting...");
 
-    if (!m_pipeline->transmit(text)) {
-        m_statusLabel->setText("TX failed");
-        m_txButton->setEnabled(true);
-        m_txInput->setEnabled(true);
-        m_audio->startRx(HavenFSK::savedInputDevice());
+    // Failure recovery happens in onTransmitFailed(), connected to
+    // DspPipeline::transmitFailed — not via transmit()'s bool return, since
+    // that becomes unusable once transmit() is invoked via a queued
+    // cross-thread call (see plan doc for the worker-thread move).
+    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::transmit,
+                               Qt::AutoConnection, text);
+}
+
+void MainWindow::onTransmitFailed(const QString& reason) {
+    m_statusLabel->setText("TX failed: " + reason);
+    m_txButton->setEnabled(true);
+    m_txInput->setEnabled(true);
+    QMetaObject::invokeMethod(m_audio, &AudioEngine::startRx, Qt::AutoConnection,
+                               HavenFSK::savedInputDevice());
+}
+
+void MainWindow::onTxStartError(const QString& message) {
+    if (!m_awaitingTxStart) return;  // some other, unrelated audioError
+    m_awaitingTxStart = false;
+    qWarning() << "TX: startTx failed —" << message << "— aborting";
+
+    if (m_toneSweepActive) {
+        // Tone-sweep-specific cleanup, distinct from onTxComplete()'s
+        // success-path tone-sweep branch (which reports "complete", not a
+        // failure, and releases PTT only after the normal tail delay).
+        m_toneSweepActive = false;
+        QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setToneMonitor,
+                                   Qt::AutoConnection, false);
+        m_toneTestButton->setEnabled(true);
+        m_statusLabel->setText("Tone sweep: audio start failed");
+        if (m_pttManager) m_pttManager->txOff();
+        return;
     }
+
+    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::onTxComplete,
+                               Qt::AutoConnection);
+    onTxComplete();
+    if (m_pttManager) m_pttManager->txOff();
 }
 
 void MainWindow::onTxComplete() {
+    m_awaitingTxStart = false;  // TX genuinely started (or this is the tone-sweep/failure cleanup path)
+
     // Tone sweep TX completes here too.  Don't restart audio (RX was never
     // stopped) — just stop the monitor, release PTT, and re-enable the button.
     if (m_toneSweepActive) {
@@ -892,7 +986,8 @@ void MainWindow::onTxComplete() {
         qDebug() << "TX: tail complete — releasing PTT";
         if (m_pttManager) m_pttManager->txOff();
         m_statusLabel->setText("Listening...");
-        m_audio->startRx(HavenFSK::savedInputDevice());
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::startRx, Qt::AutoConnection,
+                                   HavenFSK::savedInputDevice());
     });
 }
 
@@ -981,13 +1076,22 @@ void MainWindow::saveRxRecording() {
 
     // Standard 44-byte PCM WAV header — mono, 16-bit, 48000 Hz, matching
     // exactly what AudioEngine::rxDataReady delivers (see ADR-100).
+    // float -> int16 conversion happens here, at save time, off the
+    // real-time capture path (see m_rxRecordBuffer's doc comment in
+    // MainWindow.h).
+    std::vector<int16_t> pcm(m_rxRecordBuffer.size());
+    for (size_t i = 0; i < m_rxRecordBuffer.size(); ++i) {
+        float clamped = std::max(-1.0f, std::min(1.0f, m_rxRecordBuffer[i]));
+        pcm[i] = static_cast<int16_t>(clamped * 32767.0f);
+    }
+
     const uint32_t sampleRate   = static_cast<uint32_t>(HavenFSK::SAMPLE_RATE);
     const uint16_t numChannels  = 1;
     const uint16_t bitsPerSample = 16;
     const uint32_t byteRate     = sampleRate * numChannels * bitsPerSample / 8;
     const uint16_t blockAlign   = numChannels * bitsPerSample / 8;
     const uint32_t dataSize     =
-        static_cast<uint32_t>(m_rxRecordBuffer.size() * sizeof(int16_t));
+        static_cast<uint32_t>(pcm.size() * sizeof(int16_t));
     const uint32_t riffSize     = 36 + dataSize;
 
     auto writeU32 = [&f](uint32_t v) {
@@ -1013,7 +1117,7 @@ void MainWindow::saveRxRecording() {
     writeU16(bitsPerSample);
     f.write("data", 4);
     writeU32(dataSize);
-    f.write(reinterpret_cast<const char*>(m_rxRecordBuffer.data()),
+    f.write(reinterpret_cast<const char*>(pcm.data()),
             static_cast<qint64>(dataSize));
     f.close();
 
@@ -1045,7 +1149,7 @@ void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
 
     if (scheme == "callsign") {
         m_macroPanel->setTheirCall(value);
-        const HavenFSK::RxMeasurement* m =
+        std::optional<HavenFSK::RxMeasurement> m =
             m_pipeline->getRxMeasurement(value);
         if (m) {
             QString rs = HavenFSK::DspPipeline::computeRS(*m);
@@ -1125,28 +1229,44 @@ void MainWindow::onModeChanged(int index) {
 
     auto mode = static_cast<HavenFSK::ModemMode>(
         m_modeCombo->itemData(index).toInt());
-    m_pipeline->setMode(mode);
 
     QSettings s;
     s.setValue("mode/current", static_cast<int>(mode));
 
-    if (m_waterfall) {
-        m_waterfall->setPassband(
-            static_cast<float>(m_pipeline->passbandLowHz()),
-            static_cast<float>(m_pipeline->passbandHighHz()));
-    }
+    // Waterfall passband/squelch/status-label updates happen in
+    // onModeReady(), connected to DspPipeline::modeReady — not read back
+    // synchronously here via passbandLowHz()/passbandHighHz()/modeName()
+    // right after this call, since setMode() constructs a fresh IModem and
+    // those reads become unsafe once setMode() runs on a different thread
+    // than this caller.
+    // ModemConfig{} passed explicitly — invokeMethod's function-pointer
+    // overload can't rely on setMode()'s default argument.
+    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setMode,
+                               Qt::AutoConnection, mode, HavenFSK::ModemConfig{});
+}
+
+void MainWindow::onModeReady(HavenFSK::ModemMode /*mode*/, double loHz,
+                              double hiHz, const QString& modeName) {
+    if (m_waterfall)
+        m_waterfall->setPassband(static_cast<float>(loHz),
+                                  static_cast<float>(hiHz));
 
     // setMode() constructs a fresh IModem instance, which loses any
     // previously-set squelch threshold — re-apply the saved value so
-    // switching modes and back doesn't silently reset it.
-    m_pipeline->setSquelchThreshold(static_cast<float>(m_squelchSpin->value()));
+    // switching modes and back doesn't silently reset it. Done here (after
+    // the new modem genuinely exists) rather than immediately after calling
+    // setMode(), to avoid racing the fresh-modem construction.
+    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setSquelchThreshold,
+                               Qt::AutoConnection,
+                               static_cast<float>(m_squelchSpin->value()));
 
-    m_statusLabel->setText("Mode: " + m_pipeline->modeName());
+    m_statusLabel->setText("Mode: " + modeName);
 }
 
 void MainWindow::onSquelchChanged(double value) {
     if (!m_pipeline) return;
-    m_pipeline->setSquelchThreshold(static_cast<float>(value));
+    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setSquelchThreshold,
+                               Qt::AutoConnection, static_cast<float>(value));
     QSettings s;
     s.setValue("mode/squelch", value);
 }
@@ -1157,9 +1277,23 @@ void MainWindow::onToneSweepTx() {
         return;
     }
 
-    // Generate the 16-tone sweep audio (does NOT set m_pipeline m_transmitting,
-    // so the RX pipeline and tone monitor stay live during playback).
-    std::vector<float> audio = m_pipeline->generateToneSweepAudio();
+    m_toneSweepActive = true;
+    m_toneTestButton->setEnabled(false);
+    m_statusLabel->setText("Tone sweep TX (8s) — watch debug log for ToneMon[] lines");
+
+    // Start tone monitor BEFORE TX so no received symbols are missed.
+    m_monitorButton->setChecked(true);   // visually reflects active state
+
+    // Audio generation happens asynchronously — see onToneSweepAudioReady(),
+    // connected to DspPipeline::toneSweepAudioReady. Not a direct
+    // generateToneSweepAudio() return-value read, since that becomes unsafe
+    // once this runs on a different thread than the caller.
+    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::requestToneSweepAudio,
+                               Qt::AutoConnection);
+}
+
+void MainWindow::onToneSweepAudioReady(const std::vector<float>& audio) {
+    if (!m_toneSweepActive) return;  // stale/cancelled request
 
     float gain = 1.0f;
     if (m_levelPanel) {
@@ -1169,26 +1303,20 @@ void MainWindow::onToneSweepTx() {
     QString outDev = HavenFSK::savedOutputDevice();
     int leadMs = HavenFSK::pttLeadMs();
 
-    m_toneSweepActive = true;
-    m_toneTestButton->setEnabled(false);
-    m_statusLabel->setText("Tone sweep TX (8s) — watch debug log for ToneMon[] lines");
-
-    // Start tone monitor BEFORE TX so no received symbols are missed.
-    m_monitorButton->setChecked(true);   // visually reflects active state
-
+    // Failure recovery happens in onTxStartError() (its m_toneSweepActive
+    // branch), connected to AudioEngine::audioError — not via startTx()'s
+    // bool return.
     auto startAudio = [this, audio, outDev, gain]() {
-        if (!m_audio->startTx(outDev, audio, gain)) {
-            m_toneSweepActive = false;
-            m_pipeline->setToneMonitor(false);
-            m_toneTestButton->setEnabled(true);
-            m_statusLabel->setText("Tone sweep: audio start failed");
-        }
+        m_awaitingTxStart = true;
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::startTx,
+                                   Qt::AutoConnection, outDev, audio, gain);
     };
 
     if (m_pttManager && m_radio && m_radio->isConnected()) {
         if (!m_pttManager->requestTX()) {
             m_toneSweepActive = false;
-            m_pipeline->setToneMonitor(false);
+            QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setToneMonitor,
+                                       Qt::AutoConnection, false);
             m_toneTestButton->setEnabled(true);
             m_statusLabel->setText("Tone sweep: PTT request failed");
             return;

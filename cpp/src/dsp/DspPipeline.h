@@ -5,6 +5,9 @@
 #include <QDateTime>
 #include <vector>
 #include <memory>
+#include <atomic>
+#include <mutex>
+#include <optional>
 #include "Constants.h"
 #include "IModem.h"
 
@@ -69,8 +72,11 @@ public:
     bool    toneMonitorActive()  const { return m_modem->toneMonitorActive(); }
 
     // ── RX gain ───────────────────────────────────────────────────────────
-    void  setRxGain(float linear) { m_rxGain = linear; }
-    float rxGain()          const { return m_rxGain; }
+    // atomic: written from GUI-thread UI code, read from onAudioChunk() on
+    // the worker thread once AudioEngine/DspPipeline move there (and, today,
+    // from a GUI-thread level-meter lambda too) — see plan doc / DECISIONS.md.
+    void  setRxGain(float linear) { m_rxGain.store(linear, std::memory_order_relaxed); }
+    float rxGain()          const { return m_rxGain.load(std::memory_order_relaxed); }
 
     // ── AFC controls ──────────────────────────────────────────────────────
     void  setAfcEnabled(bool enabled) { m_modem->setAfcEnabled(enabled); }
@@ -92,7 +98,12 @@ public:
     static constexpr float AFC_MAX_HZ = 200.0f;
 
     // ── RS measurement cache ──────────────────────────────────────────────
-    const RxMeasurement* getRxMeasurement(const QString& callsign) const;
+    // Returns by value (not a pointer into m_rxCache) — updateRxCache()/
+    // expireRxCache() write this from onAudioChunk() (worker thread once
+    // AudioEngine/DspPipeline move there), while this is read directly from
+    // the GUI thread on a callsign click. A pointer into the map wouldn't be
+    // safe to use after the mutex below is released; a copied-out value is.
+    std::optional<RxMeasurement> getRxMeasurement(const QString& callsign) const;
     static QString computeRS(const RxMeasurement& m);
     static QString parseSenderCallsign(const QString& text,
                                        const QString& myCallsign);
@@ -113,6 +124,12 @@ public slots:
     // logged while TX is in progress.
     std::vector<float> generateToneSweepAudio() const;
 
+    // Same as generateToneSweepAudio(), but delivers the result via
+    // toneSweepAudioReady() instead of a synchronous return value — callers
+    // should use this one, since a direct return value can't be read
+    // synchronously once this runs on a different thread than the caller.
+    void requestToneSweepAudio();
+
 signals:
     void messageReceived(const HavenFSK::RxMessage& msg);
     // Continuous character-stream RX (PSK31) — one or a few decoded
@@ -123,11 +140,24 @@ signals:
     void dcdChanged(bool active);
     void rxStateChanged(HavenFSK::RxState state);
     void txAudioReady(const std::vector<float>& samples);
+    // Result of requestToneSweepAudio() — see its doc comment above.
+    void toneSweepAudioReady(const std::vector<float>& samples);
     void preambleDetected(float score);
     void rxProgress(int symbolsReceived, int symbolsExpected);
     void afcOffsetChanged(float hz);
     void messageTransmitted(const QString& text);
+    // Emitted instead of transmit()'s bool return on its two early-return
+    // paths — callers should react to this signal rather than the return
+    // value once transmit() is invoked via a queued cross-thread call
+    // (QMetaObject::invokeMethod can't return a synchronous result).
+    void transmitFailed(const QString& reason);
     void modeChanged(HavenFSK::ModemMode mode);
+    // Fired from setMode() right after the m_modem swap — carries the new
+    // mode's passband/name so callers don't need to read them back via
+    // synchronous getters immediately after calling setMode() (unsafe once
+    // setMode() runs on a different thread than the caller).
+    void modeReady(HavenFSK::ModemMode mode, double passbandLowHz,
+                   double passbandHighHz, const QString& modeName);
 
 private:
     std::unique_ptr<IModem> m_modem;
@@ -136,7 +166,7 @@ private:
     bool    m_transmitting = false;
 
     // ── RX gain ───────────────────────────────────────────────────────────
-    float m_rxGain {1.0f};
+    std::atomic<float> m_rxGain {1.0f};
 
     // ── TX state ──────────────────────────────────────────────────────────
     QString m_lastTxText;
@@ -147,6 +177,10 @@ private:
     float        m_lastPolledAfcHz   = 0.0f;
 
     // ── RS measurement cache ──────────────────────────────────────────────
+    // QMap only tolerates concurrent reads, not read-while-write — guarded
+    // by m_rxCacheMutex since onAudioChunk() (worker thread) writes this
+    // while the GUI thread reads it via getRxMeasurement() on a click.
+    mutable std::mutex           m_rxCacheMutex;
     QMap<QString, RxMeasurement> m_rxCache;
     static constexpr int RS_CACHE_MINUTES = 10;
 

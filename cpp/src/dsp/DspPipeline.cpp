@@ -29,6 +29,11 @@ void DspPipeline::setMode(ModemMode mode, const ModemConfig& cfg) {
     qDebug() << "DspPipeline: mode ->" << QString::fromStdString(m_modem->modeName());
     emit modeChanged(mode);
     emit rxStateChanged(rxState());
+    // Carries the new modem's passband/name so callers don't need to read
+    // them back via synchronous getters immediately after this call — see
+    // modeReady's doc comment in DspPipeline.h.
+    emit modeReady(mode, m_modem->passbandLowHz(), m_modem->passbandHighHz(),
+                   QString::fromStdString(m_modem->modeName()));
 }
 
 RxState DspPipeline::rxState() const {
@@ -41,10 +46,12 @@ RxState DspPipeline::rxState() const {
 bool DspPipeline::transmit(const QString& text) {
     if (m_transmitting) {
         qWarning() << "DspPipeline: transmit called while already transmitting";
+        emit transmitFailed("Already transmitting");
         return false;
     }
     if (text.trimmed().isEmpty()) {
         qWarning() << "DspPipeline: transmit called with empty text";
+        emit transmitFailed("Message text is empty");
         return false;
     }
     m_transmitting = true;
@@ -69,8 +76,9 @@ void DspPipeline::onTxComplete() {
 
 void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
     std::vector<float> corrected = samples;
-    if (std::abs(m_rxGain - 1.0f) > 0.001f)
-        for (float& s : corrected) s *= m_rxGain;
+    float gain = m_rxGain.load(std::memory_order_relaxed);
+    if (std::abs(gain - 1.0f) > 0.001f)
+        for (float& s : corrected) s *= gain;
 
     auto events = m_modem->processAudioChunk(corrected);
 
@@ -133,14 +141,15 @@ void DspPipeline::pollModemStatus() {
 
 // ── RS measurement cache ──────────────────────────────────────────────────
 
-const RxMeasurement* DspPipeline::getRxMeasurement(
+std::optional<RxMeasurement> DspPipeline::getRxMeasurement(
     const QString& callsign) const
 {
+    std::lock_guard<std::mutex> lock(m_rxCacheMutex);
     auto it = m_rxCache.find(callsign.toUpper());
-    if (it == m_rxCache.end()) return nullptr;
+    if (it == m_rxCache.end()) return std::nullopt;
     if (it->timestamp.secsTo(QDateTime::currentDateTime())
-        > RS_CACHE_MINUTES * 60) return nullptr;
-    return &(*it);
+        > RS_CACHE_MINUTES * 60) return std::nullopt;
+    return *it;
 }
 
 QString DspPipeline::computeRS(const RxMeasurement& m) {
@@ -195,11 +204,13 @@ void DspPipeline::updateRxCache(const RxMessage& msg) {
     m.fecIterations = msg.fecIterations;
     m.converged     = msg.converged;
     m.timestamp     = QDateTime::currentDateTime();
+    std::lock_guard<std::mutex> lock(m_rxCacheMutex);
     m_rxCache[msg.senderCallsign.toUpper()] = m;
 }
 
 void DspPipeline::expireRxCache() {
     auto now = QDateTime::currentDateTime();
+    std::lock_guard<std::mutex> lock(m_rxCacheMutex);
     for (auto it = m_rxCache.begin(); it != m_rxCache.end(); ) {
         if (it->timestamp.secsTo(now) > RS_CACHE_MINUTES * 60)
             it = m_rxCache.erase(it);
@@ -216,6 +227,10 @@ void DspPipeline::setToneMonitor(bool active) {
 
 std::vector<float> DspPipeline::generateToneSweepAudio() const {
     return m_modem->generateDiagnosticAudio();
+}
+
+void DspPipeline::requestToneSweepAudio() {
+    emit toneSweepAudioReady(generateToneSweepAudio());
 }
 
 void DspPipeline::runToneSweepTest() {

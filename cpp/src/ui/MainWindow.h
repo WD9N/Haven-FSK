@@ -9,6 +9,7 @@
 #include <QAction>
 #include <QSplitter>
 #include <QCloseEvent>
+#include <QThread>
 #include <cstdint>
 #include <cmath>
 #include <vector>
@@ -50,6 +51,8 @@ private slots:
     void onTransmit();
     void onMessageReceived(const HavenFSK::RxMessage& msg);
     void onTxComplete();
+    void onTransmitFailed(const QString& reason);
+    void onTxStartError(const QString& message);
     void onAudioError(const QString& message);
     void onRxLevelChanged(float level);
     void onSettingsChanged();
@@ -66,7 +69,10 @@ private slots:
     void onWaterfallTune(float audioHz);
     void onOpenRadioConfig();
     void onToneSweepTx();
+    void onToneSweepAudioReady(const std::vector<float>& audio);
     void onModeChanged(int index);
+    void onModeReady(HavenFSK::ModemMode mode, double passbandLowHz,
+                      double passbandHighHz, const QString& modeName);
     void onSquelchChanged(double value);
 
 private:
@@ -90,6 +96,13 @@ private:
     QPushButton*       m_toneTestButton  {nullptr};
     QPushButton*       m_monitorButton   {nullptr};
     bool               m_toneSweepActive {false};
+    // Guards onTxStartError() (connected to AudioEngine::audioError) so it
+    // only reacts to a failure of the startTx() call it's paired with, not
+    // an unrelated audioError (e.g. an RX format mismatch) firing at some
+    // other time. Set true immediately before each startTx() call, cleared
+    // on both the failure path (onTxStartError) and the success path
+    // (onTxComplete).
+    bool               m_awaitingTxStart {false};
     QLabel*            m_statusLabel  {nullptr};
     FrequencyControl*  m_freqControl  {nullptr};
     QLabel*            m_rigLabel     {nullptr};
@@ -110,13 +123,29 @@ private:
     // it used the same device/level/format HAVEN itself sees. Written to
     // <exe dir>/rx_capture.wav (same convention as haven_debug.log) when
     // stopped, either manually or via the size cap below.
-    bool                 m_recordingRx {false};
-    std::vector<int16_t> m_rxRecordBuffer;
+    //
+    // Stores raw float samples via one bulk insert() per chunk rather than
+    // converting to int16 per-sample in real time — this tool exists to
+    // observe the real-time audio path without perturbing it, so its own
+    // per-chunk cost on the main thread (the same thread responsible for
+    // draining the OS audio buffer in time) should be as close to zero as
+    // possible. int16 conversion happens once, at save time, off the
+    // real-time path entirely.
+    bool               m_recordingRx {false};
+    std::vector<float> m_rxRecordBuffer;
     static constexpr int RX_RECORD_MAX_SAMPLES = 48000 * 300;  // 5 min cap
     void onRecordRxToggled(bool on);
     void saveRxRecording();
 
     // ── Backend objects ───────────────────────────────────────────────────
+    // m_audio + m_pipeline live on m_dspThread, not the GUI thread — see
+    // the constructor (moveToThread right after construction) and the
+    // destructor (explicit teardown; no longer parent-owned once
+    // un-parented for the thread move, so no automatic cleanup). All calls
+    // into them from GUI-thread code go through QMetaObject::invokeMethod
+    // with Qt::AutoConnection so the same code is correct whether or not
+    // the thread move has happened (see DECISIONS.md).
+    QThread*               m_dspThread {nullptr};
     AudioEngine*           m_audio      {nullptr};
     HavenFSK::DspPipeline* m_pipeline  {nullptr};
     RadioInterface*        m_radio      {nullptr};
