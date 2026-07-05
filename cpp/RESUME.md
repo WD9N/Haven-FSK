@@ -1,198 +1,177 @@
-# HAVEN-FSK Session Resume — 2026-07-02 (end of session)
+# HAVEN-FSK Session Resume — 2026-07-05 (end of session)
 
 ## Branch
 
-`cpp-rewrite`. Everything below is about to be **committed and pushed**
-in this session's closing commit — working tree is clean except
-pre-existing untracked scratch files (`PHASE*.md` notes, `Palettes.png`,
-`UI layout change 1.png`, `Grok Suggested Improvements.txt`,
-`gen_h_matrix.py` at repo root and in `cpp/`) which predate this session
-and were deliberately left untouched, same as every prior session.
+`cpp-rewrite`. Everything below is about to be **committed and pushed** in
+this session's closing commit — working tree is clean except pre-existing
+untracked scratch files (`PHASE*.md` notes, `Palettes.png`, `UI layout
+change 1.png`, `Grok Suggested Improvements.txt`, `gen_h_matrix.py` at repo
+root and in `cpp/`) which predate this session and were deliberately left
+untouched, same as every prior session.
 
 ```
 <this session's commit will land here — see `git log` for the actual hash>
-686dad6 docs: correct HAVEN-FSK spec against actual current code, add Phase 9 changelog entry
-56f583e Phase 9: GPLv3 correction, modem abstraction + PSK31 mode, protocol v2, rig control hardening
-1c09a86 RX pipeline overhaul: 7 DSP bugs fixed, audio format validation, maxf diagnostic  (prior session)
+598b77b Correct HAVEN-FSK spec: undisclosed Gray coding, wrong end-of-frame mechanism
+b8f1343 docs: add ADR-109 through ADR-114
+9ac0e3b Move AudioEngine + DspPipeline to a dedicated worker thread
+56bbde7 Fix RX HTML-corruption, buffer underrun, O(N^2) demod, and stale preamble-lock bugs
+ce49557 Direct Hamlib linking + PSK31 real-signal fixes  (prior session)
 ```
 
-## What Was Done This Session
+## What Was Done Since The Last Resume Note
 
-Two major threads. Full detail in `DECISIONS.md` (ADR-103, ADR-104) and
-`CHANGELOG.md`'s "Phase 10" entry — read those before re-deriving
-context by grepping the diff.
+Two threads, in order. Full detail in `DECISIONS.md` (ADR-109 through
+ADR-119) — read those before re-deriving context by grepping the diff.
 
-### 1. Direct Hamlib linking (`HamlibClient`)
+### 1. Decode-reliability investigation (ADR-109 through ADR-114)
 
-Requested because the user has a Kenwood TS-590SG on USB/CAT and wants
-to control it without a separately-launched `rigctld` process — matters
-most for field/Pi deployment with no runtime internet access. Additive:
-`RigctldClient` (external rigctld) and `TCIClient` (SDR software) are
-unchanged and still the right choice for their own use cases.
+Real over-the-air MFSK decode reliability degraded over a session ("decodes
+twice, then never again"). Four independent, real bugs found and fixed in
+sequence, each confirmed via a purpose-built diagnostic before moving to the
+next:
+- Widened RX buffer + gap detection for real-time sample loss (ADR-109).
+- `RxDisplay` callsign-link double-substitution corrupting message display
+  (ADR-110).
+- `AudioEngine`/`DspPipeline` moved to a dedicated worker `QThread`, since
+  ADR-109's larger buffer alone made the underlying real-time-audio-vs-UI
+  contention survivable but not eliminated (ADR-112).
+- O(N²) re-demodulation in `MfskModem::tryCompleteFrame()` — re-demodulating
+  the entire growing RX buffer on every check instead of incrementally
+  (ADR-113).
+- **The actual root cause of the whole saga**: a stale high-water-mark in
+  `PreambleSync`'s peak-picking (`m_runBestScore` never reset), causing
+  every lock after the first to freeze on the *first* run's position
+  forever (ADR-114) — took three iterations to fix without regressing
+  `MfskLoopbackSelfTest`.
 
-- New `cmake/FindHamlib.cmake` — Windows via `HAMLIB_DIR`-pointed
-  external SDK (mirrors the existing `QT_DIR` pattern), Linux/Pi via
-  pkg-config. Gracefully degrades (`HAVEN_ENABLE_HAMLIB` off, warning
-  only) if not found — never breaks the build for
-  `RigctldClient`/`TCIClient`-only users.
-- `HamlibClient.h`/`.cpp` fully rewritten from stub to real
-  implementation, gated by `#ifdef HAVEN_HAMLIB_ENABLED`. Dynamic rig
-  enumeration via `rig_list_foreach()` — no hand-maintained radio list.
-- **Real build-tested against the actual Hamlib 4.7.2 w64 SDK, and this
-  found four real bugs — two of which made the app fail to launch
-  entirely on a clean run, confirmed directly by the user trying it.**
-  Full postmortem in `DECISIONS.md` ADR-103's Verification section; the
-  short version, because the failure mode is easy to reintroduce if
-  `cmake/FindHamlib.cmake` is touched again without reading it first:
-  1. Wrong forward-declared struct tag (`struct rig` vs the real
-     `struct s_rig`) — compile error, easy to catch.
-  2. Missing `libusb-1.0.dll` at runtime — easy to catch (immediate
-     crash on launch).
-  3. **Assumed Qt's `windeployqt`-bundled `libwinpthread-1.dll`/
-     `libgcc_s_seh-1.dll` (same filenames) would satisfy Hamlib's need
-     for those — wrong.** Different MinGW builds, not interchangeable.
-     This shipped as a real regression the user hit directly ("(null).DLL
-     was not found"). Lesson: always copy a third-party binary's *own*
-     runtime deps, never assume a same-named file already present will do.
-  4. Even after #3, still broken — `find_library()` picked
-     `lib/gcc/libhamlib-4.lib` (MSVC-format) over `lib/gcc/libhamlib.dll.a`
-     (the correct GNU-ld-native import library). Linked with **zero
-     errors** but produced a corrupted PE import table (`objdump -p
-     HavenFSK.exe` showed a literal `DLL Name: (null)` entry). This is
-     the nastiest of the four — no compile error, no link error, just a
-     silently broken binary. Fixed via `find_file()` targeting the exact
-     `.dll.a` filename instead of NAMES-based suffix search.
-- **Not yet verified**: actual CAT control against the live TS-590SG
-  (Connect/frequency/PTT/mode). The app now launches cleanly with Hamlib
-  linked, which was the blocker up to this point — the next session
-  should open Radio → Configure with the radio connected and confirm
-  end-to-end.
+**User-confirmed result**: "clean decode at 1dB SNR" in live testing after
+all four fixes landed.
 
-### 2. PSK31 real-signal fixes
+Also corrected `HAVEN-FSK_Specification.md` against the actual current
+code (undisclosed Gray coding, wrong end-of-frame mechanism), scoped
+tightly to FCC §97.309 technical-characteristics disclosure — not a
+how-to-build-a-decoder document, not UI/software/dependency detail.
 
-The user's own live-air testing (and, separately, interop testing
-against fldigi) found four real problems that internal loopback
-self-tests never would have caught — this is the first time PSK31 in
-this codebase was exercised against anything other than itself.
+### 2. UI: dockable panels + several smaller fixes (ADR-115 through ADR-119)
 
-1. **RX display unreadable** — one row per character with `[CRC]`/`[NC]`
-   badges (meaningless for PSK31 — no CRC/FEC at all). Root cause:
-   `Psk31Modem` emits one event per character, but `DspPipeline`/
-   `RxDisplay` treated every event like a complete MFSK framed message.
-   Fixed via `ModemRxEvent::isFramedMessage` (default `true`, MFSK
-   untouched) routing to a new `DspPipeline::textCharacterReceived()` /
-   `RxDisplay::appendStreamingText()` path for continuous-stream modes.
-2. **Spaces/newlines silently dropped** — `appendStreamingText()` used
-   `insertHtml()` per character; HTML collapses whitespace and ignores
-   bare `\n`. Fixed by switching to `insertText()`.
-3. **No squelch → noise decoded as constant garbage.** Added DCD gate +
-   per-character Costas lock-quality average threshold. **First attempt
-   used a fixed `0.7` threshold validated only against noiseless
-   loopback — it silently broke ALL real RX** (fldigi decoded the same
-   live signal fine, HAVEN showed nothing). Now a runtime, user-adjustable
-   value (status-bar spinbox, `QSettings`-persisted, default `0.0` =
-   off). **Lesson repeated from the Hamlib thread above: a threshold/
-   config tuned only against a clean synthetic test is not validated for
-   real-world use — say so explicitly rather than declaring success.**
-4. **Missing opening characters on TX**, found via fldigi interop
-   testing. Confirmed against fldigi's actual `src/psk/psk.cxx`: PSK31
-   needs a leading preamble of 32 continuous phase-reversal symbols (at
-   31.25 baud) for the receiving Costas loop to lock before real data
-   arrives — HAVEN had none. Fixed in `Psk31Modem::modulateText()`. Found
-   and fixed a related latent bug alongside it: `Psk31Modulator`'s
-   differential reference point wasn't resetting between separate
-   transmissions in the same session.
-- **Not yet re-verified against fldigi** after fix #4 — the interop test
-  that found the missing-preamble bug should be re-run to confirm fldigi
-  now decodes HAVEN's TX cleanly from the first character.
+- **ADR-115**: `<myQTH>` macro tag was expanding to the operator's name
+  (copy-paste bug in `MacroPanel.cpp`) — fixed, and added an actual QTH
+  settings field (free text; "QTH" has no single fixed meaning in ham
+  convention, operator's own choice of detail). Also fixed a real regex bug
+  in `RxDisplay::renderMessage()` that silently truncated NAME/QTH/GRID/
+  POTA click-to-populate values containing the letters N/Q/G/R/P/S/F.
+- **ADR-116**: `FrequencyControl` had no way to manually enter a frequency
+  with no radio connected (three independent dead ends in the placeholder
+  state); fixed, plus added right-click direct numeric MHz entry for fast
+  large jumps.
+- **ADR-117**: Macro editor's tag reference list is now clickable —
+  inserts at cursor instead of requiring exact manual typing.
+- **ADR-118**: Preamble-sync-idle diagnostic (~1/sec heartbeat) now off by
+  default, opt back in via `HAVEN_VERBOSE_SYNC` env var.
+- **ADR-119 (the big one)**: `MainWindow`'s fixed-order `QSplitter` layout
+  replaced with five independently movable/resizable `QDockWidget` panels
+  (Waterfall, Received, Log, Levels, Transmit — Transmit holds both Macro
+  Panel and TX input together, per operator preference after initially
+  splitting them apart). Station info and frequency/mode/squelch/rig/RX
+  status moved into a fixed top toolbar; only the free-text status message
+  stays in a bottom toolbar. **Three non-obvious Qt pitfalls hit and fixed
+  — see ADR-119 for full detail, but the short version for future work in
+  this area**:
+  1. Dock widgets/toolbars need `setObjectName()` or `saveState()`/
+     `restoreState()` silently won't identify them correctly.
+  2. `QSizePolicy::Fixed` actively fights manual dock resize (Qt keeps
+     snapping back to the size hint) — use `QSizePolicy::Maximum` for
+     "shrinkable but never stretched past natural content size."
+  3. `splitDockWidget()` calls made during construction (before the window
+     is ever shown) can leave a dock floating instead of tiled on first
+     launch — `setFloating(false)` after the default arrangement is built
+     is the fix, only when not restoring a saved state.
+
+  Frequency display also resized 50% larger (font, bounds, step buttons)
+  per operator request — cosmetic only.
 
 ## Current State
 
 ### Build
-Clean build (rebuilt several times this session via both `build.bat`
-and direct `ninja` invocation — see note below on `build.bat`
-flakiness). `HavenFSK.exe` launches cleanly with real Hamlib linked
-(`objdump -p` shows a clean import table, confirmed via direct user
-testing after the four Hamlib bugs above were fixed).
+Clean build (`build.bat`, confirmed multiple times across this session's
+edits). Self-tests pass on every rebuild (Debug build runs
+`runFecSelfTest()`/`runFrameSelfTest()`/`runAudioSelfTest()` automatically
+before `MainWindow` is constructed — verified via `Start-Process`/exit-code
+check pattern, not just "it compiled").
 
-### `build.bat` flakiness noted this session
-Multiple times this session, running `build.bat` (which does CMake
-configure + ninja build in one script invocation) produced
-`Error: could not load cache` even though nothing was actually wrong —
-re-running the *same* two steps directly (`cmake ..` then
-`C:\Qt\Tools\Ninja\ninja.exe`, separately) always succeeded immediately
-after. Root cause not investigated (not blocking, easy workaround). If
-`build.bat` fails with that specific message, don't assume something is
-actually broken — retry via direct `cmake`/`ninja` invocation first
-before spending time debugging.
+### UI dockable-panel verification
+Confirmed via screenshot (default arrangement, panel bundling, the
+floating-dock fix) and interactively by the operator (drag, resize, float,
+restart-persistence) — the `QSizePolicy::Maximum` fix (pitfall #2 above)
+was specifically confirmed to resolve the reported "resizing doesn't
+stick" symptom.
 
-### Verification method note for future sessions (still holds)
-`HavenFSK.exe` is a console-subsystem build — redirecting stdout
-captures the Qt debug log directly. For testing Qt-free `src/dsp/` or
-`src/dsp/psk/` files in isolation, compile a small standalone `.cpp`
-directly against just those files + MinGW at
-`C:\Qt\Tools\mingw1310_64\bin`. **Important refinement from this
-session**: a standalone test that only compiles
-`Varicode`/`Psk31Modulator`/`Psk31Demodulator` does NOT exercise
-`Psk31Modem`'s squelch or preamble logic at all — those live in
-`Psk31Modem.cpp` itself, which must be compiled into the test too, or
-you'll get a false "PASS" that doesn't actually cover the real RX/TX
-path a user hits.
+## What Has NOT Been Verified
 
-### What has NOT been verified
-- CAT control against the live TS-590SG (Connect/freq/PTT/mode) — app
-  launches now, this is the next real check.
-- fldigi interop after the preamble fix (#4 above) — the original test
-  that found the bug should be re-run.
-- MFSK protocol v2, transmit backoff — unchanged from last session, see
-  prior notes below.
+- CAT control against a live rig with the current dock-widget top-bar
+  layout (rig status label moved from bottom bar to top bar this session —
+  functionally identical wiring, just relocated, but not re-confirmed live
+  since the move).
+- fldigi PSK31 interop re-test after the missing-TX-preamble fix from the
+  Hamlib/PSK31 session (`ce49557`) — still outstanding, carried forward
+  from that session's resume note; nothing in this session touched PSK31.
+- Real hardware RX session specifically re-confirming ADR-114's fix holds
+  over many hours / varied signal conditions, beyond the one strong live
+  test already confirmed.
 
 ## Deferred / Not Yet Done (see DECISIONS.md / spec §7.2, §5's "5")
 
-- **Transmit backoff / DCD-gated collision avoidance** — still
-  documented as not-yet-implemented in the C++ version.
-- **MFSK pulse shaping** — still deliberately unused (raised-cosine
-  tried and reverted post-CPFSK, see Phase 8 changelog entry).
-- **QPSK for PSK31** — still unimplemented, BPSK only.
-- **DCD_RMS_THRESHOLD tuning** — `Psk31Modem.h`'s carrier-detect RMS
-  threshold (`0.01f`) is still an untuned placeholder, same caveat as
-  ever; now that the lock-quality squelch is user-adjustable, DCD is the
-  remaining single point where real-world tuning might still be needed
-  if noise continues to fals-decode even with the new squelch turned up.
-- **Adaptive/configurable FEC rate, narrower "weak signal" MFSK variant**
-  — unchanged, still deferred.
+Unchanged from the prior resume note — none of this session's work touched
+these:
+- Transmit backoff / DCD-gated collision avoidance.
+- MFSK pulse shaping (raised-cosine tried and reverted post-CPFSK).
+- QPSK for PSK31 (BPSK only).
+- `DCD_RMS_THRESHOLD` tuning (`Psk31Modem.h`, still an untuned placeholder).
+- Adaptive/configurable FEC rate, narrower "weak signal" MFSK variant.
 
 ## Key Files for the New Architecture
 
-- `src/dsp/IModem.h` — the interface everything else is built against.
-  Gained `isFramedMessage` (RX event flag) and
-  `setSquelchThreshold()`/`squelchThreshold()` (optional, default no-op)
-  this session.
-- `src/dsp/ModemFactory.cpp` — mode → concrete modem construction.
-- `src/dsp/MfskModem.{h,cpp}` — MFSK, unaffected by this session's work.
-- `src/dsp/psk/` — PSK31; `Psk31Modem.{h,cpp}` is where squelch and TX
-  preamble logic live, `Psk31Constants.h` for the tunable values.
-- `src/dsp/DspPipeline.{h,cpp}` — thin Qt-facing glue; gained
-  `textCharacterReceived()` signal and squelch pass-through this
-  session.
-- `src/radio/HamlibClient.{h,cpp}` — real implementation now, not a
-  stub; `cmake/FindHamlib.cmake` for the build-time discovery logic that
-  had the four bugs described above.
-- `src/ui/RxDisplay.{h,cpp}` — gained `appendStreamingText()`/
-  `endStreamingLine()` for continuous-stream RX modes.
+Carried forward from the prior resume note, plus this session's additions:
+- `src/dsp/PreambleSync.{h,cpp}` — `m_runBestScore`/`m_lastRunEndSample`/
+  `RESET_GAP_SAMPLES` is the ADR-114 fix; do not touch the reset-gating
+  logic without re-reading ADR-114 in full first.
+- `src/dsp/MfskModem.cpp` — `tryCompleteFrame()`'s incremental-demod state
+  (ADR-113); the `HAVEN_VERBOSE_SYNC`-gated idle diagnostic (ADR-118).
+- `src/audio/AudioEngine.{h,cpp}`, `src/dsp/DspPipeline.{h,cpp}` — now
+  constructed on a dedicated worker `QThread` (ADR-112); call sites from
+  `MainWindow` go through `QMetaObject::invokeMethod`.
+- `src/ui/MainWindow.{h,cpp}` — `setupUi()` is now dock-widget construction
+  (ADR-119), not a `QSplitter`. `m_dockWaterfall`/`m_dockReceived`/
+  `m_dockLog`/`m_dockLevels`/`m_dockTransmit`, `m_topBar`/`m_bottomBar`.
+- `src/ui/LevelPanel.h` — `QSizePolicy::Maximum` on both axes (ADR-119
+  pitfall #2); do not change back to `Fixed` or `Preferred` without
+  rereading why both were tried and rejected.
+- `src/ui/FrequencyControl.h` — placeholder bootstrap + right-click entry
+  (ADR-116); font/size constants scaled 1.5x from their original values.
+- `src/ui/RxDisplay.cpp` — `renderMessage()`'s tag regex (ADR-115);
+  `makeLink()`/`onAnchorClicked()` callsign-link logic (ADR-110, untouched
+  this session).
+- `src/radio/RadioSettings.h` — `StationInfo::qth` (ADR-115).
+- `src/ui/MacroPanel.cpp` — `onMacroRightClicked()`'s clickable tag list
+  (ADR-117); the `<myQTH>` fix (ADR-115).
 
 ## Known Verified-Correct Items (do not re-investigate without new evidence)
 
-Everything in the prior RESUME.md's list still holds. Additionally,
-confirmed this session:
-- Hamlib's real struct tag is `s_rig` (`typedef struct s_rig RIG;`), not
-  `struct rig` — confirmed against the actual header, not assumed.
-- fldigi's PSK31 TX preamble is exactly 32 symbols of continuous
-  phase-reversal at 31.25 baud (`dcdbits` in `src/psk/psk.cxx`, scales
-  to 64/128 for PSK63/125) — confirmed by fetching and reading that
-  source directly, not assumed from general PSK31 knowledge.
-- A `.lib` file living in a directory named `lib/gcc/` is not
-  necessarily GNU-ld-native format — Hamlib's own SDK ships both a
-  `.lib` (MSVC-format) and `.dll.a` (GNU-format) side by side there, and
-  CMake's `find_library()` NAMES-based search can silently pick the
-  wrong one with no error at link time.
+Everything in the prior RESUME.md's list still holds (Hamlib struct tag,
+fldigi PSK31 preamble length, `.lib` vs `.dll.a` linking gotcha).
+Additionally, confirmed this session:
+- The "decode reliability degrades over a session" complaint that predated
+  this entire project's C++ rewrite testing was root-caused to
+  `PreambleSync`'s stale high-water-mark (ADR-114), not RF propagation,
+  not a single simple bug — it took four separate, real fixes (ADR-109,
+  112, 113, 114) to fully resolve, confirmed by the operator directly
+  ("clean decode at 1dB SNR").
+- `QMainWindow::saveState()`/`restoreState()` require every dock widget
+  and toolbar to have a unique `objectName()` — window title is not
+  sufficient and the failure mode (silently not restoring correctly) is
+  not obvious without knowing to check for this specifically.
+- `QSizePolicy::Fixed` on a widget placed inside a `QDockWidget` actively
+  prevents the operator from manually resizing that dock via drag — Qt's
+  dock layout keeps re-snapping it to the size hint. `Maximum` is the
+  correct policy for "has a natural default size, shrinkable on demand,
+  never stretched beyond it."

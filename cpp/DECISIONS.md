@@ -3079,3 +3079,160 @@ have been discarded via a stale, frozen lock position from the first.
 
 **Not yet verified:** real hardware/live RX session, to confirm this
 resolves the field-observed symptom end to end.
+
+## ADR-115 — Added a free-text QTH settings field; fixed two clickable-field bugs (MacroPanel macro tag, RxDisplay tag parsing)
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Added `StationInfo::qth` (`RadioSettings.h`), a plain
+free-text field with no derived meaning, plus a matching Settings dialog
+entry. "QTH" has no single fixed convention in amateur radio — grid,
+state, county, or city are all common uses — so rather than guessing which
+existing structured field `<myQTH>` should map to, the operator now
+chooses what to type there themselves.
+
+**Context:** `<myQTH>` was expanding to the operator's name instead of any
+location data — `MacroPanel.cpp`'s `<myQTH>` replacement was a copy-paste
+of the `<myName>` line above it (`result.replace("<myQTH>", info.opName,
+...)`), and no QTH field existed in Settings at all to copy correctly from
+in the first place.
+
+Investigating the same "clickable field" system surfaced a second, unrelated
+bug: `RxDisplay::renderMessage()`'s tag-value regex was
+`[^\s][^N^Q^G^R^P^S^F]*?` — intended as "stop before hitting the next tag
+name," but inside a character class only the *first* `^` negates; every
+`^` after that excludes a literal character, not a fresh negation. This
+silently truncated any NAME/QTH/GRID/POTA value containing the letters
+N, Q, G, R, P, S, or F — e.g. "Springfield" or "US-1234" — the moment one
+of those letters appeared. Fixed by removing the broken exclusion list and
+relying on the existing lookahead assertion alone to bound each match.
+
+**Verification:** rebuild clean, self-tests pass. `<myQTH>` confirmed
+correct by the operator after the fix. The regex fix was confirmed by code
+tracing (lookahead alone correctly bounds lazy `.*?`) and a clean rebuild;
+`LogPanel::populateField()` was independently confirmed already correct
+for every scheme (callsign, pota, sota, grid, rs, name, qth, fd), so this
+one regex fix is expected to make all of them click-to-populate
+consistently now.
+
+## ADR-116 — FrequencyControl: fixed no-radio manual entry; added right-click direct numeric entry
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `DigitDisplay::mousePressEvent()` now bootstraps out of the
+"Enter MHz" placeholder (hz==0) on a left click, seeding a default 14 MHz
+and emitting `frequencyRequested` so the log panel (and radio, if
+connected) picks it up — the same click also opens a `QInputDialog` for
+direct numeric MHz entry on a *right* click, working from any state
+including the placeholder.
+
+**Context:** with no radio connected, `MainWindow` leaves the frequency
+display at `hz==0`, and there was no way back out: `paintEvent()` never
+draws digit positions while in placeholder state, `mouseMoveEvent()`
+exits early on empty text (so no digit ever registers a hover target),
+and `wheelEvent()` explicitly refuses to act when `m_hz==0` — three
+independent dead ends with no path to enter a frequency for logging
+purposes when operating without a connected rig.
+
+Separately, per-digit scroll-tuning makes large frequency jumps (e.g.
+3.500.000 -> 28.150.000) slow — many wheel clicks per digit. Right-click
+now opens a direct "Frequency (MHz)" entry dialog instead, applying
+through the same `frequencyRequested` path as scrolling.
+
+**Verification:** rebuild clean, self-tests pass, confirmed visually via
+screenshot and functionally by the operator.
+
+## ADR-117 — Macro editor: clickable tag reference inserts at cursor instead of requiring manual typing
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** In the Edit Macro dialog (`MacroPanel::onMacroRightClicked()`),
+the tag reference list (`<myCall>`, `<myQTH>`, `<clr>`, `<TX>`, etc.) is now
+a rich-text `QLabel` with each tag as a clickable link; clicking inserts
+that tag into the Macro Text field at the current cursor position via a
+fetched `QTextCursor` (written back with `setTextCursor()` so consecutive
+clicks insert in sequence rather than all at the same position).
+
+**Why:** avoids operator typos in tag names when building a macro by hand
+— a mistyped tag silently fails to expand at send time with no feedback.
+
+**Verification:** rebuild clean, self-tests pass, confirmed visually.
+
+## ADR-118 — Preamble-sync-idle diagnostic gated behind an opt-in environment variable
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `MfskModem`'s periodic (~1/sec) "preamble sync idle — best
+score" diagnostic is now off by default, gated behind
+`qEnvironmentVariableIsSet("HAVEN_VERBOSE_SYNC")` (checked once, cached in
+a static local).
+
+**Why:** with the decode-reliability investigation (ADR-109 through
+ADR-114) resolved and confirmed working, this heartbeat has no ongoing
+value during normal UI-focused work and dominates the terminal during
+routine listening. It's DSP/RX-path-specific — irrelevant to diagnosing UI
+bugs — so safe to silence without losing the ability to bring it back
+(set the env var before launch) if decode issues need investigating again.
+
+## ADR-119 — Converted main window layout from a fixed QSplitter to movable/resizable QDockWidget panels
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `MainWindow`'s single vertical `QSplitter` (Waterfall / RX
+display / Log / a combined Level+Macro+TX row) is replaced with five
+independent `QDockWidget` panels — Waterfall, Received, Log, Levels, and
+Transmit (which holds both the Macro Panel and TX input together, per
+operator preference) — freely movable, resizable, and floatable within
+the main window. `m_stationInfo` and the frequency/mode/squelch/rig/RX
+status controls are pinned in a non-movable top `QToolBar`; only the
+free-text status message remains in a bottom toolbar. Layout persists via
+`QMainWindow::saveState()`/`restoreState()` (`QSettings` key
+`ui/dockState1`, replacing the old `ui/splitterState4`).
+
+**Context:** operator wanted screen-real-estate control matching typical
+dockable-panel apps rather than a fixed top-to-bottom order. `QMainWindow`
+(which `MainWindow` already inherits) supports this natively — no
+third-party docking library needed.
+
+**Three non-obvious pitfalls found during implementation, worth recording:**
+
+1. **Dock widgets need `setObjectName()`.** `saveState()`/`restoreState()`
+   identify docks and toolbars by object name, not window title. None had
+   one set initially — persistence would have silently failed to restore
+   correctly. All docks and both toolbars now have explicit object names.
+
+2. **`QSizePolicy::Fixed` fights manual dock resize.** `LevelPanel` had
+   `QSizePolicy::Fixed` on both axes — harmless in its old spot in a plain
+   `QHBoxLayout` (never manually resized there), but inside a dock area
+   Qt's layout kept snapping it back to its size hint, which looked to the
+   operator exactly like "resizing doesn't stick" (the reported symptom).
+   Fixed by changing to `QSizePolicy::Maximum` on both axes: shrinkable via
+   manual drag-resize, but never stretched wider/taller than its natural
+   content — `Preferred` was tried first and rejected, since it let the
+   dock area grow the widget *past* its natural size too, spreading its
+   internal meter strips apart with visible gaps instead of just leaving
+   harmless empty margin.
+
+3. **`splitDockWidget()` can leave a dock floating on first show.** After
+   reworking the default dock arrangement (merging Macro Panel back into
+   the Transmit dock), two panels intermittently rendered as separate
+   floating windows instead of tiling into the main window on first
+   launch — calling `splitDockWidget()` during construction, before the
+   window has ever been shown/laid out, appears to be the trigger.
+   Fixed defensively: explicit `setFloating(false)` on every panel
+   immediately after the default-arrangement `splitDockWidget()` calls,
+   only when no saved state is being restored.
+
+Also, while in this area: increased `FrequencyControl`'s digit-display
+font, width/height bounds, and step-button size by 50% (visual sizing
+request, no behavioral change).
+
+**Verification:** rebuild clean, self-tests pass. Verified visually via
+screenshot for default arrangement, panel bundling, and the floating-dock
+fix; drag/resize/float/restart-persistence verified interactively by the
+operator (confirmed working after the `QSizePolicy` fix above).
