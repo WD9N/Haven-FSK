@@ -151,6 +151,7 @@ MainWindow::~MainWindow() {
 void MainWindow::closeEvent(QCloseEvent* event) {
     QSettings s;
     s.setValue("ui/dockState1", saveState());
+    s.setValue("ui/windowGeometry", saveGeometry());
     QMainWindow::closeEvent(event);
 }
 
@@ -307,13 +308,30 @@ void MainWindow::setupUi() {
     addDockWidget(Qt::TopDockWidgetArea, m_dockWaterfall);
 
     // RX display
-    m_rxDisplay = new RxDisplay(this);
+    auto* rxContainer = new QWidget(this);
+    auto* rxLayout     = new QVBoxLayout(rxContainer);
+    rxLayout->setContentsMargins(0, 0, 0, 0);
+    rxLayout->setSpacing(2);
+
+    auto* rxBtnRow = new QHBoxLayout;
+    rxBtnRow->addStretch();
+    auto* rxClearButton = new QPushButton("Clear", rxContainer);
+    rxClearButton->setToolTip("Clear the Received window");
+    rxBtnRow->addWidget(rxClearButton);
+    rxLayout->addLayout(rxBtnRow);
+
+    m_rxDisplay = new RxDisplay(rxContainer);
     m_rxDisplay->setMinimumHeight(100);
+    rxLayout->addWidget(m_rxDisplay, 1);
+
+    connect(rxClearButton, &QPushButton::clicked,
+            m_rxDisplay, &RxDisplay::clearMessages);
+
     m_dockReceived = new QDockWidget("Received", this);
     m_dockReceived->setObjectName("dockReceived");
     m_dockReceived->setFeatures(QDockWidget::DockWidgetMovable |
                                 QDockWidget::DockWidgetFloatable);
-    m_dockReceived->setWidget(m_rxDisplay);
+    m_dockReceived->setWidget(rxContainer);
     splitDockWidget(m_dockWaterfall, m_dockReceived, Qt::Vertical);
 
     // Log panel
@@ -463,7 +481,14 @@ void MainWindow::setupUi() {
     // splitDockWidget() calls above already establish a sensible default
     // arrangement resembling the pre-dock layout, so restoreState() only
     // needs to run when the operator has actually rearranged something.
+    // Window position/size is separate from dock/toolbar layout — saveState()/
+    // restoreState() only cover the latter — so it's saved and restored
+    // independently via saveGeometry()/restoreGeometry().
     QSettings s;
+    QByteArray windowGeometry = s.value("ui/windowGeometry").toByteArray();
+    if (!windowGeometry.isEmpty())
+        restoreGeometry(windowGeometry);
+
     QByteArray dockState = s.value("ui/dockState1").toByteArray();
     if (!dockState.isEmpty()) {
         restoreState(dockState);
