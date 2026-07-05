@@ -264,7 +264,7 @@ void MainWindow::setupUi() {
     m_topBar->addWidget(m_freqControl);
 
     m_modeCombo = new QComboBox(m_topBar);
-    m_modeCombo->addItem("MFSK-16", static_cast<int>(HavenFSK::ModemMode::Mfsk16));
+    m_modeCombo->addItem("Haven MFSK", static_cast<int>(HavenFSK::ModemMode::Mfsk16));
     m_modeCombo->addItem("PSK31",   static_cast<int>(HavenFSK::ModemMode::Psk31));
     m_modeCombo->setToolTip("Operating mode");
     m_topBar->addWidget(m_modeCombo);

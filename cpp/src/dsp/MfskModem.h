@@ -48,7 +48,7 @@ public:
     void runDiagnosticSelfTest() override;
 
     ModemMode   mode()     const override { return ModemMode::Mfsk16; }
-    std::string modeName() const override { return "MFSK-16"; }
+    std::string modeName() const override { return "Haven MFSK"; }
     double passbandLowHz()  const override { return BASE_FREQ; }
     double passbandHighHz() const override {
         return BASE_FREQ + NUM_TONES * SYMBOL_RATE;
