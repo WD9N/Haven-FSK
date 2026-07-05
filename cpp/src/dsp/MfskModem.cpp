@@ -140,9 +140,17 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
 
     if (++m_diagChunkCount >= DIAG_LOG_INTERVAL_CHUNKS) {
         m_diagChunkCount = 0;
-        qDebug() << "MfskModem: preamble sync idle — best score"
-                 << m_sync.lastScore() << "(threshold="
-                 << PreambleSync::SCORE_THRESHOLD << ")";
+        // Off by default — this is a "still idle, here's the best score
+        // seen" heartbeat with no value once the sync mechanism itself is
+        // trusted, and at ~once/second it dominates the terminal during
+        // normal listening. Set HAVEN_VERBOSE_SYNC (any value) before
+        // launch to bring it back for DSP-level debugging.
+        static const bool verbose = qEnvironmentVariableIsSet("HAVEN_VERBOSE_SYNC");
+        if (verbose) {
+            qDebug() << "MfskModem: preamble sync idle — best score"
+                     << m_sync.lastScore() << "(threshold="
+                     << PreambleSync::SCORE_THRESHOLD << ")";
+        }
     }
 
     if (gotLock) {
