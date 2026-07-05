@@ -19,6 +19,7 @@ void PreambleSync::reset()
     m_inRun = false;
     m_runBestScore = 0.0f;
     m_runLength = 0;
+    m_lastRunEndSample = -1;
 }
 
 bool PreambleSync::pushSample(float sample, PreambleLock& lock)
@@ -85,6 +86,15 @@ bool PreambleSync::pushSample(float sample, PreambleLock& lock)
             if (!m_inRun) {
                 m_inRun = true;
                 m_runLength = 0;
+                // Only reset the high-water mark if enough samples have
+                // passed since the last run ended to indicate this is a
+                // genuinely new signal — not the same preamble's own
+                // correlation dipping below threshold briefly mid-scan and
+                // recovering (see RESET_GAP_SAMPLES's doc comment).
+                if (m_lastRunEndSample < 0 ||
+                    m_sampleCounter - m_lastRunEndSample > RESET_GAP_SAMPLES) {
+                    m_runBestScore = 0.0f;
+                }
             }
             ++m_runLength;
 
@@ -100,15 +110,40 @@ bool PreambleSync::pushSample(float sample, PreambleLock& lock)
             }
 
             if (m_runLength >= MAX_RUN_SAMPLES) {
+                // A safety cap on an ongoing, still-above-threshold run,
+                // not the run truly ending — the same real signal likely
+                // continues past this point, and its true peak may still
+                // be ahead. m_lastRunEndSample records where this happened
+                // so the *next* run's start (almost certainly the very next
+                // sample, still above threshold) sees a ~0 gap and keeps
+                // the high-water mark instead of resetting — see
+                // RESET_GAP_SAMPLES's doc comment.
                 lock  = m_runBestLock;
                 found = true;
                 m_inRun = false;
+                m_lastRunEndSample = m_sampleCounter;
             }
         } else if (m_inRun) {
-            // Run ended — emit its best point.
+            // Run truly ended (score genuinely dropped below threshold) —
+            // emit its best point. The high-water mark itself is reset the
+            // *next* time a run starts, only if enough samples have passed
+            // since m_lastRunEndSample (see RESET_GAP_SAMPLES) — a short
+            // gap means this is likely the same preamble's own correlation
+            // recovering from a brief dip (confirmed necessary: a clean
+            // loopback self-test locks in two runs a few hundred ms apart,
+            // and needs the first run's high score preserved into the
+            // second to find the true peak). A long gap means a genuinely
+            // separate, later signal — resetting there prevents the field
+            // bug this was built to fix: without any reset at all, a stale
+            // m_runBestScore from one lock could block every future,
+            // unrelated, genuinely-real preamble from ever registering,
+            // confirmed via a growing-negative "out of pretrigger range"
+            // offset over several minutes, tracking back to exactly the
+            // last high-scoring lock.
             lock  = m_runBestLock;
             found = true;
             m_inRun = false;
+            m_lastRunEndSample = m_sampleCounter;
         }
     }
 

@@ -174,6 +174,7 @@ void MfskModem::resetRx() {
     m_demodBinOffset   = 0;
     m_collectTicks     = 0;
     m_lastCheckSamples = 0;
+    m_cachedSoftSymbols.clear();
     setRxState(ModemRxState::Idle);
 }
 
@@ -243,11 +244,20 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
 
     if (m_fineTimingEnabled && ++m_fineTimingTick >= FINE_TIMING_INTERVAL_CALLS) {
         m_fineTimingTick = 0;
-        applyFineTimingCorrection();
+        applyFineTimingCorrection();  // clears m_cachedSoftSymbols if it shifts m_timingOffset
     }
 
-    auto softSymbols = m_demodulator.demodulateToSoft(
-        m_rxBuffer, m_timingOffset, m_demodBinOffset);
+    // Demodulate only the newly-arrived samples since the last check and
+    // append them to the persistent cache, instead of re-demodulating the
+    // entire (growing) m_rxBuffer from scratch every time — see
+    // m_cachedSoftSymbols's doc comment in MfskModem.h.
+    int newSampleOffset = m_timingOffset +
+        static_cast<int>(m_cachedSoftSymbols.size()) * SAMPLES_PER_SYMBOL;
+    auto newSymbols = m_demodulator.demodulateToSoft(
+        m_rxBuffer, newSampleOffset, m_demodBinOffset);
+    m_cachedSoftSymbols.insert(m_cachedSoftSymbols.end(),
+                               newSymbols.begin(), newSymbols.end());
+    auto& softSymbols = m_cachedSoftSymbols;
     int  frameStart  = m_preambleSymOff + PREAMBLE_LENGTH;
 
     // Header is sent 3x (Frame v2, see Frame.h HEADER_COPIES) — 4 syms
@@ -458,10 +468,12 @@ void MfskModem::applyFineTimingCorrection() {
 
     if (confEarly > confCurrent && confEarly >= confLate) {
         m_timingOffset = earlyOffset;
+        m_cachedSoftSymbols.clear();  // everything cached used the old offset
         qDebug() << "MfskModem: fine timing -> early, offset=" << m_timingOffset
                  << "conf=" << confEarly;
     } else if (confLate > confCurrent && confLate > confEarly) {
         m_timingOffset = lateOffset;
+        m_cachedSoftSymbols.clear();  // everything cached used the old offset
         qDebug() << "MfskModem: fine timing -> late, offset=" << m_timingOffset
                  << "conf=" << confLate;
     }

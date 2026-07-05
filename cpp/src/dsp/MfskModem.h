@@ -73,6 +73,20 @@ private:
     std::vector<float> m_rxBuffer;
     std::vector<float> m_preTrigger;
 
+    // Incrementally-accumulated soft-symbol results for the message
+    // currently being collected — appended to as new samples arrive,
+    // rather than re-demodulating the entire (growing) m_rxBuffer from
+    // scratch on every tryCompleteFrame() check. The old approach made
+    // collecting an N-symbol message cost O(N^2) FFT-based symbol
+    // detections instead of O(N): fine for short test messages, but this
+    // caused real, escalating real-time stalls (confirmed via
+    // AudioEngine's gap-detection warnings, ADR-109/112) once messages
+    // got long enough that the growing re-demodulation cost exceeded the
+    // real-time budget. Cleared in resetRx() (new message) and in
+    // applyFineTimingCorrection() if it actually shifts m_timingOffset
+    // (invalidates everything cached under the old offset).
+    std::vector<std::vector<float>> m_cachedSoftSymbols;
+
     // Continuous per-sample preamble sync — see PreambleSync.h / ADR-105.
     // Fed every sample regardless of RX state (so it never has a stale,
     // discontinuous history when Idle resumes after a Collecting period);

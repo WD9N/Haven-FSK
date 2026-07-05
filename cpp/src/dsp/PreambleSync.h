@@ -84,11 +84,28 @@ private:
     PreambleLock m_runBestLock;
     int          m_runLength    = 0;
 
+    // Sample position at which the last run ended (naturally) — used to
+    // decide whether a new run starting shortly after is still tracking
+    // the same underlying preamble (correlation dipping below threshold
+    // briefly mid-scan is normal, not just monotonic rise-then-fall — see
+    // pushSample's comment) versus a genuinely separate, later signal.
+    // -1 means "no prior run yet". See RESET_GAP_SAMPLES.
+    long long m_lastRunEndSample = -1;
+
     // Safety cap on how long a run is allowed to stay above threshold
     // before being force-finalized — bounds worst-case lock latency if a
     // real signal's correlation somehow stays elevated for an unusually
     // long stretch instead of dropping off shortly after the true peak.
     static constexpr int MAX_RUN_SAMPLES = 2 * SAMPLES_PER_SYMBOL;
+
+    // How long a gap since the last run ended still counts as "the same
+    // preamble, still being scanned" (don't reset the high-water mark) vs.
+    // "a genuinely new signal" (do reset). One full preamble length is a
+    // generous upper bound on how long a single preamble's own correlation
+    // could plausibly wobble below threshold before recovering to its true
+    // peak; real gaps between distinct messages are seconds to minutes.
+    static constexpr long long RESET_GAP_SAMPLES =
+        static_cast<long long>(PREAMBLE_LENGTH) * SAMPLES_PER_SYMBOL;
 };
 
 } // namespace HavenFSK

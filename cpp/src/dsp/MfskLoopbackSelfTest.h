@@ -29,7 +29,19 @@ inline bool runMfskLoopbackSelfTest() {
     printf("  TX audio: %d samples\n", (int)audio.size());
 
     // Lead-in/tail silence, as real air/loopback conditions would have.
-    std::vector<float> full(SAMPLE_RATE / 4, 0.0f);
+    // Lead-in exceeds PRE_TRIGGER_SAMPLES (3s) deliberately: a real RX
+    // session typically runs for well over 250ms before any real signal
+    // arrives, giving MfskModem's rolling pretrigger buffer time to fill
+    // naturally. A short lead-in can hit a narrow, pre-existing "cold
+    // start" edge case (the very first candidate lock landing before the
+    // pretrigger buffer has enough history, logged as "out of pretrigger
+    // range") that a fresh RX session's first few hundred ms could
+    // legitimately encounter — not something to paper over in a
+    // realistic test, but not the scenario this test exists to verify
+    // either (see DECISIONS.md, PreambleSync's m_runBestScore staleness
+    // fix, which unmasked this once it stopped accidentally compensating
+    // for it).
+    std::vector<float> full(SAMPLE_RATE * 4, 0.0f);
     full.insert(full.end(), audio.begin(), audio.end());
     full.resize(full.size() + SAMPLE_RATE / 4, 0.0f);
 

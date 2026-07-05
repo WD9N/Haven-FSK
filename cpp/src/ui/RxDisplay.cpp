@@ -187,12 +187,16 @@ QString RxDisplay::renderMessage(const QString& text,
         processed = processed.left(pos) + html + processed.mid(pos + len);
     }
 
-    // Highlight sender callsign (bold + clickable)
+    // Highlight sender callsign (bold + clickable). A single replace() only
+    // -- the link HTML itself contains the callsign text (in both the
+    // haven://callsign/<call> href and the visible link text), so a second
+    // replace() pass over the same string would match those and re-wrap
+    // them, corrupting the markup (this actually happened -- see
+    // DECISIONS.md).
     if (!senderCallsign.isEmpty()) {
         QString callLink = "<b>" + makeLink("callsign",
                                              senderCallsign,
                                              senderCallsign) + "</b>";
-        processed.replace(senderCallsign.toHtmlEscaped(), callLink);
         processed.replace(senderCallsign, callLink);
     }
 

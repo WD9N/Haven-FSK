@@ -69,8 +69,20 @@ bool AudioEngine::startRx(const QString& deviceName) {
     }
 
     m_rxSource = std::make_unique<QAudioSource>(dev, fmt, this);
+    // 16 chunks (~683ms) of headroom in the OS/driver-level buffer before
+    // an underrun silently drops audio. Was 4 chunks (~170ms) — a real,
+    // reproducible bug was root-caused to a discrete block of samples
+    // being lost mid-transmission (found via a symbol-alignment shift
+    // partway through an otherwise-perfect decode; see DECISIONS.md).
+    // 170ms is not much slack against any main-thread hiccup (a UI
+    // repaint, a slow qDebug call, or similar) on the same thread
+    // responsible for draining this buffer in time — widening it directly
+    // reduces how easily that can happen, independent of finding and
+    // fixing whatever specific hiccup caused it.
+    static constexpr int RX_BUFFER_CHUNKS = 16;
     m_rxSource->setBufferSize(
-        HavenFSK::AUDIO_CHUNK_SAMPLES * 4 * static_cast<int>(sizeof(int16_t)));
+        HavenFSK::AUDIO_CHUNK_SAMPLES * RX_BUFFER_CHUNKS *
+        static_cast<int>(sizeof(int16_t)));
 
     m_rxDevice = m_rxSource->start();
     if (!m_rxDevice) {
@@ -127,6 +139,7 @@ bool AudioEngine::startRx(const QString& deviceName) {
             this, &AudioEngine::onRxDataAvailable);
 
     m_receiving = true;
+    m_rxGapTimer.invalidate();  // first onRxDataAvailable() call shouldn't compare against a stale/stopped timer
     qDebug() << "AudioEngine: RX started on" << dev.description();
     return true;
 }
@@ -135,6 +148,30 @@ void AudioEngine::onRxDataAvailable() {
     if (!m_rxDevice || !m_receiving) return;
 
     QByteArray raw = m_rxDevice->readAll();
+
+    // Real-time gap detection — see m_rxGapTimer's doc comment in
+    // AudioEngine.h. Skipped on the first call after RX starts (no prior
+    // timestamp to compare against).
+    if (m_rxGapTimer.isValid()) {
+        qint64 wallMs = m_rxGapTimer.restart();
+        double audioMs = (raw.size() / static_cast<double>(sizeof(int16_t)))
+                          / HavenFSK::SAMPLE_RATE * 1000.0;
+        double gapMs = wallMs - audioMs;
+        // Tolerance above normal OS scheduling jitter between readyRead()
+        // callbacks; a real underrun-scale gap is much larger than this.
+        if (gapMs > 20.0) {
+            int estSamplesLost = static_cast<int>(
+                std::round(gapMs / 1000.0 * HavenFSK::SAMPLE_RATE));
+            qWarning() << "AudioEngine: RX timing gap —" << wallMs
+                       << "ms wall-clock vs" << audioMs
+                       << "ms of audio delivered (~" << estSamplesLost
+                       << "samples likely lost to an OS/driver-level"
+                       << "underrun before this call)";
+        }
+    } else {
+        m_rxGapTimer.start();
+    }
+
     m_rxBuffer.append(raw);
 
     const int chunkBytes =
@@ -157,6 +194,7 @@ void AudioEngine::stopRx() {
     }
     m_rxBuffer.clear();
     m_receiving = false;
+    m_rxGapTimer.invalidate();
 }
 
 bool AudioEngine::isReceiving() const {
@@ -190,6 +228,7 @@ bool AudioEngine::startTx(const QString& deviceName,
 
     if (samples.empty()) {
         qWarning() << "AudioEngine::startTx: empty samples";
+        emit audioError("TX audio buffer was empty — nothing to transmit.");
         return false;
     }
 
@@ -209,6 +248,7 @@ bool AudioEngine::startTx(const QString& deviceName,
         m_txPcmData, initialGain, this, /*headerBytes=*/0);
     if (!m_txGainDevice->open(QIODevice::ReadOnly)) {
         qWarning() << "AudioEngine: failed to open GainedAudioDevice";
+        emit audioError("Failed to open TX audio buffer for playback.");
         delete m_txGainDevice;
         m_txGainDevice = nullptr;
         m_txPcmData.clear();

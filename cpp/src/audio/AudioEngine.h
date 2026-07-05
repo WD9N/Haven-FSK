@@ -9,6 +9,7 @@
 #include <QByteArray>
 #include <QAudioSink>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -23,6 +24,15 @@
 // m_gain is std::atomic<float> — safe to update from the main thread
 // while QAudioSink reads from its audio rendering thread.
 // Changes take effect within one read cycle (~100-200ms).
+//
+// m_data holds its own copy of the PCM (cheap — QByteArray is
+// copy-on-write, so this is just a refcount bump, not a real copy)
+// rather than a reference to the caller's buffer. AudioEngine::startTx()
+// used to pass a reference to its own m_txPcmData member; that only
+// stayed safe because of hand-maintained destruction ordering (gain
+// device deleted before m_txPcmData.clear()). An owned copy removes that
+// ordering dependency entirely instead of relying on it staying correct
+// through future changes (see DECISIONS.md).
 class GainedAudioDevice : public QIODevice {
     Q_OBJECT
 public:
@@ -107,7 +117,7 @@ private:
         return toRead;
     }
 
-    const QByteArray&  m_data;
+    QByteArray         m_data;
     qint64             m_pos;
     std::atomic<float> m_gain;
     qint64             m_headerBytes;
@@ -169,6 +179,17 @@ private:
     std::unique_ptr<QAudioSource> m_rxSource;
     QIODevice*                    m_rxDevice = nullptr;
     QByteArray                    m_rxBuffer;
+
+    // Detects real-time gaps in RX audio delivery: if wall-clock time
+    // between onRxDataAvailable() calls significantly exceeds the amount
+    // of audio-time actually delivered, samples were likely dropped by
+    // the OS/driver before Qt ever saw them (Qt6.11's QAudio::UnderrunError
+    // is deprecated and no longer emitted, so this can't be detected via
+    // QAudioSource's own error signal — see ADR-109). Root-caused a real
+    // bug this way: a clean, discrete symbol-alignment shift found via
+    // offline analysis of a captured recording, consistent with a block
+    // of samples silently lost mid-transmission.
+    QElapsedTimer m_rxGapTimer;
 
     // ── TX members (QAudioSink + GainedAudioDevice) ──────────────────────
     QAudioSink*        m_txAudioSink       {nullptr};
