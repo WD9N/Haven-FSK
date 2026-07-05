@@ -2647,3 +2647,435 @@ decode bug — audio that was never actually processed).
 next live session should confirm decode reliability no longer declines
 over time, including a manually-typed (not macro-button) message late in
 a session.
+
+---
+
+## ADR-109 — Root-caused mid-transmission MFSK payload corruption to real-time RX sample loss; widened audio buffer, added gap detection
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Widened `AudioEngine`'s RX `QAudioSource` buffer from 4 audio
+chunks (~170ms) to 16 chunks (~683ms); added wall-clock-vs-audio-time gap
+detection in `onRxDataAvailable()` to directly log real-time sample loss
+when it happens (`QAudio::UnderrunError` is deprecated and no longer
+emitted as of Qt 6.11, so this can't be detected via `QAudioSource`'s own
+error signal — confirmed by reading `qaudio.h` directly); made the "Record
+RX Audio to WAV" debug tool's real-time capture path bulk-copy raw floats
+instead of converting to int16 per-sample, deferring that conversion to
+save time so the tool itself adds minimal main-thread cost while active.
+
+**Investigation, in the order eliminated (each step used real evidence,
+not assumption):**
+1. *RX algorithm state degrading over a session* — ruled out by a
+   dedicated soak test feeding `PreambleSync` a full simulated hour of
+   noise with periodic clean-signal injections: score stayed at exactly
+   1.0000 every time, zero degradation.
+2. *TX audio generation corrupting on repeated calls* — ruled out by
+   calling `Frame::assemble()` on an identical message 50 times and
+   diffing every sample against the first call: byte-for-byte identical
+   every time (`Frame::assemble()` constructs fresh local `Preamble`/
+   `Modulator`/`FEC` instances per call — no possible cross-call state).
+3. *Real RF-path fading* — ruled out because the test setup was dummy
+   load to dummy load in the same room; no ionospheric path exists for
+   fading to occur on.
+4. *Debug logging competing with real-time audio consumption* (ADR-108's
+   fix) — checked directly against a failing capture's log: the
+   "collecting X/Y" lines were already spaced ~400ms apart (matching the
+   throttle), confirming that build was in use, and it still failed —
+   ruling logging out as the explanation for *that* failure, though the
+   throttle is still good practice independent of this bug.
+
+**The actual finding:** offline analysis of a WAV captured via the "Record
+RX Audio to WAV" debug tool (added this session specifically so audio
+could be inspected from the exact point `AudioEngine` delivers to the
+modem, not a separately-recorded file that leaves open whether it saw the
+same data) showed something decisive. Comparing every one of a message's
+176 expected symbols against what the real `Demodulator` code actually
+detected: symbols 0–119 (the full preamble, header, and 92 payload
+symbols) were **all exactly correct**, high confidence throughout. Then,
+at exactly symbol 120, detection flips to mostly wrong — but not randomly
+wrong: `detected[120..124]` matched `expected[121..125]` exactly, i.e. the
+entire symbol stream shifted by precisely one symbol-width at one sharp,
+discrete instant, with detection confidence staying high on *both* sides
+of the break. That signature — perfect, then an instantaneous whole-symbol
+shift, not a gradual decline — is what a block of audio samples being
+silently dropped (or duplicated) mid-stream produces; it is not consistent
+with noise, weak SNR, or a demodulator bug (both of which degrade
+gradually and reduce confidence, not shift the whole stream by exactly one
+symbol while staying confident).
+
+**Why this points at `AudioEngine` specifically:** this WAV was captured
+via a signal tap on `AudioEngine::rxDataReady` itself — the same data
+`DspPipeline`/`MfskModem` consume. A discrete sample-count anomaly present
+in that exact stream means the loss happened at or before that point:
+inside `AudioEngine`'s capture path (the `QAudioSource`/OS driver read
+cycle), not in VAC, not in a separate recording tool, and not in DSP
+decode logic (independently proven correct twice this session against
+real captured audio). `startRx()`'s previous buffer size — 4 chunks,
+~170ms — is not much headroom against *any* main-thread stall (a UI
+repaint, a slow logging call, or similar) on the same thread responsible
+for draining that buffer in time; once it's exceeded, the OS/driver layer
+drops audio before Qt ever sees it, silently.
+
+**A fair question raised mid-investigation, addressed directly:** could
+the newly-added RX-recording tool itself have been perturbing the system
+enough to help cause the very glitch it caught? Its real-time cost (a
+per-sample clamp+scale+cast+`push_back` loop) was small in isolation
+(microseconds against a ~42.6ms chunk period) but non-zero and new, so it
+couldn't be ruled out cleanly. Addressed by making its real-time path a
+single bulk float `insert()` with the int16 conversion deferred entirely
+to save time — minimizing the tool's own footprint regardless of whether
+it was actually a contributing factor, so future captures aren't
+confounded by the act of capturing.
+
+**What is NOT yet fixed, only mitigated:** the wider buffer and gap
+logging don't address whatever *causes* the main thread to stall long
+enough to matter — they make that stall survivable (more headroom) and
+observable (a direct log line with estimated samples lost) if it still
+happens. The root stall itself (waterfall repaint cost? something else?)
+has not been identified.
+
+**Verification:** rebuild clean, self-tests pass (no DSP logic touched).
+**Not yet verified:** whether the wider buffer prevents recurrence in a
+real session, and whether the new gap-detection log line actually fires
+and correctly characterizes the gap size if/when this happens again —
+both need a real live test to confirm.
+
+---
+
+## ADR-110 — Fixed RxDisplay callsign-link double-substitution corrupting decoded message display
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Removed a redundant `QString::replace()` call in
+`RxDisplay::renderMessage()`'s sender-callsign highlighting.
+
+**Bug:** the callsign-highlighting code ran two sequential replacements
+against the same, progressively-modified string:
+```cpp
+processed.replace(senderCallsign.toHtmlEscaped(), callLink);
+processed.replace(senderCallsign, callLink);
+```
+For a plain callsign like "N8SDR", `toHtmlEscaped()` is a no-op, so the
+first call already inserts the full link HTML
+(`<a href='haven://callsign/N8SDR' style='color:#4a9fd4;...'>N8SDR</a>`).
+That HTML itself contains the literal text "N8SDR" twice — once in the
+`href` URL, once in the visible link text. The second `replace()` call
+then matches *those* occurrences and wraps them in the link HTML again,
+nesting the markup inside itself and corrupting it. Visible symptom:
+decoded messages displayed with raw HTML leaking into the text, e.g.
+`N8SDR' style='color:#4a9fd4;text-decoration:none'>N8SDR US-1017 K`.
+
+**Why it looked worse than it was:** this surfaced during the ADR-109
+real-signal testing and initially looked like it might be a decode
+failure. It was not — `MfskModem`'s own log line showed the actual decoded
+text was byte-for-byte correct (`"CQ POTA DE N8SDR US-1017 K"`, CRC OK,
+FEC converged). The corruption was purely in `RxDisplay`'s HTML rendering,
+downstream of a correct decode. Worth remembering for future confusing
+displays: check the raw `MfskModem: decoded message` log line before
+assuming a garbled on-screen message means a DSP/decode bug.
+
+**Fix:** keep only the single `processed.replace(senderCallsign, callLink)`
+call.
+
+**Verification:** rebuild clean, self-tests pass. Manually traced the
+corrected logic against the exact message that exposed the bug
+("CQ POTA DE N8SDR US-1017 K") — produces a single, correctly-nested
+`<a>` tag with no residual duplicate replacement.
+
+---
+
+## ADR-111 — Removed reference-lifetime hazard in GainedAudioDevice (audit finding, pre-threading-refactor)
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `GainedAudioDevice::m_data` (`AudioEngine.h`) changed from
+`const QByteArray& m_data` to an owned `QByteArray m_data`.
+
+**Context:** found during a targeted audit of `AudioEngine`/`DspPipeline`/
+`MainWindow`'s audio wiring/`WaterfallWidget`, done ahead of a planned
+threading refactor to move real-time audio/DSP processing off the main
+UI thread (see the waterfall per-chunk cost investigation this session).
+`GainedAudioDevice` was holding a live reference to
+`AudioEngine::m_txPcmData` rather than its own copy. That was only safe
+because of hand-maintained destruction ordering — both
+`onTxCompletionTimer()` and `stopTx()` always delete `m_txGainDevice`
+before calling `m_txPcmData.clear()`. Nothing was broken today, but it's
+exactly the kind of assumption a threading/ownership refactor could
+silently violate (moving TX handling across a thread boundary, changing
+teardown order, etc.), turning into a dangling-reference use-after-free
+with no warning.
+
+**Fix:** store an owned copy instead. `QByteArray` is copy-on-write, so
+this costs a refcount bump, not a real data copy — no measurable
+performance impact — while removing the ordering dependency entirely
+rather than continuing to rely on it staying correct.
+
+**Verification:** rebuild clean, self-tests pass. Only construction site
+is `AudioEngine::startTx()`, which already passes a plain `QByteArray`
+member — no other callers assumed reference semantics.
+
+---
+
+## ADR-112 — Moved AudioEngine + DspPipeline to a dedicated worker thread
+
+**Status:** Decided (implemented, live hardware verification pending)
+**Date:** July 2026
+
+**Decision:** `AudioEngine` and `DspPipeline` now run on a dedicated worker
+`QThread` (`MainWindow::m_dspThread`), created and moved into right after
+their construction in `MainWindow`'s constructor, before any other setup.
+Everything else (`MainWindow`, `WaterfallWidget`, `PTTManager`, radio-control
+backends, `LogManager`) stays on the GUI thread as before.
+
+**Why:** ADR-109 root-caused real mid-transmission sample loss to
+`AudioEngine::onRxDataAvailable()` — which must keep draining the OS audio
+buffer in real time — sharing the GUI thread with work that has no
+real-time obligation, most notably `WaterfallWidget::pushChunk()` at "Fast"
+speed (a full FFT + manual 120-row image scroll + repaint on every single
+chunk). Widening the RX buffer (also ADR-109) made this survivable but
+didn't address the structural cause. This finishes that fix properly, the
+way fldigi and most real-time digital-mode software do it: isolate the
+audio/modem loop on its own thread so GUI work can never block it again.
+
+**Design, and why:** one worker thread owns both objects together, not
+split, not two threads. `AudioEngine::rxDataReady -> DspPipeline::
+onAudioChunk` is the hottest path in the app (every 42.6ms); same-thread
+means Qt resolves it as a direct call with zero added latency. It also
+means `DspPipeline::setMode()`'s `m_modem` pointer swap can never run
+concurrently with `onAudioChunk()` — a single thread's event loop only
+ever processes one queued call at a time, so this race (present before
+this change, harmless only because everything was single-threaded) is
+closed for free, with no lock needed.
+
+Getting there required a preparatory pass (this session, same investigation
+— see the plan doc referenced in git history) to make the surrounding code
+safe for a thread it wasn't written for:
+- `DspPipeline::m_rxGain` -> `std::atomic<float>` (written from a GUI
+  slider, read both by `onAudioChunk()` on the worker thread and a
+  GUI-thread level-meter lambda).
+- `DspPipeline::m_rxCache` -> guarded by `std::mutex` (written by
+  `onAudioChunk()`, read directly from the GUI thread on a callsign click);
+  `getRxMeasurement()` now returns `std::optional<RxMeasurement>` by value
+  instead of a pointer into the map, since a pointer wouldn't stay valid
+  past the mutex being released.
+- Every method with a synchronous return value that GUI-thread code
+  depended on (`DspPipeline::transmit()`'s `bool`, `setMode()`'s
+  immediately-read-back `passbandLowHz()/passbandHighHz()/modeName()`,
+  `AudioEngine::startTx()`'s `bool`, `DspPipeline::generateToneSweepAudio()`'s
+  return value) was redesigned to be signal-driven instead — new signals
+  `transmitFailed`, `modeReady`, `toneSweepAudioReady`, plus reusing the
+  existing `audioError`/`messageTransmitted`. `QMetaObject::invokeMethod`
+  can't return a synchronous result, so none of these could stay
+  return-value-driven once the call crosses a thread boundary.
+- Every remaining direct GUI->worker call (`AudioEngine::startRx/stopRx/
+  startTx/stop`, `DspPipeline::transmit/setMode/onTxComplete/
+  setToneMonitor/setAfcEnabled/setSquelchThreshold/requestToneSweepAudio`)
+  now goes through `QMetaObject::invokeMethod(target, &Class::method,
+  Qt::AutoConnection, args...)` instead of a plain method call. Using
+  `Qt::AutoConnection` (not hard-coded `Qt::QueuedConnection`) meant this
+  conversion was itself a no-op behaviorally *before* the thread move (same
+  thread still resolves direct) — the mechanical call-site conversion and
+  the actual thread move landed as separable, independently-buildable
+  changes rather than one big-bang commit.
+
+**Teardown:** `AudioEngine`/`DspPipeline` are un-parented (`setParent
+(nullptr)`) before `moveToThread()`, since a QObject with a parent can't
+move threads — meaning they're no longer automatically deleted by
+`MainWindow`'s destructor either. `~MainWindow()` now explicitly:
+`QMetaObject::invokeMethod(m_audio, &AudioEngine::stop,
+Qt::BlockingQueuedConnection)` (deliberately blocking, so the destructor
+doesn't proceed until `stop()` has actually finished on the worker
+thread), then `m_dspThread->quit(); m_dspThread->wait();`, then explicit
+`delete` on both objects.
+
+**What did NOT need to change:** `PTTManager`'s own `QTimer` watchdog,
+radio-control backends (`RigctldClient`/`TCIClient`/`HamlibClient`), and
+`LogManager` — none have a real-time obligation, so they stay on the GUI
+thread untouched. TX/RX serialization (`MainWindow` already calls
+`AudioEngine::stopRx()` before every TX) needed no new synchronization —
+queuing both calls onto the same worker thread preserves the existing
+ordering automatically, since that thread's event loop processes them
+FIFO.
+
+**Verification:** rebuild clean, self-tests pass (unaffected — they run
+before `MainWindow` exists). Confirmed the app launches and stays stable
+past self-test range with no crash. **Not yet verified: the actual,
+direct empirical test this whole refactor exists for** — a real, extended
+RX session at Fast waterfall speed, confirming zero `AudioEngine: RX
+timing gap` warnings (ADR-109) where they were previously reproducible —
+plus a full manual TX/RX/mode-switch/squelch/AFC/tone-sweep pass under
+genuine multi-threading, including deliberately forcing a `startTx()`
+failure to confirm the signal-driven cleanup path (the highest-complexity,
+most novel piece of this change) recovers correctly. This requires real
+hardware and hasn't been done yet.
+
+---
+
+## ADR-113 — Fixed O(N²) re-demodulation in MfskModem::tryCompleteFrame() — the actual remaining root cause of decode reliability degrading over time
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `MfskModem::tryCompleteFrame()` now demodulates only the
+newly-arrived samples on each check and appends them to a persistent,
+incrementally-growing cache (`m_cachedSoftSymbols`), instead of
+re-demodulating the entire accumulated `m_rxBuffer` from scratch every
+time.
+
+**Context:** after ADR-112's worker-thread move (isolating `AudioEngine`/
+`DspPipeline` from GUI-thread work), live testing still showed decode
+reliability degrading after a couple of minutes — the exact symptom this
+whole investigation started from, and one the threading fix alone did not
+resolve. `haven_log.txt` from that session showed a stark pattern: the
+first two (short, 128–176 total symbol) messages decoded perfectly with
+only one small, FEC-recoverable timing gap. Starting with the third
+message — longer, 320 total symbols — `AudioEngine`'s gap-detection
+warning (ADR-109) fired *repeatedly within that single message's
+collection*, each gap larger than the last (743ms -> 1053ms -> 1122ms ->
+... -> 1561ms, samples lost climbing from ~2900 to ~42000), and the
+message failed completely (`fecIter=1200` = 6 blocks x 200, total
+non-convergence). Every subsequent message showed the identical escalating
+pattern and failed the same way.
+
+That signature — a stall that *worsens continuously within one message's
+collection*, appearing only once messages cross a length threshold — means
+something scales with message/buffer length inside the DSP processing
+itself, not a one-off external stall. Reading `tryCompleteFrame()`
+confirmed it: every check called
+`m_demodulator.demodulateToSoft(m_rxBuffer, m_timingOffset,
+m_demodBinOffset)` on the *entire* accumulated `m_rxBuffer`, and
+`demodulateToSoft()` (`Demodulator.cpp`) runs an FFT-based `detectSymbol()`
+call for every symbol from the given offset to the end of whatever buffer
+it's handed. Since `m_rxBuffer` grows by one chunk on every call while
+`tryCompleteFrame()` re-demodulates the *whole thing* each time (throttled
+to roughly once per new symbol), the total cost of collecting an N-symbol
+message was O(N²) FFT-based symbol detections instead of O(N) — fine for
+short test messages, but exceeding the real-time budget once messages got
+long enough, and by construction getting *worse* the longer collection
+continued, exactly matching the observed pattern. This is a pure
+computational-complexity bug in the DSP layer, independent of and
+unaffected by ADR-112's threading work — no amount of thread isolation
+fixes an algorithm that's inherently too expensive on its own dedicated
+thread.
+
+**Fix:** `tryCompleteFrame()` now computes `newSampleOffset = m_timingOffset
++ m_cachedSoftSymbols.size() * SAMPLES_PER_SYMBOL`, demodulates only that
+new tail segment, and appends the result to `m_cachedSoftSymbols` (a new
+`MfskModem` member). The local variable `softSymbols` becomes a reference
+to this cache so the rest of the function's logic (header decode, frame
+completion check, `frameSymbols` slice) is unchanged. Cache is cleared in
+`resetRx()` (new message) and in `applyFineTimingCorrection()` if it
+actually shifts `m_timingOffset` (everything cached under the old offset
+would otherwise be invalid) — `applyFineTimingCorrection` itself is gated
+behind `m_fineTimingEnabled` (false by default, experimental/unvalidated),
+so this is a correctness-for-later concern, not an active one.
+
+**Verification:** rebuild clean, self-tests pass (including the MFSK
+loopback test, which exercises this exact path). Additionally verified
+directly with a standalone timing diagnostic: fed a 56-character, 191-chunk
+(~8 second) synthetic message — matching the real-world failure case's
+approximate length — through the actual `MfskModem::processAudioChunk()`
+in a chunked loop with per-chunk wall-clock timing. Result: the message
+decoded correctly (`crcOk=1 converged=1`), and per-chunk cost during
+collection stayed flat throughout (2.18ms at the start of collection to
+2.42ms near the end, max 4.37ms) — comfortably under 6% of the 42.7ms
+real-time budget per chunk, with no growth pattern at all. This directly
+confirms the O(N²) -> O(N) fix in the actual production code path, not
+just in theory.
+
+**Not yet verified:** a real, extended live RX session to confirm this
+resolves the field-observed "stops decoding after a couple minutes"
+symptom end to end — the standalone timing test proves the mechanism is
+fixed, but hasn't been confirmed against real hardware/signal conditions
+yet.
+
+---
+
+## ADR-114 — Fixed stale high-water-mark in PreambleSync's peak-picking, causing preamble locks to freeze on an old position indefinitely
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `PreambleSync::pushSample()`'s peak-picking now resets its
+high-water mark (`m_runBestScore`) only when a new run starts *and* enough
+samples have passed since the last run ended (`RESET_GAP_SAMPLES`, one
+full preamble length) to indicate this is a genuinely different signal —
+not on every run-end unconditionally, and not never (the two things tried
+and rejected before landing here — see below).
+
+**Context:** after ADR-113's O(N²) fix, a live retest still showed the
+original "decodes twice, then never again — not even the same message"
+symptom. The fresh `haven_log.txt` showed something new: starting about a
+minute after the last successful decode, the log filled with
+`preamble lock offset -2140023 out of pretrigger range (size=144000) —
+dropping`, and this offset grew *more negative over time*, in lockstep
+with real elapsed time (roughly one sample rate's worth of drift per
+second) — `-2.14M` -> `-3.55M` -> `-4.70M` -> `-5.74M` -> `-6.18M` samples
+across the session. Every later preamble attempt got silently discarded
+this way; nothing ever decoded again.
+
+Tracing `offset = lock.sampleIndex - m_preTriggerDropped`
+(`MfskModem.cpp`), the culprit was in `PreambleSync::pushSample()`
+(`PreambleSync.cpp`): `m_runLength` resets when a new above-threshold run
+starts, but `m_runBestScore` was never reset anywhere except at
+construction. Once any high-scoring run occurred (e.g. ~0.99 for a real
+preamble), `m_runBestScore` stayed at that value forever. Every later run
+— including a genuinely new, real preamble from a subsequent transmission
+— that scored even slightly lower than that stale watermark could never
+update `m_runBestLock`, so every future lock kept re-emitting the *old*
+run's position. As real time (and `m_preTriggerDropped`) kept advancing
+while that stale `sampleIndex` stayed frozen, the reported offset grew
+increasingly negative — exactly the observed pattern. This is very likely
+the actual explanation for the "reliability degrades over a session"
+complaint that predates this entire investigation.
+
+**Getting the fix right took three iterations:**
+1. First attempt: reset `m_runBestScore` on every run-end (both the
+   natural end-of-run branch and the `MAX_RUN_SAMPLES` safety-cap branch).
+   Broke `MfskLoopbackSelfTest` — a clean, single-message loopback started
+   locking onto a marginal `~0.45` mid-cap point instead of the true
+   `~0.99` peak. Root cause: `MAX_RUN_SAMPLES` exists to bound worst-case
+   lock latency, not to mark a run as "truly over" — a single preamble's
+   own correlation can legitimately still be climbing toward its true peak
+   when the cap fires, and resetting there discarded that progress.
+2. Second attempt: only reset on the natural end-of-run branch (leave
+   `MAX_RUN_SAMPLES` alone). Still broke the same self-test, differently —
+   two separate runs a few hundred ms apart (the preamble's own
+   correlation genuinely dipping below threshold and recovering — the
+   score curve isn't purely monotonic, per `pushSample()`'s existing
+   comment) needed the *first* run's high score preserved into the
+   *second* to find the true peak; resetting unconditionally on every
+   natural end broke that too.
+3. Final fix: track `m_lastRunEndSample` (samples since the last run
+   ended, whichever branch ended it) and only reset `m_runBestScore` when
+   a *new* run starts if the gap since then exceeds `RESET_GAP_SAMPLES`
+   (one preamble length, ~512ms) — long enough to comfortably cover any
+   single preamble's own multi-run detection wobble, far shorter than the
+   seconds-to-minutes gap between genuinely separate messages.
+
+Also extended `MfskLoopbackSelfTest.h`'s lead-in silence from 0.25s to 4s
+(exceeding `PRE_TRIGGER_SAMPLES`'s 3s) — unrelated to the above, but
+surfaced during this investigation: a real RX session runs far longer than
+250ms before any real signal arrives in practice, and the self-test's
+short lead-in could occasionally hit a separate, narrow, pre-existing
+"cold start" edge case (`-286 out of pretrigger range` — present in this
+project's very first-ever successful-decode log, long before today) where
+the very first candidate lock lands before the pretrigger buffer has
+enough history. That edge case isn't what this test exists to verify, and
+was previously invisible in practice only because the staleness bug fixed
+above accidentally "recycled" a good position into the very next attempt —
+which stopped happening the moment that bug was fixed.
+
+**Verification:** self-tests pass (rebuild clean, loopback test decodes
+correctly). Directly verified the actual field scenario with a standalone
+diagnostic: two identical messages separated by 3 minutes of noise (with
+realistic spurious threshold-crossings in between) — both decoded
+correctly (`crcOk=1 converged=1`), where before this fix the second would
+have been discarded via a stale, frozen lock position from the first.
+
+**Not yet verified:** real hardware/live RX session, to confirm this
+resolves the field-observed symptom end to end.
