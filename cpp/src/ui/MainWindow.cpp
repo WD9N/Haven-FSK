@@ -793,6 +793,13 @@ void MainWindow::setupConnections() {
     connect(m_logPanel, &LogPanel::contactLogged,
             this, &MainWindow::onContactLogged);
 
+    // Log panel's "Their Call" entry (typed or populated by clicking a
+    // received callsign) drives <theirCall> in macros too, not just clicks.
+    connect(m_logPanel, &LogPanel::theirCallChanged,
+            this, [this](const QString& call) {
+                m_macroPanel->setTheirCall(call);
+            });
+
     // Delete contact → database
     connect(m_logPanel, &LogPanel::contactDeleted,
             this, [this](int dbId) {

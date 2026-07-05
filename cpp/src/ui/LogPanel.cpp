@@ -63,6 +63,14 @@ void LogPanel::setupEntryStrip() {
     m_callEntry->setFont(mono);
     m_callEntry->setMaximumWidth(100);
     forceUpper(m_callEntry);
+    // textChanged (not textEdited): textEdited's argument is the
+    // pre-uppercase keystroke value (forceUpper's setText() call above
+    // doesn't retroactively fix up what's delivered to other slots on the
+    // same signal emission), and textChanged also naturally covers
+    // populateField()'s setText() and clear() below, keeping this a
+    // faithful mirror of "whatever this field currently shows."
+    connect(m_callEntry, &QLineEdit::textChanged,
+            this, &LogPanel::theirCallChanged);
     row1->addWidget(m_callEntry, 0);
 
     // RS-R: label immediately followed by field, no gap

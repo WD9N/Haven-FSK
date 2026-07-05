@@ -41,6 +41,13 @@ signals:
     void contactDeleted(int dbId);
     void entryCleared();
 
+    // Fires whenever the "Their Call" entry field's displayed value
+    // changes, whether from typing, populateField() (clicking a received
+    // callsign), or clearing — keeps consumers (MacroPanel's <theirCall>)
+    // in sync with whatever the log's callsign field currently shows,
+    // not just literal keystrokes.
+    void theirCallChanged(const QString& call);
+
 private slots:
     void onLogIt();
     void onClear();
