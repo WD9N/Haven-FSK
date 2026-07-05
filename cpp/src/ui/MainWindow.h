@@ -7,7 +7,8 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QAction>
-#include <QSplitter>
+#include <QDockWidget>
+#include <QToolBar>
 #include <QCloseEvent>
 #include <QThread>
 #include <cstdint>
@@ -89,8 +90,21 @@ private:
     RxDisplay*         m_rxDisplay    {nullptr};
     LogPanel*          m_logPanel     {nullptr};
     MacroPanel*        m_macroPanel   {nullptr};
-    QSplitter*         m_splitter     {nullptr};
     QTextEdit*         m_txInput      {nullptr};
+
+    // ── Dock widgets — movable/resizable panels (see DECISIONS.md) ────────
+    // Five independently movable/resizable panels, replacing the old
+    // fixed-order QSplitter. m_stationInfo and the status bar stay fixed
+    // (pinned top/bottom toolbars, see m_topBar/m_bottomBar below) — not
+    // part of this dockable set. Macro Panel shares dockTransmit with the
+    // TX input again (back from being its own dock, per operator request).
+    QDockWidget*       m_dockWaterfall {nullptr};
+    QDockWidget*       m_dockReceived  {nullptr};
+    QDockWidget*       m_dockLog       {nullptr};
+    QDockWidget*       m_dockTransmit  {nullptr};
+    QDockWidget*       m_dockLevels    {nullptr};
+    QToolBar*          m_topBar        {nullptr};  // fixed, non-movable — m_stationInfo
+    QToolBar*          m_bottomBar     {nullptr};  // fixed, non-movable — status row
     LevelPanel*        m_levelPanel   {nullptr};
     QPushButton*       m_txButton        {nullptr};
     QPushButton*       m_toneTestButton  {nullptr};

@@ -150,7 +150,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     QSettings s;
-    s.setValue("ui/splitterState4", m_splitter->saveState());
+    s.setValue("ui/dockState1", saveState());
     QMainWindow::closeEvent(event);
 }
 
@@ -239,73 +239,121 @@ void MainWindow::setupMenu() {
 }
 
 void MainWindow::setupUi() {
-    auto* central    = new QWidget(this);
-    setCentralWidget(central);
-    auto* mainLayout = new QVBoxLayout(central);
-    mainLayout->setSpacing(4);
-    mainLayout->setContentsMargins(4, 4, 4, 4);
+    // Empty central widget — dock areas fill the remaining space around it.
+    // Qt6 supports a null central widget too, but an explicit empty one is
+    // a more conservative default (verified visually, no seam/margin issue).
+    setCentralWidget(new QWidget(this));
+    setDockNestingEnabled(true);  // needed for the mixed horizontal/vertical arrangement below
 
-    // Station info — fixed, always visible
-    m_stationInfo = new StationInfoWidget(central);
-    mainLayout->addWidget(m_stationInfo);
+    // Station info — fixed, always visible, pinned above the dock area via
+    // a non-movable toolbar (not a dock widget itself, and not part of the
+    // dockable set the operator asked for).
+    m_topBar = new QToolBar("Station Info", this);
+    m_topBar->setObjectName("topBar");  // required for saveState()/restoreState() to work
+    m_topBar->setMovable(false);
+    m_topBar->setFloatable(false);
+    m_topBar->toggleViewAction()->setVisible(false);  // no reason to hide this
+    m_stationInfo = new StationInfoWidget(m_topBar);
+    m_topBar->addWidget(m_stationInfo);
 
-    // Splitter — waterfall / RX display / log panel
-    m_splitter = new QSplitter(Qt::Vertical, central);
+    // Frequency/mode/squelch/rig/RX — moved here from the bottom status bar
+    // (per operator request), to the right of station info.
+    m_topBar->addSeparator();
+
+    m_freqControl = new FrequencyControl(m_topBar);
+    m_topBar->addWidget(m_freqControl);
+
+    m_modeCombo = new QComboBox(m_topBar);
+    m_modeCombo->addItem("MFSK-16", static_cast<int>(HavenFSK::ModemMode::Mfsk16));
+    m_modeCombo->addItem("PSK31",   static_cast<int>(HavenFSK::ModemMode::Psk31));
+    m_modeCombo->setToolTip("Operating mode");
+    m_topBar->addWidget(m_modeCombo);
+
+    m_topBar->addWidget(new QLabel("Squelch:", m_topBar));
+    m_squelchSpin = new QDoubleSpinBox(m_topBar);
+    m_squelchSpin->setRange(0.0, 1.0);
+    m_squelchSpin->setSingleStep(0.05);
+    m_squelchSpin->setDecimals(2);
+    m_squelchSpin->setToolTip(
+        "Minimum decode confidence to display a character (0 = off).\n"
+        "Only affects modes with a confidence-based squelch (PSK31); "
+        "has no effect on MFSK, which uses CRC/FEC instead.\n"
+        "Raise this if noise is decoding as garbage text; lower it "
+        "(or set to 0) if real signal isn't showing up.");
+    m_topBar->addWidget(m_squelchSpin);
+
+    m_rigLabel = new QLabel("No rig", m_topBar);
+    m_rigLabel->setStyleSheet("color: gray;");
+    m_topBar->addWidget(m_rigLabel);
+
+    m_topBar->addWidget(new QLabel("RX:", m_topBar));
+    m_rxLevel = new QProgressBar(m_topBar);
+    m_rxLevel->setRange(0, 100);
+    m_rxLevel->setValue(0);
+    m_rxLevel->setMaximumWidth(120);
+    m_rxLevel->setTextVisible(false);
+    m_topBar->addWidget(m_rxLevel);
+
+    addToolBar(Qt::TopToolBarArea, m_topBar);
 
     // Waterfall — receives raw audio directly from AudioEngine
     m_waterfall = new WaterfallWidget(this);
     m_waterfall->setMinimumHeight(80);
-    m_splitter->addWidget(m_waterfall);
+    m_dockWaterfall = new QDockWidget("Waterfall", this);
+    m_dockWaterfall->setObjectName("dockWaterfall");
+    m_dockWaterfall->setFeatures(QDockWidget::DockWidgetMovable |
+                                 QDockWidget::DockWidgetFloatable);
+    m_dockWaterfall->setWidget(m_waterfall);
+    addDockWidget(Qt::TopDockWidgetArea, m_dockWaterfall);
 
     // RX display
-    auto* rxGroup  = new QGroupBox("Received");
-    auto* rxLayout = new QVBoxLayout(rxGroup);
-    m_rxDisplay = new RxDisplay(rxGroup);
+    m_rxDisplay = new RxDisplay(this);
     m_rxDisplay->setMinimumHeight(100);
-    rxLayout->addWidget(m_rxDisplay);
-    m_splitter->addWidget(rxGroup);
+    m_dockReceived = new QDockWidget("Received", this);
+    m_dockReceived->setObjectName("dockReceived");
+    m_dockReceived->setFeatures(QDockWidget::DockWidgetMovable |
+                                QDockWidget::DockWidgetFloatable);
+    m_dockReceived->setWidget(m_rxDisplay);
+    splitDockWidget(m_dockWaterfall, m_dockReceived, Qt::Vertical);
 
     // Log panel
     m_logPanel = new LogPanel;
     m_logPanel->setMinimumHeight(120);
-    m_splitter->addWidget(m_logPanel);
+    m_dockLog = new QDockWidget("Log", this);
+    m_dockLog->setObjectName("dockLog");
+    m_dockLog->setFeatures(QDockWidget::DockWidgetMovable |
+                           QDockWidget::DockWidgetFloatable);
+    m_dockLog->setWidget(m_logPanel);
+    splitDockWidget(m_dockReceived, m_dockLog, Qt::Vertical);
 
-    // ── Bottom resizable container — added as 4th splitter widget ───────────
-    // LevelPanel (fixed) | MacroPanel 6×3 grid + TX textarea (expanding)
-    auto* bottomContainer = new QWidget(central);
-    bottomContainer->setSizePolicy(
-        QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // Level meter — its own dock now (was bundled with macros/TX)
+    m_levelPanel = new LevelPanel(this);
+    m_dockLevels = new QDockWidget("Levels", this);
+    m_dockLevels->setObjectName("dockLevels");
+    m_dockLevels->setFeatures(QDockWidget::DockWidgetMovable |
+                              QDockWidget::DockWidgetFloatable);
+    m_dockLevels->setWidget(m_levelPanel);
+    splitDockWidget(m_dockLog, m_dockLevels, Qt::Vertical);
 
-    auto* bottomHLayout = new QHBoxLayout(bottomContainer);
-    bottomHLayout->setContentsMargins(0, 0, 0, 0);
-    bottomHLayout->setSpacing(0);
-
-    // Left: LevelPanel — fixed size, unchanged
-    m_levelPanel = new LevelPanel(bottomContainer);
-    bottomHLayout->addWidget(m_levelPanel, 0);
-
-    // Right: macro grid above TX textarea
-    auto* rightSection = new QWidget(bottomContainer);
-    rightSection->setSizePolicy(
-        QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    auto* rightLayout = new QVBoxLayout(rightSection);
-    rightLayout->setContentsMargins(4, 4, 4, 4);
-    rightLayout->setSpacing(4);
-
-    m_macroPanel = new MacroPanel(rightSection);
-    m_macroPanel->setSizePolicy(
-        QSizePolicy::Expanding, QSizePolicy::Preferred);
-    rightLayout->addWidget(m_macroPanel, 0);
-
-    // TX textarea section
-    auto* txContainer = new QWidget(rightSection);
+    // Transmit dock — Macro Panel back above the TX input, one container
+    // (per operator request, back from being its own separate dock).
+    auto* txContainer = new QWidget(this);
     txContainer->setSizePolicy(
         QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    auto* txLayout = new QVBoxLayout(txContainer);
+    auto* txOuterLayout = new QVBoxLayout(txContainer);
+    txOuterLayout->setContentsMargins(4, 4, 4, 4);
+    txOuterLayout->setSpacing(4);
+
+    m_macroPanel = new MacroPanel(txContainer);
+    m_macroPanel->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Preferred);
+    txOuterLayout->addWidget(m_macroPanel, 0);
+
+    auto* txLayout = new QVBoxLayout;
     txLayout->setContentsMargins(0, 0, 0, 0);
     txLayout->setSpacing(4);
+    txOuterLayout->addLayout(txLayout, 1);
 
     auto* txTopRow = new QHBoxLayout;
     auto* txLabel  = new QLabel("Transmit", txContainer);
@@ -389,76 +437,47 @@ void MainWindow::setupUi() {
     txBtnRow->addWidget(m_txButton);
     txLayout->addLayout(txBtnRow);
 
-    rightLayout->addWidget(txContainer, 1);
-    bottomHLayout->addWidget(rightSection, 1);
+    m_dockTransmit = new QDockWidget("Transmit", this);
+    m_dockTransmit->setObjectName("dockTransmit");
+    m_dockTransmit->setFeatures(QDockWidget::DockWidgetMovable |
+                                QDockWidget::DockWidgetFloatable);
+    m_dockTransmit->setWidget(txContainer);
+    splitDockWidget(m_dockLevels, m_dockTransmit, Qt::Horizontal);
 
-    // Add all four widgets to the vertical splitter
-    m_splitter->addWidget(bottomContainer);
+    // Status bar — fixed, pinned below the dock area via a non-movable
+    // toolbar (same reasoning as m_topBar above). Frequency/mode/squelch/
+    // rig/RX moved up to m_topBar (per operator request) — only the
+    // free-text status message stays down here.
+    m_bottomBar = new QToolBar("Status", this);
+    m_bottomBar->setObjectName("bottomBar");
+    m_bottomBar->setMovable(false);
+    m_bottomBar->setFloatable(false);
+    m_bottomBar->toggleViewAction()->setVisible(false);
 
-    m_splitter->setStretchFactor(0, 2);  // waterfall
-    m_splitter->setStretchFactor(1, 3);  // RX display
-    m_splitter->setStretchFactor(2, 2);  // log panel
-    m_splitter->setStretchFactor(3, 2);  // bottom container
+    m_statusLabel = new QLabel("Ready", m_bottomBar);
+    m_bottomBar->addWidget(m_statusLabel);
+    addToolBar(Qt::BottomToolBarArea, m_bottomBar);
 
-    mainLayout->addWidget(m_splitter, 1);
-
-    // Status bar — fixed
-    auto* statusBar    = new QWidget(central);
-    auto* statusLayout = new QHBoxLayout(statusBar);
-    statusLayout->setContentsMargins(0, 0, 0, 0);
-    statusLayout->setSpacing(8);
-
-    m_freqControl = new FrequencyControl(statusBar);
-    statusLayout->addWidget(m_freqControl);
-
-    m_modeCombo = new QComboBox(statusBar);
-    m_modeCombo->addItem("MFSK-16", static_cast<int>(HavenFSK::ModemMode::Mfsk16));
-    m_modeCombo->addItem("PSK31",   static_cast<int>(HavenFSK::ModemMode::Psk31));
-    m_modeCombo->setToolTip("Operating mode");
-    statusLayout->addWidget(m_modeCombo);
-
-    statusLayout->addWidget(new QLabel("Squelch:"));
-    m_squelchSpin = new QDoubleSpinBox(statusBar);
-    m_squelchSpin->setRange(0.0, 1.0);
-    m_squelchSpin->setSingleStep(0.05);
-    m_squelchSpin->setDecimals(2);
-    m_squelchSpin->setToolTip(
-        "Minimum decode confidence to display a character (0 = off).\n"
-        "Only affects modes with a confidence-based squelch (PSK31); "
-        "has no effect on MFSK, which uses CRC/FEC instead.\n"
-        "Raise this if noise is decoding as garbage text; lower it "
-        "(or set to 0) if real signal isn't showing up.");
-    statusLayout->addWidget(m_squelchSpin);
-
-    m_rigLabel = new QLabel("No rig");
-    m_rigLabel->setStyleSheet("color: gray;");
-    statusLayout->addWidget(m_rigLabel);
-
-    statusLayout->addWidget(new QLabel("RX:"));
-    m_rxLevel = new QProgressBar(statusBar);
-    m_rxLevel->setRange(0, 100);
-    m_rxLevel->setValue(0);
-    m_rxLevel->setMaximumWidth(120);
-    m_rxLevel->setTextVisible(false);
-    statusLayout->addWidget(m_rxLevel);
-
-    statusLayout->addStretch();
-
-    m_statusLabel = new QLabel("Ready");
-    statusLayout->addWidget(m_statusLabel);
-
-    mainLayout->addWidget(statusBar);
-
-    // Restore splitter state (key v4 matches the 4-widget layout)
+    // Restore dock layout (replaces the old splitter-state mechanism —
+    // ui/splitterState4 is no longer written or read). The
+    // splitDockWidget() calls above already establish a sensible default
+    // arrangement resembling the pre-dock layout, so restoreState() only
+    // needs to run when the operator has actually rearranged something.
     QSettings s;
-    QByteArray splitterState = s.value("ui/splitterState4").toByteArray();
-    if (!splitterState.isEmpty()) {
-        m_splitter->restoreState(splitterState);
+    QByteArray dockState = s.value("ui/dockState1").toByteArray();
+    if (!dockState.isEmpty()) {
+        restoreState(dockState);
     } else {
-        // First run with this layout: set explicit initial sizes so the
-        // bottom container (constrained by LevelPanel ~340px fixed height)
-        // gets enough room rather than being crushed by stretch-factor math.
-        m_splitter->setSizes({120, 180, 140, 380});
+        // Qt's dock layout occasionally leaves one or more of these
+        // floating on first show when splitDockWidget() is called during
+        // construction, before the window has ever been shown/laid out —
+        // observed after reworking the default arrangement above. Force
+        // them back into the tiled layout the splits above just built.
+        m_dockWaterfall->setFloating(false);
+        m_dockReceived->setFloating(false);
+        m_dockLog->setFloating(false);
+        m_dockLevels->setFloating(false);
+        m_dockTransmit->setFloating(false);
     }
 }
 

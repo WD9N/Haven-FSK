@@ -278,7 +278,26 @@ public:
     explicit LevelPanel(QWidget* parent = nullptr) : QFrame(parent) {
         setFrameStyle(QFrame::NoFrame);
         setStyleSheet("background: #1a1a1a; border-right: 1px solid #2a2a2a;");
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        // Was QSizePolicy::Fixed on both axes — fine in its old spot in a
+        // plain QHBoxLayout (never manually resized there), but inside a
+        // dock area a Fixed policy actively fights manual resize: Qt's
+        // dock layout keeps trying to snap it back to sizeHint(), which
+        // looks exactly like "resizing doesn't stick" to the operator.
+        // Maximum on both axes, not Preferred — Preferred lets the dock
+        // area grow this *past* its natural size, and since nothing inside
+        // stretches to fill that (this is a compact meter strip, not a
+        // text/graphics view), extra space just spreads the two
+        // ChannelStrips apart internally instead of showing as a harmless
+        // margin. This dock ends up sharing its column's height with the
+        // combined Macros+Transmit stack below it (they're docked as
+        // siblings), which is much taller than the meters need — so the
+        // vertical axis needs the same fix as horizontal, confirmed by two
+        // separate screenshots showing spread-out/duplicated-looking
+        // labels each time only one axis was constrained. Maximum means
+        // "sizeHint() is the upper bound, shrinking is fine" — narrows on
+        // manual resize like the operator wants, without ever stretching
+        // past its content in either direction.
+        setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Maximum);
 
         auto* hl = new QHBoxLayout(this);
         hl->setContentsMargins(8, 8, 8, 8);
