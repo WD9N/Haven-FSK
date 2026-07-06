@@ -9,19 +9,67 @@
 #include <QLabel>
 #include <QSerialPortInfo>
 #include <QCompleter>
+#include <QScrollArea>
+#include <QScreen>
+#include <QGuiApplication>
+#include <algorithm>
 
 RadioConfigDialog::RadioConfigDialog(QWidget* parent)
     : QDialog(parent)
 {
     setWindowTitle("Radio Control");
-    setMinimumWidth(440);
+    // A bit wider than the content's natural minimum: when a vertical
+    // scrollbar appears (switching to a taller method's group after the
+    // dialog is already open, e.g. Direct/Hamlib), it steals ~20px from
+    // the viewport -- without this margin that clipped the Refresh/Close
+    // buttons at the right edge (found by actually switching methods and
+    // screenshotting, not assumed).
+    setMinimumWidth(470);
     setModal(true);
     setupUi();
     loadSettings();
+
+    // Cap the dialog to the screen's available height so it can never
+    // land taller than the display (small/laptop screens, or Windows
+    // display scaling, could otherwise push the bottom -- Connect/Save/
+    // Close -- off-screen with no way to reach it). onMethodChanged()
+    // (called from loadSettings() above) already hid the two inactive
+    // connection-method groups, so m_scrollContent->sizeHint() here
+    // reflects only the fields actually relevant to the saved method --
+    // the common case fits on-screen with no scrolling needed at all.
+    // Note: this dialog's OWN sizeHint() can't be used for this --
+    // QScrollArea deliberately does not propagate its content widget's
+    // full size demand upward, so it comes back small/arbitrary once
+    // setupUi() has wrapped everything in one.
+    QScreen* screen = this->screen();
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    int naturalHeight = m_scrollContent->sizeHint().height() + 40; // scroll/dialog chrome
+    if (screen) {
+        int maxHeight = static_cast<int>(screen->availableGeometry().height() * 0.9);
+        setMaximumHeight(maxHeight);
+        resize(width(), std::min(naturalHeight, maxHeight));
+    } else {
+        resize(width(), naturalHeight);
+    }
 }
 
 void RadioConfigDialog::setupUi() {
-    auto* layout = new QVBoxLayout(this);
+    auto* outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    // Left at the default (AsNeeded) rather than forced off: the width
+    // margin above covers the normal case, but if some future field
+    // combination is still too wide, scrolling beats silently clipping
+    // controls off the visible edge.
+    outerLayout->addWidget(scrollArea);
+
+    auto* content = new QWidget;
+    m_scrollContent = content;
+    scrollArea->setWidget(content);
+    auto* layout = new QVBoxLayout(content);
 
     // Method selector
     auto* methodGroup  = new QGroupBox("Radio Control Method");
@@ -314,9 +362,13 @@ void RadioConfigDialog::setConnected(bool connected) {
 }
 
 void RadioConfigDialog::onMethodChanged() {
-    m_rigctldGroup->setEnabled(m_radioRigctld->isChecked());
-    m_tciGroup->setEnabled(m_radioTCI->isChecked());
-    m_hamlibGroup->setEnabled(m_radioHamlib->isChecked());
+    // Hidden, not just disabled -- only one method's settings are ever
+    // relevant at a time, and hiding the other two reclaims real
+    // vertical space (see the constructor's screen-height cap: this is
+    // what keeps the dialog from needing to scroll in the common case).
+    m_rigctldGroup->setVisible(m_radioRigctld->isChecked());
+    m_tciGroup->setVisible(m_radioTCI->isChecked());
+    m_hamlibGroup->setVisible(m_radioHamlib->isChecked());
 }
 
 void RadioConfigDialog::onConnect() {

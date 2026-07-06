@@ -77,5 +77,11 @@ private:
     QPushButton* m_disconnectBtn {nullptr};
     QLabel*      m_connectStatusLabel {nullptr};
 
+    // The QScrollArea's inner widget -- its sizeHint() (not the
+    // dialog's own, which QScrollArea deliberately decouples from
+    // content size) is what the constructor uses to size the dialog to
+    // its natural content height before clamping to the screen.
+    QWidget* m_scrollContent {nullptr};
+
     bool m_isConnected {false};
 };

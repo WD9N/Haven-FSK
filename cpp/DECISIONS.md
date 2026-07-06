@@ -3340,3 +3340,70 @@ containing the letters R/S to confirm no regression) before rebuilding.
 
 **Verification:** rebuild clean; self-tests pass (process reaches the main
 window).
+
+## ADR-123 — RadioConfigDialog no longer runs off-screen on shorter displays
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `RadioConfigDialog` (opened from the top-level "Radio" menu
+item) had five stacked `QGroupBox`es (method selector, rigctld, TCI,
+Hamlib, TX timing) always simultaneously present in one `QVBoxLayout`
+with no height constraint at all -- the three connection-method groups
+were only ever `setEnabled(false)`, never hidden, regardless of which
+method was actually selected. On a shorter/laptop display this pushed
+the bottom of the dialog (including Connect/Save/Close) off-screen with
+no way to reach it. Two changes:
+
+1. `onMethodChanged()` now calls `setVisible()` instead of `setEnabled()`
+   on the two inactive connection-method groups -- only one of
+   rigctld/TCI/Hamlib is ever relevant at a time, and hiding the other
+   two reclaims real vertical space rather than just greying it out.
+2. The dialog's content is wrapped in a `QScrollArea`, and the
+   constructor caps the window to 90% of `screen()->availableGeometry()`
+   height, sizing to the content's natural height (whichever method's
+   group is visible) up to that cap. Below the cap, the dialog simply
+   renders at its natural size with no scrolling; above it, the
+   `QScrollArea` takes over so the bottom (buttons) is always reachable
+   via scroll instead of clipped off-screen.
+
+**Why:** the operator reported not being able to fit the dialog on a
+laptop screen. `setVisible()` directly addresses "split into smaller
+sections" (the common case needs far less height once irrelevant method
+settings aren't taking up space at all), and the screen-height cap +
+scroll area directly addresses "size dynamically with the display" as a
+safety net for any display/DPI-scaling combination, current or future.
+
+**Non-obvious pitfall found while implementing:** once content lives
+inside a `QScrollArea`, the dialog's own `sizeHint()` no longer reflects
+the true content height -- `QScrollArea` deliberately does not propagate
+its viewport widget's full size demand upward, since decoupling from
+content size is the whole point of being scrollable. Sizing the dialog
+from `this->sizeHint()` after wrapping produced an arbitrary, too-small
+window that needed scrolling even when the screen had plenty of room.
+Fixed by sizing from the *inner content widget's* `sizeHint()` instead,
+kept via a new `m_scrollContent` member, queried after `loadSettings()`
+(so it reflects whichever method's group `onMethodChanged()` actually
+left visible).
+
+**Second pitfall, found by actually switching methods and
+screenshotting, not assumed:** live-switching to a taller method's group
+(e.g. Direct/Hamlib, which has the most fields) after the dialog was
+already sized for a shorter one (e.g. TCI) triggers a vertical
+scrollbar, which steals ~20px from the viewport width -- with the
+dialog's minimum width left at its original value and the horizontal
+scrollbar forced off, this silently clipped the Refresh and Close
+buttons at the right edge instead of showing them. Fixed by widening
+`setMinimumWidth` (440 → 470) to leave headroom for the scrollbar, and
+leaving the horizontal scrollbar policy at its default (`AsNeeded`)
+rather than forcing it off, as a fallback in case some future field
+combination is still too wide.
+
+**Verification:** rebuild clean, self-tests pass. Verified interactively
+via screenshot: dialog opens at 456×711 for TCI (the saved method),
+fully visible with no scrolling needed; switching live to Direct/Hamlib
+correctly hides the TCI group, shows the Hamlib group, and (after the
+width fix) shows Refresh/Save/Close fully un-clipped with a vertical
+scrollbar handling the extra height. Not yet verified: an actual small
+laptop display (this was tested via the screen-height-cap logic and a
+large-monitor multi-monitor setup, not a real small-screen device).
