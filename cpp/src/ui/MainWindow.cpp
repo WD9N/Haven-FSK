@@ -1050,6 +1050,11 @@ void MainWindow::onMessageReceived(const HavenFSK::RxMessage& msg) {
         msg.crcOk,
         msg.converged);
 
+    // Only feed confirmed-good decodes into the log entry -- a CRC/FEC
+    // failure's text may be corrupted and shouldn't seed field values.
+    if (msg.crcOk)
+        m_logPanel->autoPopulateFromMessage(msg.senderCallsign, msg.text);
+
     m_statusLabel->setText(
         QString("RX — CRC: %1  FEC: %2")
         .arg(msg.crcOk ? "OK" : "FAIL")

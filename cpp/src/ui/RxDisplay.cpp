@@ -155,17 +155,23 @@ QString RxDisplay::renderMessage(const QString& text,
                                   const QString& senderCallsign) const
 {
     // Regex for structured field tags: TAG:value
-    // The value is "anything, lazily, up to the next tag or end of string" —
-    // the lookahead assertion alone correctly bounds the match. An earlier
-    // version also excluded the individual letters N/Q/G/R/P/S/F from the
-    // value (a broken attempt at "don't match into the next tag name" —
-    // inside a character class, only a leading '^' negates; every '^'
-    // after that is a literal character to exclude, not a fresh negation).
-    // That silently truncated any value containing those very common
-    // letters, e.g. "Springfield" or "US-1234".
+    // Most values are "anything, lazily, up to the next tag or end of
+    // string" — the lookahead assertion alone correctly bounds the match.
+    // An earlier version also excluded the individual letters N/Q/G/R/P/S/F
+    // from the value (a broken attempt at "don't match into the next tag
+    // name" — inside a character class, only a leading '^' negates; every
+    // '^' after that is a literal character to exclude, not a fresh
+    // negation). That silently truncated any value containing those very
+    // common letters, e.g. "Springfield" or "US-1234".
+    // RS is different: the signal report is always exactly 2 characters,
+    // with no closing tag to bound it (it's typically the last field
+    // before a literal "K" over-prosign, e.g. "RS:52 K") — the generic
+    // lazy-to-next-tag rule would swallow that trailing "K" as part of
+    // the value. So RS gets its own fixed-width branch instead.
     static QRegularExpression tagRe(
-        "(NAME:|QTH:|GRID:|RS:|POTA:|SOTA:|FD:)"
-        "([^\\s].*?)(?=\\s+(?:NAME:|QTH:|GRID:|"
+        "RS:(?<rsval>\\S{1,2})"
+        "|(?<tag>NAME|QTH|GRID|POTA|SOTA|FD):"
+        "(?<val>[^\\s].*?)(?=\\s+(?:NAME:|QTH:|GRID:|"
         "RS:|POTA:|SOTA:|FD:)|$)",
         QRegularExpression::CaseInsensitiveOption);
 
@@ -174,15 +180,15 @@ QString RxDisplay::renderMessage(const QString& text,
 
     auto tagIt = tagRe.globalMatch(text.toUpper());
     while (tagIt.hasNext()) {
-        auto match  = tagIt.next();
-        QString tag = match.captured(1).chopped(1).toLower();  // e.g. "name"
-        QString val = match.captured(2).trimmed();
-        if (val.isEmpty()) continue;
+        auto match = tagIt.next();
+        QString rsVal = match.captured("rsval");
+        QString tag   = rsVal.isEmpty() ? match.captured("tag").toLower() : "rs";
+        QString val   = rsVal.isEmpty() ? match.captured("val").trimmed() : rsVal;
+        if (tag.isEmpty() || val.isEmpty()) continue;
 
         QString linkHtml = QString(
             "<span style='color:gray'>%1:</span>%2")
-            .arg(match.captured(1).chopped(1),
-                 makeLink(tag, val, val));
+            .arg(tag.toUpper(), makeLink(tag, val, val));
         replacements.append({match.capturedStart(),
                              match.capturedLength(),
                              linkHtml});

@@ -35,6 +35,17 @@ public:
     void setFrequency(uint64_t hz);
     void refresh();
 
+    // Called on every fully-decoded RX message to reduce manual field
+    // entry. Only fills fields the operator hasn't already typed into
+    // (never clobbers a manual edit mid-QSO). If the message is from a
+    // different station than what's currently entered, it's ignored
+    // unless the message text addresses this operator's own callsign
+    // directly, in which case the stale entry is cleared and repopulated
+    // fresh -- so an abandoned/failed contact never blocks logging the
+    // next one.
+    void autoPopulateFromMessage(const QString& senderCallsign,
+                                  const QString& text);
+
 signals:
     void contactLogged(const QVariantMap& fields);
     void contactUpdated(const QVariantMap& fields);

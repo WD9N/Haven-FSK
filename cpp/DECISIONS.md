@@ -3236,3 +3236,107 @@ request, no behavioral change).
 screenshot for default arrangement, panel bundling, and the floating-dock
 fix; drag/resize/float/restart-persistence verified interactively by the
 operator (confirmed working after the `QSizePolicy` fix above).
+
+## ADR-120 — LogPanel's Parks/SOTA entry fields no longer hidden based on the operator's own Settings
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `LogPanel::updateFieldVisibility()` previously hid the Parks
+and SOTA entry fields entirely whenever the *local* operator had no POTA
+reference (`StationInfo::potaRefs`) or SOTA reference (`StationInfo::sotaRef`)
+configured in Settings, in addition to hiding them during Field Day mode.
+That settings-based gating is removed — Parks and SOTA fields are now shown
+whenever Field Day mode is off, full stop.
+
+**Why:** the fields being hidden was tied to whether *I* am activating a
+park/summit, not whether the contact I'm logging is. A POTA/SOTA *hunter*
+— someone chasing activators without activating anything themselves — has
+no ref configured in Settings, yet still needs to log the reference the
+*other* station gave. The old logic made that impossible without first
+lying to Settings about operating an activation. General principle
+going forward: field visibility may depend on operating mode (Field Day
+on/off), never on whether my own station happens to have a value configured
+for that field.
+
+**Verification:** rebuild clean, self-tests pass (process reaches the main
+window, which only happens after `runFecSelfTest`/`runFrameSelfTest`/
+`runAudioSelfTest` all return true in a Debug build).
+
+## ADR-121 — RS-Sent made editable; decoded messages auto-populate the Log entry fields
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Two related logging-automation changes:
+
+1. `LogPanel`'s RS-Sent field (`m_rsSent`) is no longer `setReadOnly(true)`.
+   It's still auto-filled from the measured SNR when a callsign link is
+   clicked (`MainWindow::onElementClicked` → `computeRS()` →
+   `setRsSent()`), but the operator can now type over it directly.
+2. New `LogPanel::autoPopulateFromMessage(senderCallsign, text)`, called
+   from `MainWindow::onMessageReceived()` for every message that passes
+   CRC. It fills the same `NAME:`/`QTH:`/`GRID:`/`RS:`/`POTA:`/`SOTA:`/`FD:`
+   tags `RxDisplay::renderMessage()` already recognizes for clickable
+   links, but directly into the log entry without requiring the operator
+   to click each one.
+
+   Two safety rules, both driven by an operator complaint scenario ("a QSO
+   in progress shouldn't get wiped by someone else's transmission, but a
+   dead/abandoned contact shouldn't block logging the next one either"):
+   - **Never overwrite a field the operator already typed into** — only
+     empty fields get auto-filled. POTA is separately merge-safe already
+     (see `populateField()`).
+   - **Ignore messages that aren't part of my exchange.** A decoded
+     message only touches the entry if its sender matches whatever
+     callsign is already entered (continuing the same contact), or the
+     message text contains my own callsign as a whole word (someone
+     addressing me directly). An unrelated station's traffic — someone
+     else's QSO, a general CQ not meant for me — never touches the entry,
+     whether it's currently blank or mid-QSO. If a *different* station
+     addresses me directly while a stale contact still occupies the entry,
+     the entry is cleared first, then populated fresh from the new message
+     — no manual Clear click needed to move on from an abandoned QSO.
+
+**Why:** the operator wants "always able to directly enter data in any
+field" (motivated RS-Sent's read-only removal) plus less manual field-
+clicking per contact — but blind auto-fill-on-every-decode risks either
+interrupting/overwriting an in-progress entry, or (if gated too loosely)
+polluting a blank entry with unrelated band traffic. The
+same-sender-or-addressed-to-me test is the same signal a human operator
+already uses to judge "is this transmission part of my QSO."
+
+**Not done (deliberately out of scope this pass):** parsing bare callsign-
+like words out of message body text for auto-population — `msg.
+senderCallsign` (already parsed upstream in `DspPipeline`) is used
+directly instead, since duplicating that extraction here risked
+disagreeing with the upstream parse.
+
+**Verification:** rebuild clean; self-tests pass (process reaches the main
+window). Interactive over-the-air verification of the auto-populate
+same-sender / addressed-to-me / unrelated-station branches still pending —
+flag if real-world behavior doesn't match.
+
+## ADR-122 — RS: tag value capped at 2 characters instead of running to the next tag or end of string
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** In both `RxDisplay::renderMessage()`'s tag regex and
+`LogPanel.cpp`'s `parseStructuredTags()` duplicate (see ADR-121), the
+`RS:` tag now has its own dedicated branch, `RS:(?<rsval>\S{1,2})`,
+capturing at most 2 non-space characters. Every other tag
+(NAME/QTH/GRID/POTA/SOTA/FD) keeps the original lazy-to-next-tag-or-end
+rule, since those legitimately vary in length.
+
+**Why:** live testing found `RS:` swallowing trailing text it shouldn't —
+a report is always exactly 2 characters, but it's typically the last
+field before a literal "K" over-prosign (e.g. `"...RS:52 K"`), and "K"
+isn't a recognized tag boundary, so the generic rule ran right through
+the space and captured "52 K" as one value. Confirmed with a standalone
+regex simulation against several shapes (trailing "K" with/without a
+space, a blank report, a value at end of string, and a NAME value
+containing the letters R/S to confirm no regression) before rebuilding.
+
+**Verification:** rebuild clean; self-tests pass (process reaches the main
+window).

@@ -8,6 +8,8 @@
 #include <QFont>
 #include <QSizePolicy>
 #include <QRegularExpression>
+#include <QPair>
+#include <QList>
 
 // Auto-correct POTA ref to canonical XX-NNNN format
 static QString fixPotaRef(const QString& raw) {
@@ -18,6 +20,38 @@ static QString fixPotaRef(const QString& raw) {
     auto m = noHyphen.match(s);
     if (m.hasMatch()) return m.captured(1) + "-" + m.captured(2);
     return s;
+}
+
+// Structured field tags recognized in decoded message text -- kept in sync
+// with RxDisplay::renderMessage's tag set (NAME/QTH/GRID/RS/POTA/SOTA/FD).
+// Duplicated rather than shared across panels: RxDisplay's copy exists to
+// build clickable HTML with position info this caller doesn't need, and
+// each panel owning its own small parsing helper avoids a UI-panel-to-
+// UI-panel dependency for one regex.
+static QList<QPair<QString, QString>> parseStructuredTags(const QString& text) {
+    // RS gets its own fixed-2-character branch, not the generic
+    // lazy-to-next-tag rule -- the report has no closing tag to bound it
+    // (it's typically followed by a literal "K" over-prosign, e.g.
+    // "RS:52 K"), so the generic rule would swallow the "K" as part of
+    // the value. Kept in sync with RxDisplay::renderMessage's copy.
+    static QRegularExpression tagRe(
+        "RS:(?<rsval>\\S{1,2})"
+        "|(?<tag>NAME|QTH|GRID|POTA|SOTA|FD):"
+        "(?<val>[^\\s].*?)(?=\\s+(?:NAME:|QTH:|GRID:|"
+        "RS:|POTA:|SOTA:|FD:)|$)",
+        QRegularExpression::CaseInsensitiveOption);
+
+    QList<QPair<QString, QString>> result;
+    auto it = tagRe.globalMatch(text.toUpper());
+    while (it.hasNext()) {
+        auto m = it.next();
+        QString rsVal = m.captured("rsval");
+        QString tag   = rsVal.isEmpty() ? m.captured("tag").toLower() : "rs";
+        QString val   = rsVal.isEmpty() ? m.captured("val").trimmed() : rsVal;
+        if (!tag.isEmpty() && !val.isEmpty())
+            result.append({tag, val});
+    }
+    return result;
 }
 
 LogPanel::LogPanel(QWidget* parent)
@@ -93,11 +127,8 @@ void LogPanel::setupEntryStrip() {
     m_rsSent->setFixedWidth(38);
     m_rsSent->setFont(mono);
     m_rsSent->setPlaceholderText("--");
-    m_rsSent->setReadOnly(true);
-    m_rsSent->setToolTip("Auto-computed from received signal (read-only)");
-    m_rsSent->setStyleSheet(
-        "QLineEdit { background: #1a1a1a; color: #888; "
-        "border: 1px solid #2a2a2a; }");
+    m_rsSent->setToolTip("Auto-computed from received signal -- edit to override");
+    forceUpper(m_rsSent);
     row1->addWidget(m_rsSent);
 
     row1->addSpacing(8);
@@ -231,10 +262,11 @@ void LogPanel::refresh() {
 }
 
 void LogPanel::updateFieldVisibility() {
-    HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
-
-    bool showPota    = !m_fdMode && !info.potaRefs.isEmpty();
-    bool showSota    = !m_fdMode && !info.sotaRef.isEmpty();
+    // Parks/SOTA visibility must not depend on whether *my* station has a
+    // POTA/SOTA reference configured in Settings — a POTA/SOTA hunter with
+    // no activation of their own still needs to log the refs *they* work.
+    bool showPota    = !m_fdMode;
+    bool showSota    = !m_fdMode;
     bool showGeneral = !m_fdMode;
 
     m_parksLabel->setVisible(showPota);
@@ -286,6 +318,58 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
     else if (scheme == "name")  m_theirName->setText(value);
     else if (scheme == "qth")   m_theirQth->setText(value);
     else if (scheme == "fd")    m_fdExchange->setText(value.toUpper());
+}
+
+void LogPanel::autoPopulateFromMessage(const QString& senderCallsign,
+                                        const QString& text)
+{
+    QString sender  = senderCallsign.trimmed().toUpper();
+    QString current = m_callEntry->text().trimmed().toUpper();
+
+    bool sameContact = !current.isEmpty() && sender == current;
+
+    QString myCall = HavenFSK::loadStationInfo().callsign.trimmed().toUpper();
+    bool addressedToMe = false;
+    if (!myCall.isEmpty()) {
+        QRegularExpression re("\\b" + QRegularExpression::escape(myCall) + "\\b");
+        addressedToMe = re.match(text.toUpper()).hasMatch();
+    }
+
+    if (!sameContact) {
+        // A different (or no) station than what's currently entered.
+        // Only take over the entry if this message actually addresses my
+        // own callsign -- an unrelated station's transmission (someone
+        // else's QSO, a general CQ) must never disturb an in-progress
+        // entry, or seed a blank one with traffic that isn't mine.
+        if (!addressedToMe) return;
+        if (!current.isEmpty()) onClear();  // stale/abandoned contact -- start fresh
+    }
+
+    if (!sender.isEmpty())
+        m_callEntry->setText(sender);
+
+    for (const auto& tag : parseStructuredTags(text)) {
+        const QString& scheme = tag.first;
+        const QString& value  = tag.second;
+
+        if (scheme == "pota") {
+            populateField("pota", value);  // already merge-safe, never overwrites
+            continue;
+        }
+
+        QLineEdit* target = nullptr;
+        if      (scheme == "name") target = m_theirName;
+        else if (scheme == "qth")  target = m_theirQth;
+        else if (scheme == "grid") target = m_theirGrid;
+        else if (scheme == "rs")   target = m_rsReceived;
+        else if (scheme == "sota") target = m_theirSota;
+        else if (scheme == "fd")   target = m_fdExchange;
+
+        // Only fill fields the operator hasn't already typed into --
+        // auto-populate must never clobber a manual edit mid-QSO.
+        if (target && target->text().trimmed().isEmpty())
+            target->setText(value.toUpper());
+    }
 }
 
 void LogPanel::setRsSent(const QString& rs)    { m_rsSent->setText(rs); }
