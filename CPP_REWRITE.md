@@ -1,5 +1,60 @@
 # HAVEN-FSK C++ Rewrite
 
+## Current Status — June 2026
+
+**Branch:** cpp-rewrite
+**Version:** v0.2.0-beta (pending on-air QSO verification)
+**Build:** Clean, zero errors, all self-tests passing
+**Audio:** Clean CPFSK tones verified in Audacity — ready for air
+
+### Completed Phases
+- Phase 1: Project infrastructure, CMakeLists.txt, Constants.h
+- Phase 2: DSP — Modulator (CPFSK), Demodulator, DCD, Preamble
+- Phase 3A: LDPC(192,96) FEC encoder and BP decoder
+- Phase 3B: Frame assembly, parsing, CRC-16
+- Phase 4: AudioEngine — Qt6 QMediaPlayer TX, QAudioSource RX
+- Phase 5A: DspPipeline — RX state machine, TX path
+- Phase 5B: Radio control — RigctldClient, TCIClient, PTTManager
+- Phase 5C: Settings dialog, StationInfoWidget, FCC guard
+- Phase 5D: RxDisplay, LogPanel, MacroPanel, RS cache, Waterfall
+- Phase 6: SQLite log, LogManager, ADIF export, ExportDialog
+- Phase 7: WaterfallWidget, AFC digital correction, FrequencyControl
+- Phase 8: UI fixes, PTT wiring, CPFSK modulator, audio engine
+
+### Key Technical Decisions (ADR-001 through ADR-076)
+Full architecture decision log in DECISIONS.md
+
+### Pending On-Air Verification
+- RX decode of real HAVEN-FSK signals
+- Click-to-populate from decoded messages
+- AFC locking and tracking on real signals
+- Full QSO logging from live contact
+- TCI frequency set bidirectional (implemented, needs air test)
+
+### Known Remaining Work
+- Move icon files to resources/, update haven_fsk.qrc
+- Restore WIN32_EXECUTABLE in CMakeLists.txt
+- PHASE8B: Windows installer (NSIS), Linux .desktop, Pi .deb
+- Tag v0.2.0-beta after on-air verification
+
+### Audio Architecture Note
+Qt6.11 on Windows uses FFmpeg multimedia backend regardless of
+backend preference settings. QAudioSink IdleState fires before
+hardware playback completes in the FFmpeg backend. TX uses
+QMediaPlayer which correctly signals StoppedState on completion.
+RX uses QAudioSource which works correctly for streaming input.
+
+### Modulator Architecture Note
+HAVEN-FSK uses Continuous Phase FSK (CPFSK). The phase accumulator
+carries continuously across all symbol boundaries — preamble, header,
+CRC, and payload are one uninterrupted phase-continuous signal. Raised
+cosine amplitude ramps were removed as they caused amplitude modulation
+artifacts (pulsing at 31.25 Hz) with CPFSK. The demodulator uses FFT
+energy detection which is phase-independent and unaffected by the
+modulator change.
+
+---
+
 ## Overview
 
 HAVEN-FSK is being rewritten from Python to C++ with Qt6. The Python version
@@ -115,17 +170,13 @@ src/
     Preamble.h/cpp
     FEC.h/cpp       — LDPC(192,96) encoder/decoder
     Frame.h/cpp     — frame assembly, CRC-16
-    DspPipeline.h/cpp — RX/TX orchestration
   audio/            — audio I/O (Qt6 Multimedia)
     AudioEngine.h/cpp
-    AudioSettings.h
   radio/            — radio control
     RadioInterface.h
-    RigctldClient.h/cpp — TCP to rigctld (Hamlib universal server)
-    TCIClient.h/cpp     — TCI WebSocket (Thetis/HPSDR)
-    HamlibClient.h/cpp  — direct Hamlib stub (future phase)
+    TCIClient.h/cpp — TCI WebSocket (Thetis/HPSDR)
+    HamlibClient.h/cpp
     PTTManager.h/cpp
-    RadioSettings.h
   ui/               — Qt6 user interface
     MainWindow.h/cpp
   log/              — contact logging, ADIF export
@@ -181,7 +232,7 @@ See `THIRD_PARTY_LICENSES.md` for full license texts.
 - build.bat for Windows one-click builds
 - Windows deployment (windeployqt)
 
-### Phase 2 — DSP Layer ✅ Complete
+### Phase 2 — DSP Layer 🔄 In Progress
 
 - KissFFT vendored into src/third_party/kissfft/
 - Modulator — tone table, raised cosine shaping, byte-to-symbol encoding
@@ -190,7 +241,7 @@ See `THIRD_PARTY_LICENSES.md` for full license texts.
 - DCD — band energy monitoring, 12 dB threshold, 4-chunk holdoff
 - Preamble — generation and correlation-based detection
 
-### Phase 3 — FEC and Framing ✅ Complete
+### Phase 3 — FEC and Framing
 
 - LDPC(192,96) encoder — Progressive Edge Growth matrix, systematic encoding
 - LDPC decoder — belief propagation, min-sum approximation, 200 iterations
@@ -198,40 +249,40 @@ See `THIRD_PARTY_LICENSES.md` for full license texts.
 - CRC-16/CCITT-FALSE
 - Frame parser — sync, header decode, CRC validation, FEC decode
 
-### Phase 4 — Audio Engine ✅ Complete
+### Phase 4 — Audio Engine
 
 - Qt6 QAudioSource / QAudioSink integration
 - Device enumeration and selection
-- Int16 PCM ↔ float32 conversion at DSP boundary
-- QSettings device persistence
+- RX audio callback → Demodulator pipeline
+- Modulator output → TX audio pipeline
+- Sample rate handling
 
-### Phase 5 — Radio Control and Pipeline ✅ Complete
+### Phase 5 — Radio Control
 
-- DspPipeline — RX state machine, TX path, DCD integration (5A)
-- TCI WebSocket client for Thetis/HPSDR (5B)
-- rigctld TCP client for all Hamlib-supported radios (5B)
-- PTTManager — three-tier backoff, 120-second watchdog (5B)
-- Basic operator UI — device selection, RX display, TX input (5A)
+- TCI WebSocket client (Thetis/HPSDR) — PTT, frequency readback
+- Hamlib/rigctld client — PTT, CAT control for conventional radios
+- PTT manager — VOX fallback, 120-second watchdog timer
+- DCD + backoff integration
 
-### Phase 5C — Full UI (In Progress)
+### Phase 6 — User Interface
 
-- Settings dialog (radio, audio, station information)
-- Macro buttons with `<TX>` auto-transmit tag
-- Click-to-populate from decoded RX messages
-- Station information panel
+- Main window layout
+- TX/RX text panels
+- Audio device selectors
 - Waterfall display
+- Signal level indicators
+- Station information bar (callsign, frequency, mode)
 
-### Phase 6 — Logging
+### Phase 7 — Logging
 
 - Contact log with timestamp, callsign, frequency, band
 - POTA/SOTA/Field Day logging fields
-- ADIF export (one file per park for POTA, general ADIF always)
-- Station info snapshot per QSO
+- ADIF export
 
-### Phase 7 — Testing and Release
+### Phase 8 — Testing and Release
 
 - Loopback tests (modulate → demodulate, verify round-trip)
-- On-air testing at 14.075 MHz DIGU
+- On-air testing
 - Performance benchmarking
 - Installer packaging (Windows NSIS, Linux AppImage, Pi .deb)
 
@@ -244,7 +295,8 @@ on that branch, not `main`.
 
 The Python implementation on `main` is the reference specification.
 If you find a discrepancy between the C++ behavior and the specification
-document, the specification is authoritative — not the Python code.
+document (`HAVEN-FSK_Specification.md`), the specification is authoritative —
+not the Python code.
 
 Pull requests should:
 - Build cleanly on at least one platform (Windows, Linux, or Pi)

@@ -1,0 +1,127 @@
+  HAVEN-FSK vs. Olivia MFSK 16/500 — Technical Comparison
+
+  All HAVEN-FSK figures below are pulled directly from HAVEN-FSK_Specification.md (rev. 2, cross-checked against the
+  current 0.3.0-beta source in src/dsp/) — not from memory. Where I found HAVEN-FSK's own architecture docs (CLAUDE.md)
+  disagree with the actual source, I used the source and flag the discrepancy at the end. Olivia facts are sourced from
+  Wikipedia, qsl.net, and general web search (linked at the bottom); where the sources didn't give an explicit number, I
+  derived it from a documented mechanism and say so — I did not find a published Olivia 16/500 bits/sec figure, so that
+  one number is a derivation, clearly marked.
+
+  1. Shared baseline (verified identical)
+
+  ┌────────────────────────┬──────────────────────────────┬──────────────────────────────┐
+  │       Parameter        │          HAVEN-FSK           │        Olivia 16/500         │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Tone count             │ 16                           │ 16                           │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Bandwidth              │ 500 Hz                       │ 500 Hz                       │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Tone spacing           │ 31.25 Hz                     │ 31.25 Hz (500/16)            │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Symbol/baud rate       │ 31.25 baud                   │ 31.25 baud                   │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Bits per raw symbol    │ 4 (log₂16)                   │ 4 (log₂16)                   │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Raw (pre-FEC) bit rate │ 125 bps                      │ 125 bps                      │
+  ├────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+  │ Detection              │ Non-coherent FFT tone-energy │ Non-coherent FFT tone-energy │
+  └────────────────────────┴──────────────────────────────┴──────────────────────────────┘
+
+  Both modes land on identical tone spacing, baud rate, and raw bit rate at 16 tones/500 Hz — this isn't coincidence,
+  it's the standard "tone spacing = baud rate" requirement for orthogonal non-coherent MFSK detection that both designs
+  follow. Everything downstream of this point diverges.
+
+  2. Bit-to-tone encoding
+
+  - HAVEN-FSK: the 4-bit nibble is Gray-coded before being mapped to a tone index (g = n XOR (n>>1)), applied uniformly
+  to header, CRC, and FEC-coded payload bits. This means the most likely detection error at low SNR — mistaking a tone
+  for its immediate frequency neighbor — degrades to exactly one bit error rather than a potentially multi-bit error, at
+  the raw-symbol level, before FEC even runs.
+  - Olivia: no Gray-coded tone mapping is described in the sources I checked. Olivia additionally scrambles the data
+  with a fixed pseudo-random sequence (0xE257E6D0291574EC, rotated per character) before the Walsh encoding step —
+  HAVEN-FSK does not scramble payload data at all.
+  - Olivia's resistance to single-symbol misdetection comes from a different place entirely: the outer Walsh-Hadamard
+  code's large codeword distance (see §4), not from how bits are assigned to tones.
+
+  3. Decoding / synchronization
+
+  - Both use soft-decision detection — neither commits to a hard per-symbol tone choice before handing values to the
+  outer FEC stage.
+  - HAVEN-FSK: fixed 16-symbol preamble (0,15,0,15,7,8,7,8,0,15,0,15,7,8,7,8), detected via soft correlation searched
+  across both timing and frequency offset. Current source-verified threshold: normalized score ≥ 0.45 (range
+  0.0625–1.0). Frequency acquisition searches ±~220 Hz; live AFC then tracks up to ±200 Hz (MfskModem::AFC_MAX_HZ,
+  confirmed in current source — note this diverges from this project's own CLAUDE.md, which still states ±75 Hz; the
+  source is authoritative, the doc is stale). Carrier detect (DCD) is a dedicated SNR comparison: 450–1050 Hz signal
+  band vs. 150–400 Hz noise-reference band, 12 dB threshold.
+  - Olivia: receiver auto-searches time and frequency offset for synchronization; documented frequency search range is
+  "normally ±100 Hz, up to ±500 Hz." The sources I consulted did not detail an explicit fixed preamble/sync-word
+  structure comparable to HAVEN-FSK's 16-symbol sequence — I can't make a direct architectural comparison there without
+  guessing, so I'm not making one.
+
+  4. Forward error correction — the core architectural difference
+
+  - HAVEN-FSK: LDPC(192,96), rate 1/2. Sparse Tanner graph (variable-node degree 3, check-node degree 6), built
+  deterministically via Progressive Edge Growth (seed 1234). Decoded with iterative belief propagation (min-sum
+  approximation, scale factor 0.75, up to 200 iterations), fed directly by the soft tone-energy values from the FFT.
+  - Olivia: an outer Walsh-Hadamard block code layered on top of the MFSK modulation. Each 7-bit ASCII character is
+  encoded as one of 64 possible 64-bit Walsh functions (rows of a Hadamard matrix); one bit-plane across a 64-symbol
+  block forms one such codeword. This is a maximum-distance code family — the 64 codewords are mutually orthogonal,
+  giving pairwise Hamming distance 32 — decoded via Fast Hadamard Transform. Its code rate is fixed at 7 message bits /
+  64 coded bits ≈ 0.109 (~1/9), independent of tone count.
+  - The theory-backed consequence: code rate is the first-order lever in channel coding — a lower rate spends more coded
+  bits per information bit, which is what buys tolerance to channel errors (this is a direct consequence of the
+  rate/capacity relationship in Shannon's channel coding theorem, not a HAVEN-FSK/Olivia-specific claim). Olivia's ~1/9
+  rate is roughly 4.5× lower than HAVEN-FSK's 1/2 rate. That means Olivia is spending far more of its bandwidth on
+  redundancy than HAVEN-FSK does — which is very likely why Olivia has an established weak-signal reputation, but it is
+  not by itself proof that HAVEN-FSK's LDPC underperforms at equivalent SNR: LDPC codes are well-established in coding
+  theory to approach the Shannon limit closely under iterative decoding, more efficiently per redundancy bit than a
+  fixed block code like Walsh-Hadamard. Which mode actually holds up better at a given real-world SNR is a question a
+  rate-normalized BER/SNR comparison would have to answer — I don't have that data for either implementation, so I'm not
+  asserting an answer.
+
+  5. Data rate
+
+  - HAVEN-FSK: 62.5 bps net, straight from the spec doc and consistent with 125 bps raw × 1/2 code rate.
+  - Olivia 16/500: I did not find a published bps figure for this specific configuration. Applying Olivia's own
+  documented block mechanism (64-symbol/2.048 s block, one Walsh-encoded character per available bit-plane) to 4
+  bits/symbol gives 4 character-planes per block → ≈1.95 char/s ≈ ~13.7 bps (7-bit ASCII). That derivation lines up with
+  an independently found approximate rating of "~20 WPM" for Olivia 16/500 (≈23 WPM by the same math, in the right
+  ballpark given rounding in both figures) — so I'm reasonably confident in it, but I want to be explicit that it's a
+  derivation cross-checked against an approximate figure, not a number I found published outright.
+  - Net result: at identical tone count, bandwidth, and baud rate, HAVEN-FSK's net throughput is roughly 4–5× Olivia
+  16/500's, entirely attributable to the FEC rate difference above — nothing about tone count, bandwidth, or baud rate
+  differs between them.
+
+  6. Burst-error / fading resilience structure
+
+  - Olivia: each single character's 64 coded bits are drawn one-bit-per-symbol across the entire 64-symbol/2.048 s block
+  by construction — spreading is intrinsic to how the Walsh vector is built, not an add-on step. A fade shorter than
+  the block duration hits only a scattered subset of one codeword's 64 bit positions.
+  - HAVEN-FSK: LDPC blocks are naturally sequential (192 coded bits transmitted in symbol order), so protocol v2 added a
+  dedicated row/column block interleaver spanning the entire multi-block payload specifically to spread burst errors
+  across blocks before LDPC decoding — this was a necessary addition, not inherent to the code the way Olivia's
+  spreading is inherent to its Walsh construction.
+
+  7. Framing model
+
+  - HAVEN-FSK: explicit framed messages. An unencoded 2-byte header (majority-voted from 3 repeated copies) discloses
+  NBLOCKS, so the receiver knows the exact expected symbol count and doesn't rely on carrier-drop timing to find
+  end-of-frame.
+  - Olivia: my sources didn't detail an explicit length-header/framing mechanism, and general ham-radio operating
+  convention treats Olivia as a continuous keyboard-to-keyboard streaming mode (closer to RTTY/PSK31 in that respect)
+  rather than discrete length-prefixed messages — I'm flagging this as based on general operating convention rather than
+  something I confirmed in the technical sources above, since the sources didn't address it directly.
+
+  Open items I won't guess at
+
+  - Whether Olivia's tone generation is continuous-phase (like HAVEN-FSK's CPMFSK) or resets phase per symbol — not
+  stated in sources consulted.
+  - Olivia's exact preamble/sync-word structure, if any — not detailed in sources consulted.
+  - Any officially published Olivia 16/500 bps figure — not found; §5's number is a derivation, not a citation.
+
+  Sources:
+  - Olivia MFSK - Wikipedia (https://en.wikipedia.org/wiki/Olivia_MFSK)
+  - Olivia MFSK Ver. (qsl.net) (https://www.qsl.net/aa3eu/oliviamixw.htm)
+  - Bandwidth settings FLDIGI Olivia 2000/16
+  (https://linuxham.yahoogroups.narkive.com/Ah7TV53l/bandwidth-settings-fldigi-olivia-2000-16)
+  - Olivia - Fldigi Users Manual (http://www.w1hkj.com/FldigiHelp/olivia_page.html)

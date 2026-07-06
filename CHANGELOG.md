@@ -219,7 +219,7 @@ replacing the Python/tkinter prototype. No Python dependency.
 - **Qt6::Sql (SQLite)** — persistent QSO log with WAL crash safety
 - **Qt6 WebSockets** — TCI 2.0 protocol client
 - **KissFFT** — waterfall FFT (2048-point, Hann window)
-- ADR log: 58 architecture decisions recorded in `cpp/DECISIONS.md`
+- ADR log: 58 architecture decisions recorded in `DECISIONS.md`
 
 ---
 

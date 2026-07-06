@@ -1,0 +1,51 @@
+Yes — I've reviewed the full repo (spec, Python reference, C++ rewrite, etc.). Haven-FSK is already a solid design: 16-tone MFSK in 500 Hz, LDPC(192,96) rate-1/2 FEC, CRC-16, and a reasonably long preamble. It targets a good balance of speed (~62 bps net) and robustness, outperforming Olivia 16/500 on paper in clean conditions.
+However, for weaker signals and noisy HF environments (multipath, fading, QRM, low SNR), there are several proven architectural and implementation improvements you can make. I'll prioritize them by impact/effort.
+High-Impact Improvements (Do These First)
+
+Stronger / Longer Preamble + Better Detection
+Current alternating 0/15 tones are good for AFC but can be vulnerable to timing slip.
+Add a second, more robust sync sequence (e.g., a known pseudo-random tone pattern after the current preamble) or repeat the preamble.
+Implement soft correlation (sum of normalized energies on expected tones) instead of hard decisions only. This gives much better detection threshold in noise.
+Add fine timing recovery right after detection (±1/8 to 1/4 symbol brute force or early-late gate). This is likely your current biggest decode blocker.
+
+Header Redundancy + Better Framing
+You're already planning header duplication — excellent. Go further: send the header 3 times (or with a simple repeat code) and use majority voting or best-CRC.
+Include a frame checksum (already have CRC) and a total length field that's robust.
+Consider a small interleaver across the header symbols to combat burst errors.
+
+Improve LDPC Usage & Decoding
+LDPC(192,96) is decent but modern codes (e.g., from WSJT-X or newer amateur modes) often use better-optimized matrices or layered decoding.
+Add multiple decoding iterations with early termination and soft-output feedback.
+Adaptive FEC: Optionally send higher redundancy (lower rate) frames for very weak signals, or allow the user to choose "Robust" vs "Fast" mode (like Olivia does).
+
+Interleaving
+One of the biggest missing pieces for HF fading/multipath. Even a modest block or convolutional interleaver (depth 4–8 symbols) spreads burst errors so LDPC can correct them better. MFSK16 and Olivia use this heavily with good results.
+
+
+Medium-Impact / Nice-to-Haves
+
+Better Soft Demodulation: Use log-likelihood ratios (LLRs) instead of raw energies for LDPC input. Account for per-tone noise estimates.
+Diversity / Repetition: For critical frames (CQs, callsigns), optionally repeat the entire payload 2× with interleaving.
+Improved AFC & Tracking: Extend beyond ±75 Hz and add slow phase tracking during the frame. Use known preamble tones for high-accuracy initial offset.
+Noise Blanker / Impulse Rejection in the demodulator (simple median filter or blank strong clicks before FFT).
+Variable Symbol Rate / Bandwidth Modes: Offer a slower, narrower "weak signal" variant (e.g., 8-tone or slower 16-tone) for extreme conditions, similar to Olivia's multiple configs.
+
+Lower-Impact but Helpful
+
+Longer Frames with More FEC for ragchew (trade latency for robustness).
+ARQ Option (selective repeat for file transfer, not conversational).
+Better Waterfall / SNR Estimation for auto RS reports and visual tuning aids.
+Doppler / Phase Tracking if targeting very weak long-path work.
+
+Trade-offs to Consider
+
+Speed vs Robustness: Every improvement in weak-signal performance (more interleaving, repetition, stronger codes) costs throughput or increases latency. Aim for configurable profiles ("Normal" vs "Weak Signal").
+Complexity: Keep the core simple for maintainability — the C++ rewrite is already a big step forward.
+Compatibility: Since the spec is public, radical changes would break interoperability with the Python version. Consider versioning the mode (e.g., Haven-FSK v1 vs v2 robust).
+
+Current Weak Spots (from code/debugs you've shared):
+
+Timing synchronization / DCD false triggers.
+Single header vulnerability.
+Lack of interleaving.
+Hard decisions in detection.

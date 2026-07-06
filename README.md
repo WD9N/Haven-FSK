@@ -9,14 +9,18 @@ Emission designator: **500HJ2D** | Bandwidth: **500 Hz** | Net rate: **~62 bps**
 
 HAVEN-FSK is an HF digital mode for free-text conversational communication.
 It delivers ~62 bps net throughput in 500 Hz bandwidth with LDPC forward
-error correction — 50% faster than Olivia 16/500 and twice as fast as
-PSK31, while matching Olivia's occupied bandwidth exactly.
+error correction — roughly 4.5x faster than Olivia 16/500 and twice as fast
+as PSK31, while matching Olivia's occupied bandwidth exactly. That speed
+trades away some of Olivia's weak-signal margin: Olivia's (64,7)
+Walsh-Hadamard code spends far more bandwidth on redundancy (~1/9 code
+rate vs. HAVEN-FSK's 1/2), which is why it can still decode several dB
+deeper into the noise at the same transmit power.
 
 | Mode          | Net bps      | ~WPM        | Weak Signal | Free Text | FEC |
 |---------------|--------------|-------------|-------------|-----------|-----|
 | FT8           | ~10 bps      | ~15 WPM     | Excellent   | No        | Yes |
 | PSK31         | ~31 bps      | ~47 WPM     | Poor        | Yes       | No  |
-| Olivia 16/500 | ~42 bps      | ~63 WPM     | Good        | Yes       | Yes |
+| Olivia 16/500 | ~14 bps      | ~20 WPM     | Excellent   | Yes       | Yes |
 | **HAVEN-FSK** | **~62 bps**  | **~94 WPM** | **Good**    | **Yes**   | **Yes** |
 
 ---
@@ -72,7 +76,7 @@ cmake .. -G Ninja -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/mingw_64
 cmake --build . --config Release
 ```
 
-Qt 6.11 with MinGW 13 is required. See `cpp/DECISIONS.md` for build notes.
+Qt 6.11 with MinGW 13 is required. See `DECISIONS.md` for build notes.
 
 **First-time setup:**
 1. Launch `HavenFSK.exe`

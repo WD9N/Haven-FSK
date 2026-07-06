@@ -1,17 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-
-# Virtual environment
-venv/
-
-# Auto-generated cache files
-ldpc_matrix_cache.npz
-
-# Personal config — contains local device indices and callsign
-haven_fsk_config.json
-
 # Test/scratch WAV files
 *.wav
 
@@ -20,27 +6,20 @@ haven_fsk_config.json
 
 # Session logs and exported ADIF (operator data, not source)
 Logs/
-haven_fsk_log_*.json
-haven_fsk_session_*.json
 
 # Development planning documents (not part of the release)
 CLAUDE_CODE_*.md
 
-# Generated launcher — contains machine-specific paths
-Launch HAVEN-FSK.bat
-launch_haven_fsk.sh
-launch_haven_fsk.command
-
 # C++ build artifacts
-cpp/build/
-cpp/**/*.o
-cpp/**/*.obj
+build/
+**/*.o
+**/*.obj
 *.exe
 *.dll
 *.pdb
 
 # Qt generated files
-cpp/**/*_autogen/
+**/*_autogen/
 
 # OS artifacts
 Thumbs.db
