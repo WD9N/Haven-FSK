@@ -1,7 +1,7 @@
 #pragma once
 #include <QTextBrowser>
 #include <QDateTime>
-#include "../dsp/DspPipeline.h"
+#include "../pipeline/DspPipeline.h"
 
 // RxDisplay — decoded message display with clickable structured elements.
 //

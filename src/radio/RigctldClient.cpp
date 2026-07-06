@@ -1,5 +1,6 @@
 #include "RigctldClient.h"
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <algorithm>
@@ -141,16 +142,50 @@ void RigctldClient::onPollTimer() {
     }
 }
 
-QString RigctldClient::sendCommand(const QString& cmd, int timeoutMs) {
+// A reply is complete once it has expectedLines newline-terminated lines,
+// or once its last complete line is "RPRT n" — the terminal line of every
+// set-command reply and every error reply, regardless of expectedLines.
+static bool replyComplete(const QByteArray& response, int expectedLines) {
+    if (response.count('\n') >= expectedLines) return true;
+    if (response.endsWith('\n')) {
+        int lastLineStart =
+            response.lastIndexOf('\n', response.size() - 2) + 1;
+        if (response.mid(lastLineStart).startsWith("RPRT")) return true;
+    }
+    return false;
+}
+
+QString RigctldClient::sendCommand(const QString& cmd, int timeoutMs,
+                                    int expectedLines) {
     if (!m_connected) return QString();
+
+    // Discard stale bytes from an earlier command that timed out. Without
+    // this, a late reply is prepended to the next command's response and
+    // gets misattributed — e.g. a stale "RPRT 0" from a frequency poll
+    // read as a successful PTT command.
+    if (m_socket->bytesAvailable() > 0) {
+        QByteArray stale = m_socket->readAll();
+        qWarning() << "RigctldClient: discarded" << stale.size()
+                   << "stale reply bytes:" << stale.trimmed();
+    }
 
     m_socket->write(cmd.toUtf8());
     if (!m_socket->waitForBytesWritten(timeoutMs)) return QString();
-    if (!m_socket->waitForReadyRead(timeoutMs))    return QString();
 
+    // Read until the reply is structurally complete, not just until the
+    // first readyRead — a reply can arrive split across TCP segments, and
+    // taking the first burst truncates it (the two-line "m" reply being
+    // the likely victim).
     QByteArray response;
-    while (m_socket->bytesAvailable())
+    QElapsedTimer timer;
+    timer.start();
+    while (!replyComplete(response, expectedLines)) {
+        qint64 remaining = timeoutMs - timer.elapsed();
+        if (remaining <= 0 ||
+            !m_socket->waitForReadyRead(static_cast<int>(remaining)))
+            break;  // timeout — partial/empty response reads as failure
         response += m_socket->readAll();
+    }
 
     return QString::fromUtf8(response).trimmed();
 }
@@ -199,8 +234,8 @@ bool RigctldClient::setMode(const QString& mode) {
 
 QString RigctldClient::getMode() {
     if (!m_connected) return QString();
-    QString resp = sendCommand("m\n");
-    // Response: mode\npassband\n
+    // Response: mode\npassband\n — two lines
+    QString resp = sendCommand("m\n", 2000, /*expectedLines=*/2);
     return resp.split('\n').first().trimmed();
 }
 

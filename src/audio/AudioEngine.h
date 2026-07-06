@@ -21,9 +21,13 @@
 //
 // Any header bytes (see headerBytes below) pass through unchanged. PCM
 // data after that has gain applied per-sample on every read cycle.
-// m_gain is std::atomic<float> — safe to update from the main thread
-// while QAudioSink reads from its audio rendering thread.
-// Changes take effect within one read cycle (~100-200ms).
+// The gain value lives in AudioEngine (m_txGain), not here: this device
+// is created and deleted per-transmission on the DSP thread, so any
+// cross-thread caller holding a pointer to it could race its deletion.
+// Instead the device holds a pointer to AudioEngine's std::atomic<float>,
+// whose lifetime spans all transmissions — the GUI thread only ever
+// writes that atomic (AudioEngine::setTxGain) and never touches this
+// object. Changes take effect within one read cycle (~100-200ms).
 //
 // m_data holds its own copy of the PCM (cheap — QByteArray is
 // copy-on-write, so this is just a refcount bump, not a real copy)
@@ -41,23 +45,19 @@ public:
     // 44 for a WAV container (QMediaPlayer path), 0 for raw PCM with no
     // container (QAudioSink path, which gets format via QAudioFormat
     // instead of parsing a header).
+    // gain: pointer to the owning AudioEngine's atomic gain value; must
+    // outlive this device (guaranteed — the device is a child of the
+    // engine and is deleted in onTxCompletionTimer()/stopTx()).
     explicit GainedAudioDevice(const QByteArray& wavData,
-                                float initialGain = 1.0f,
+                                const std::atomic<float>* gain,
                                 QObject* parent = nullptr,
                                 qint64 headerBytes = 44)
         : QIODevice(parent)
         , m_data(wavData)
         , m_pos(0)
-        , m_gain(std::max(0.0f, std::min(1.0f, initialGain)))
+        , m_gain(gain)
         , m_headerBytes(headerBytes)
     {}
-
-    void setGain(float linear) {
-        m_gain.store(std::max(0.0f, std::min(1.0f, linear)),
-                     std::memory_order_relaxed);
-    }
-
-    float gain() const { return m_gain.load(std::memory_order_relaxed); }
 
     bool   isSequential() const override { return false; }
     qint64 size()         const override {
@@ -94,7 +94,7 @@ private:
         qint64 available = static_cast<qint64>(m_data.size()) - m_pos;
         qint64 toRead    = std::min(maxSize, available);
 
-        float g = m_gain.load(std::memory_order_relaxed);
+        float g = m_gain->load(std::memory_order_relaxed);
 
         const int16_t* src = reinterpret_cast<const int16_t*>(
             m_data.constData() + m_pos);
@@ -117,10 +117,10 @@ private:
         return toRead;
     }
 
-    QByteArray         m_data;
-    qint64             m_pos;
-    std::atomic<float> m_gain;
-    qint64             m_headerBytes;
+    QByteArray                m_data;
+    qint64                    m_pos;
+    const std::atomic<float>* m_gain;
+    qint64                    m_headerBytes;
 };
 
 class AudioEngine : public QObject
@@ -157,11 +157,14 @@ public:
     bool isReceiving() const;
     bool isTransmitting() const;
 
-    // Update TX gain in real time — atomic, safe from main thread.
+    // Update TX gain in real time — writes only m_txGain (a member of
+    // this engine, alive for the engine's whole lifetime), so it is safe
+    // to call directly from the GUI thread even while the DSP thread is
+    // creating/deleting the per-transmission GainedAudioDevice.
     // Takes effect within one QAudioSink read cycle (~100-200ms).
     void setTxGain(float linear) {
-        if (m_txGainDevice)
-            m_txGainDevice->setGain(linear);
+        m_txGain.store(std::max(0.0f, std::min(1.0f, linear)),
+                       std::memory_order_relaxed);
     }
 
 signals:
@@ -196,6 +199,11 @@ private:
     GainedAudioDevice* m_txGainDevice      {nullptr};
     QByteArray         m_txPcmData;   // raw PCM — must outlive GainedAudioDevice
     QTimer*            m_txCompletionTimer {nullptr};
+
+    // TX gain value read by GainedAudioDevice. Lives here (not in the
+    // device) so setTxGain() from the GUI thread never touches the
+    // per-transmission device object — see setTxGain() comment.
+    std::atomic<float> m_txGain {1.0f};
 
     // ── State ─────────────────────────────────────────────────────────────
     std::atomic<bool> m_receiving    {false};

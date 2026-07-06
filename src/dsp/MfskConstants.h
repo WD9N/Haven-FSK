@@ -67,10 +67,13 @@ constexpr int FFT_SIZE               = SAMPLES_PER_SYMBOL * FFT_ZERO_PAD_FACTOR;
 constexpr int FFT_GUARD_BINS         = 3;
 
 // ── Raised cosine shaping ──────────────────────────────────────
-// 10% of symbol duration, minimum 4 samples
+// 10% of symbol duration, minimum 4 samples. Applied once per
+// TRANSMISSION (start and end of the whole assembled frame, in
+// Frame::assemble()) — never per symbol, which pulsed the envelope
+// at the 31.25 Hz symbol rate (see Preamble.cpp).
 constexpr int RAMP_SAMPLES           = (SAMPLES_PER_SYMBOL / 10 < 4)
                                        ? 4 : SAMPLES_PER_SYMBOL / 10;
-// = 153 at 48000 Hz
+// = 153 at 48000 Hz (~3.2 ms ramp)
 
 // ── Gray coding ────────────────────────────────────────────────
 // Tone indices are Gray-coded so adjacent tones (most likely confused

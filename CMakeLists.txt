@@ -79,7 +79,8 @@ set(SOURCES
     src/dsp/psk/Psk31Demodulator.cpp
     src/dsp/psk/Psk31Modem.cpp
     src/dsp/ModemFactory.cpp
-    src/dsp/DspPipeline.cpp
+    src/dsp/DspLog.cpp
+    src/pipeline/DspPipeline.cpp
     src/audio/AudioEngine.cpp
     src/radio/RigctldClient.cpp
     src/radio/TCIClient.cpp
@@ -119,7 +120,8 @@ set(HEADERS
     src/dsp/DCD.h
     src/dsp/FEC.h
     src/dsp/Frame.h
-    src/dsp/DspPipeline.h
+    src/dsp/DspLog.h
+    src/pipeline/DspPipeline.h
     src/audio/AudioEngine.h
     src/audio/AudioSettings.h
     src/radio/RadioInterface.h

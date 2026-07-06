@@ -244,8 +244,9 @@ bool AudioEngine::startTx(const QString& deviceName,
     // its constructor below, not by parsing a container (see ADR-107).
     m_txPcmData = floatToPcm16(samples);
 
+    setTxGain(initialGain);
     m_txGainDevice = new GainedAudioDevice(
-        m_txPcmData, initialGain, this, /*headerBytes=*/0);
+        m_txPcmData, &m_txGain, this, /*headerBytes=*/0);
     if (!m_txGainDevice->open(QIODevice::ReadOnly)) {
         qWarning() << "AudioEngine: failed to open GainedAudioDevice";
         emit audioError("Failed to open TX audio buffer for playback.");

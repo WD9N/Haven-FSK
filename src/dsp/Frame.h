@@ -4,6 +4,7 @@
 #include <string>
 #include <array>
 #include "MfskConstants.h"
+#include "FEC.h"
 
 namespace HavenFSK {
 
@@ -103,6 +104,11 @@ private:
     // Strip trailing null bytes, then exactly one trailing space (the padding
     // space added by assemble()). User-entered trailing spaces are preserved.
     static std::string stripPadding(const std::string& s);
+
+    // FEC's constructor is expensive (parity matrix build + Gaussian
+    // elimination); shared here so assemble()/parse() don't rebuild it
+    // per call. All FEC methods are const, so one instance serves both.
+    FEC m_fec;
 };
 
 } // namespace HavenFSK

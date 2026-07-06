@@ -58,9 +58,15 @@ private slots:
     void onReconnectTimer();
 
 private:
-    // Send a command and wait for response (blocking with timeout)
-    // Returns response string or empty string on error
-    QString sendCommand(const QString& cmd, int timeoutMs = 2000);
+    // Send a command and wait for a structurally complete response
+    // (blocking with timeout). expectedLines is how many newline-terminated
+    // lines a successful reply has (rigctld default protocol: set commands
+    // reply "RPRT n" = 1 line; "f" = 1, "m" = 2, "l LEVEL" = 1); an "RPRT"
+    // line always terminates a reply early (set success or any error).
+    // Returns the trimmed response, or empty/partial text on timeout —
+    // callers' contains("RPRT 0")/parse checks treat that as failure.
+    QString sendCommand(const QString& cmd, int timeoutMs = 2000,
+                        int expectedLines = 1);
 
     void scheduleReconnect();
 

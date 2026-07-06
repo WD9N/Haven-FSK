@@ -63,6 +63,7 @@ private slots:
     void onRadioConnectFailed(const QString& reason);
     void onFrequencyChanged(uint64_t hz);
     void onWatchdogTripped();
+    void onPttReleaseFailed();
     void onElementClicked(const QString& scheme, const QString& value);
     void onContactLogged(const QVariantMap& fields);
     void onFieldDayToggled(bool enabled);
@@ -123,6 +124,11 @@ private:
     QProgressBar*      m_rxLevel      {nullptr};
     QComboBox*         m_modeCombo    {nullptr};
     QDoubleSpinBox*    m_squelchSpin  {nullptr};
+
+    // Active modem's name (IModem::modeName() via DspPipeline::modeReady)
+    // — stamped into each logged contact so mode/submode reflect the mode
+    // the QSO was actually made in, not a hardcoded HAVEN-FSK.
+    QString            m_currentModeName {"Haven MFSK"};
 
     // ── Menu actions ──────────────────────────────────────────────────────
     QAction* m_settingsAction {nullptr};

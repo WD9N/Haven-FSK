@@ -1,5 +1,5 @@
 #include "DspPipeline.h"
-#include "ModemFactory.h"
+#include "../dsp/ModemFactory.h"
 #include "../radio/RadioSettings.h"
 #include <QDateTime>
 #include <QRegularExpression>

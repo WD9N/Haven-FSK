@@ -1,7 +1,9 @@
 #include "MfskModem.h"
-#include <QDebug>
+#include "DspLog.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -17,17 +19,17 @@ MfskModem::MfskModem() {
         auto preambleAudio = m_preamble.generate();
         auto softSyms = m_demodulator.demodulateToSoft(preambleAudio, 0);
         float score = m_preamble.softCorrelate(softSyms, 0);
-        qDebug() << "MfskModem: demod self-test score=" << score
-                 << (score >= 0.5f ? "[PASS]" : "[FAIL — demodulator bug]");
+        dspLog("MfskModem: demod self-test score=%.3f %s", score,
+               score >= 0.5f ? "[PASS]" : "[FAIL — demodulator bug]");
         if (score < 0.5f) {
-            QString got;
+            std::string got;
             for (int i = 0; i < PREAMBLE_LENGTH && i < (int)softSyms.size(); ++i) {
                 const auto& e = softSyms[i];
                 int best = (int)(std::max_element(e.begin(), e.end()) - e.begin());
-                got += QString::number(best) + " ";
+                got += std::to_string(best) + " ";
             }
-            qDebug() << "  self-test got :" << got;
-            qDebug() << "  self-test want: 0 15 0 15 7 8 7 8 0 15 0 15 7 8 7 8";
+            dspLog("  self-test got : %s", got.c_str());
+            dspLog("  self-test want: 0 15 0 15 7 8 7 8 0 15 0 15 7 8 7 8");
         }
     }
 }
@@ -79,11 +81,9 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
                 float total = 0.0f;
                 for (float x : e) total += x;
                 float frac = (total > 1e-10f) ? e[detected] / total : 0.0f;
-                qDebug() << QString("ToneMon[%1]: tone%2 (%3 Hz)  frac=%4")
-                    .arg(m_monitorSymCount++, 4)
-                    .arg(detected, 2)
-                    .arg(BASE_FREQ + detected * SYMBOL_RATE, 7, 'f', 2)
-                    .arg(frac, 5, 'f', 3);
+                dspLog("ToneMon[%4d]: tone%2d (%7.2f Hz)  frac=%5.3f",
+                       m_monitorSymCount++, detected,
+                       BASE_FREQ + detected * SYMBOL_RATE, frac);
             }
             m_monitorBuf.erase(m_monitorBuf.begin(),
                                m_monitorBuf.begin() + SAMPLES_PER_SYMBOL);
@@ -117,14 +117,14 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
         }
 
         if (static_cast<int>(m_rxBuffer.size()) > MAX_BUFFER_SAMPLES) {
-            qWarning() << "MfskModem: buffer limit — resetting";
+            dspWarn("MfskModem: buffer limit — resetting");
             resetRx();
             return events;
         }
         ++m_collectTicks;
         tryCompleteFrame(events);
         if (m_collectTicks > COLLECT_TIMEOUT_CHUNKS) {
-            qDebug() << "MfskModem: collect timeout — discarding";
+            dspLog("MfskModem: collect timeout — discarding");
             resetRx();
         }
         return events;
@@ -145,11 +145,12 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
         // trusted, and at ~once/second it dominates the terminal during
         // normal listening. Set HAVEN_VERBOSE_SYNC (any value) before
         // launch to bring it back for DSP-level debugging.
-        static const bool verbose = qEnvironmentVariableIsSet("HAVEN_VERBOSE_SYNC");
+        static const bool verbose =
+            std::getenv("HAVEN_VERBOSE_SYNC") != nullptr;
         if (verbose) {
-            qDebug() << "MfskModem: preamble sync idle — best score"
-                     << m_sync.lastScore() << "(threshold="
-                     << PreambleSync::SCORE_THRESHOLD << ")";
+            dspLog("MfskModem: preamble sync idle — best score %.3f "
+                   "(threshold=%.3f)",
+                   m_sync.lastScore(), PreambleSync::SCORE_THRESHOLD);
         }
     }
 
@@ -157,9 +158,9 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
         long long offset = lock.sampleIndex - m_preTriggerDropped;
         long long need    = static_cast<long long>(PREAMBLE_LENGTH) * SAMPLES_PER_SYMBOL;
         if (offset < 0 || offset + need > static_cast<long long>(m_preTrigger.size())) {
-            qWarning() << "MfskModem: preamble lock offset" << offset
-                       << "out of pretrigger range (size="
-                       << m_preTrigger.size() << ") — dropping";
+            dspWarn("MfskModem: preamble lock offset %lld out of "
+                    "pretrigger range (size=%d) — dropping",
+                    offset, static_cast<int>(m_preTrigger.size()));
         } else {
             m_rxBuffer.assign(m_preTrigger.begin() + offset, m_preTrigger.end());
 
@@ -218,13 +219,12 @@ void MfskModem::onPreambleLocked(const PreambleLock& lock, ModemRxEvent& outEven
 
     if (m_afcEnabled) {
         m_afcOffsetHz = std::max(-AFC_MAX_HZ, std::min(AFC_MAX_HZ, total));
-        qDebug() << "MfskModem: AFC hyp=" << lock.freqOffsetHz
-                 << "total=" << m_afcOffsetHz << "Hz"
-                 << "binOff=" << m_demodBinOffset;
+        dspLog("MfskModem: AFC hyp=%.2f total=%.2f Hz binOff=%d",
+               lock.freqOffsetHz, m_afcOffsetHz, m_demodBinOffset);
     } else {
-        qDebug() << "MfskModem: AFC disabled — hyp=" << lock.freqOffsetHz
-                 << "total=" << total << "Hz"
-                 << "binOff=" << m_demodBinOffset << "(not persisted)";
+        dspLog("MfskModem: AFC disabled — hyp=%.2f total=%.2f Hz "
+               "binOff=%d (not persisted)",
+               lock.freqOffsetHz, total, m_demodBinOffset);
     }
 
     m_timingOffset     = 0;
@@ -236,8 +236,8 @@ void MfskModem::onPreambleLocked(const PreambleLock& lock, ModemRxEvent& outEven
     m_collectTicks     = 0;
     m_lastCheckSamples = 0;
 
-    qDebug() << "MfskModem: preamble locked (score=" << lock.score
-             << ") freq=" << lock.freqOffsetHz << "Hz — collecting frame";
+    dspLog("MfskModem: preamble locked (score=%.3f) freq=%.2f Hz "
+           "— collecting frame", lock.score, lock.freqOffsetHz);
     outEvent.preambleDetected = true;
     outEvent.preambleScore    = lock.score;
     setRxState(ModemRxState::Collecting);
@@ -276,15 +276,15 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
     constexpr int HDR_TOTAL = 12;
     if (static_cast<int>(softSymbols.size()) < frameStart + HDR_TOTAL) {
         // Throttled — this fires on nearly every audio chunk while
-        // waiting (once every ~42ms), and unthrottled qDebug() calls are
+        // waiting (once every ~42ms), and unthrottled log calls are
         // expensive enough (disk flush + console write, all on the main
         // thread — see main.cpp's messageHandler) to compete with timely
         // audio consumption. m_collectTicks already increments once per
         // chunk in processAudioChunk(), so it's a free throttle counter.
         if (m_collectTicks % 10 == 0)
-            qDebug() << "MfskModem: waiting for header —"
-                     << softSymbols.size() << "syms, need"
-                     << (frameStart + HDR_TOTAL);
+            dspLog("MfskModem: waiting for header — %d syms, need %d",
+                   static_cast<int>(softSymbols.size()),
+                   frameStart + HDR_TOTAL);
         return;
     }
 
@@ -309,8 +309,9 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
         }
 
         if (!(b0[0] == b0[1] && b0[1] == b0[2] && b1[0] == b1[1] && b1[1] == b1[2]))
-            qDebug() << "MfskModem: header copies differ — nBlocks candidates:"
-                     << b1[0] << b1[1] << b1[2] << "— using bit-level majority vote";
+            dspLog("MfskModem: header copies differ — nBlocks candidates: "
+                   "%d %d %d — using bit-level majority vote",
+                   b1[0], b1[1], b1[2]);
 
         // Bit-level majority vote across the 3 copies (>=2 of 3 wins per bit).
         auto majorityByte = [](uint8_t a, uint8_t b, uint8_t c) -> uint8_t {
@@ -326,9 +327,8 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
 
         constexpr uint8_t EXPECTED_HDR0 = 0x21;  // version=2, FEC_ENABLED=1
         if (b0a != EXPECTED_HDR0) {
-            qDebug() << "MfskModem: header byte0=0x"
-                     + QString::number(b0a, 16).rightJustified(2, '0')
-                     + " expected 0x21 — discarding";
+            dspLog("MfskModem: header byte0=0x%02x expected 0x21 "
+                   "— discarding", b0a);
             resetRx();
             return;
         }
@@ -337,27 +337,27 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
 
         constexpr int MAX_NBLOCKS = 125;
         if (m_nBlocks <= 0 || m_nBlocks > MAX_NBLOCKS) {
-            qDebug() << "MfskModem: nBlocks" << m_nBlocks
-                     << "out of range [1," << MAX_NBLOCKS << "] — discarding";
+            dspLog("MfskModem: nBlocks %d out of range [1,%d] — discarding",
+                   m_nBlocks, MAX_NBLOCKS);
             resetRx();
             return;
         }
 
         m_symsNeeded = frameStart + Frame::frameSymsNeeded(m_nBlocks);
 
-        qDebug() << "MfskModem: header decoded nBlocks=" << m_nBlocks
-                 << "need" << m_symsNeeded << "total symbols";
+        dspLog("MfskModem: header decoded nBlocks=%d need %d total symbols",
+               m_nBlocks, m_symsNeeded);
     }
 
     if (static_cast<int>(softSymbols.size()) < m_symsNeeded) {
         // Throttled — see the "waiting for header" comment above.
         if (m_collectTicks % 10 == 0)
-            qDebug() << "MfskModem: collecting"
-                     << softSymbols.size() << "/" << m_symsNeeded;
+            dspLog("MfskModem: collecting %d / %d",
+                   static_cast<int>(softSymbols.size()), m_symsNeeded);
         return;
     }
 
-    qDebug() << "MfskModem: frame complete — decoding";
+    dspLog("MfskModem: frame complete — decoding");
     std::vector<std::vector<float>> frameSymbols(
         softSymbols.begin() + frameStart,
         softSymbols.begin() + m_symsNeeded);
@@ -374,21 +374,20 @@ void MfskModem::processFrame(
 {
     if (softSymbols.empty()) return;
 
-    qDebug() << "MfskModem: processing frame,"
-             << softSymbols.size() << "symbols";
+    dspLog("MfskModem: processing frame, %d symbols",
+           static_cast<int>(softSymbols.size()));
 
     ParseResult result = m_frame.parse(softSymbols);
 
     if (!result.error.empty()) {
-        qDebug() << "MfskModem: frame parse error:"
-                 << result.error.c_str();
+        dspLog("MfskModem: frame parse error: %s", result.error.c_str());
         return;
     }
 
     if (!result.crcOk) {
-        qDebug() << "MfskModem: CRC failed (converged=" << result.converged
-                 << "fecIter=" << result.fecIterations
-                 << ") — emitting for diagnosis";
+        dspLog("MfskModem: CRC failed (converged=%s fecIter=%d) "
+               "— emitting for diagnosis",
+               result.converged ? "true" : "false", result.fecIterations);
     }
 
     outEvent.hasMessage    = true;
@@ -398,8 +397,12 @@ void MfskModem::processFrame(
     outEvent.nBlocks       = result.nBlocks;
     outEvent.fecIterations = result.fecIterations;
 
-    qDebug() << "MfskModem: decoded message:" << QString::fromStdString(result.text)
-             << "(CRC OK, FEC converged:" << result.converged << ")";
+    // Report the actual CRC outcome — this used to say "CRC OK"
+    // unconditionally, even right after logging a CRC failure above.
+    dspLog("MfskModem: decoded message: %s (CRC %s, FEC converged: %s)",
+           result.text.c_str(),
+           result.crcOk ? "OK" : "FAILED",
+           result.converged ? "true" : "false");
 }
 
 // ── AFC implementation ────────────────────────────────────────────────────
@@ -477,13 +480,13 @@ void MfskModem::applyFineTimingCorrection() {
     if (confEarly > confCurrent && confEarly >= confLate) {
         m_timingOffset = earlyOffset;
         m_cachedSoftSymbols.clear();  // everything cached used the old offset
-        qDebug() << "MfskModem: fine timing -> early, offset=" << m_timingOffset
-                 << "conf=" << confEarly;
+        dspLog("MfskModem: fine timing -> early, offset=%d conf=%.3f",
+               m_timingOffset, confEarly);
     } else if (confLate > confCurrent && confLate > confEarly) {
         m_timingOffset = lateOffset;
         m_cachedSoftSymbols.clear();  // everything cached used the old offset
-        qDebug() << "MfskModem: fine timing -> late, offset=" << m_timingOffset
-                 << "conf=" << confLate;
+        dspLog("MfskModem: fine timing -> late, offset=%d conf=%.3f",
+               m_timingOffset, confLate);
     }
 }
 
@@ -494,12 +497,11 @@ void MfskModem::setToneMonitor(bool active) {
     if (active) {
         m_monitorBuf.clear();
         m_monitorSymCount = 0;
-        qDebug() << "MfskModem: tone monitor ON"
-                 << "— one debug line per received symbol";
+        dspLog("MfskModem: tone monitor ON — one debug line per received symbol");
     } else {
         m_monitorBuf.clear();
-        qDebug() << "MfskModem: tone monitor OFF"
-                 << "(" << m_monitorSymCount << "symbols logged)";
+        dspLog("MfskModem: tone monitor OFF (%d symbols logged)",
+               m_monitorSymCount);
     }
 }
 
@@ -521,21 +523,21 @@ std::vector<float> MfskModem::generateDiagnosticAudio() const {
         }
     }
 
-    qDebug() << "MfskModem: tone sweep audio:"
-             << audio.size() << "samples ="
-             << (audio.size() / static_cast<double>(SAMPLE_RATE)) << "s  "
-             << "(16 tones x 500ms, tone0=500Hz ... tone15=968.75Hz)";
+    dspLog("MfskModem: tone sweep audio: %d samples = %.2f s  "
+           "(16 tones x 500ms, tone0=500Hz ... tone15=968.75Hz)",
+           static_cast<int>(audio.size()),
+           audio.size() / static_cast<double>(SAMPLE_RATE));
     return audio;
 }
 
 void MfskModem::runDiagnosticSelfTest() {
-    qDebug() << "";
-    qDebug() << "==============================";
-    qDebug() << " TONE SWEEP TEST";
-    qDebug() << "==============================";
-    qDebug() << "500ms of pure sine at each of the 16 HAVEN tones, demodulated.";
-    qDebug() << "PASS = demodulator correctly identifies the tone.";
-    qDebug() << "Expected frac ~0.87 (8x zero-pad sinc sidelobes absorb ~13%)";
+    dspLog("");
+    dspLog("==============================");
+    dspLog(" TONE SWEEP TEST");
+    dspLog("==============================");
+    dspLog("500ms of pure sine at each of the 16 HAVEN tones, demodulated.");
+    dspLog("PASS = demodulator correctly identifies the tone.");
+    dspLog("Expected frac ~0.87 (8x zero-pad sinc sidelobes absorb ~13%%)");
 
     bool allPass = true;
     for (int t = 0; t < NUM_TONES; ++t) {
@@ -552,8 +554,8 @@ void MfskModem::runDiagnosticSelfTest() {
 
         auto soft = m_demodulator.demodulateToSoft(audio, 0, 0);
         if (soft.empty()) {
-            qDebug() << QString("  tone%1 (%2 Hz) — demodulateToSoft returned empty [FAIL]")
-                        .arg(t, 2).arg(freq, 7, 'f', 2);
+            dspLog("  tone%2d (%7.2f Hz) — demodulateToSoft returned empty [FAIL]",
+                   t, freq);
             allPass = false;
             continue;
         }
@@ -570,19 +572,18 @@ void MfskModem::runDiagnosticSelfTest() {
         bool pass = (detected == t);
         if (!pass) allPass = false;
 
-        qDebug() << QString("  tone%1 (%2 Hz) -> detected=%3  frac@expected=%4  maxFrac=%5  [%6]")
-            .arg(t, 2).arg(freq, 7, 'f', 2).arg(detected, 2)
-            .arg(fracExp, 5, 'f', 3).arg(fracMax, 5, 'f', 3)
-            .arg(pass ? "PASS" : "FAIL");
+        dspLog("  tone%2d (%7.2f Hz) -> detected=%2d  frac@expected=%5.3f  "
+               "maxFrac=%5.3f  [%s]",
+               t, freq, detected, fracExp, fracMax, pass ? "PASS" : "FAIL");
     }
-    qDebug() << (allPass
+    dspLog("%s", allPass
         ? "Result: ALL PASS — demodulator maps all 16 tones correctly"
         : "Result: FAILURES — demodulator has a tone bin mapping error");
 
-    qDebug() << "";
-    qDebug() << "------------------------------";
-    qDebug() << " PREAMBLE SCAN INJECTION TEST";
-    qDebug() << "------------------------------";
+    dspLog("");
+    dspLog("------------------------------");
+    dspLog(" PREAMBLE SCAN INJECTION TEST");
+    dspLog("------------------------------");
 
     auto preambleAudio = m_preamble.generate();
     const int silenceSamples = SAMPLE_RATE / 2;
@@ -600,29 +601,28 @@ void MfskModem::runDiagnosticSelfTest() {
     }
 
     int expectedSym = silenceSamples / SAMPLES_PER_SYMBOL;
-    qDebug() << "  Preamble injected at sample" << silenceSamples
-             << "= symbol" << expectedSym;
-    qDebug() << QString("  Best softCorrelate = %1 at sym=%2  (threshold=%3)")
-                .arg(bestScore, 0, 'f', 4).arg(bestSym)
-                .arg(PreambleSync::SCORE_THRESHOLD);
-    qDebug() << (bestScore >= PreambleSync::SCORE_THRESHOLD
+    dspLog("  Preamble injected at sample %d = symbol %d",
+           silenceSamples, expectedSym);
+    dspLog("  Best softCorrelate = %.4f at sym=%d  (threshold=%.3f)",
+           bestScore, bestSym, PreambleSync::SCORE_THRESHOLD);
+    dspLog("%s", bestScore >= PreambleSync::SCORE_THRESHOLD
         ? "  Result: WOULD DETECT — scanner and threshold are correct"
         : "  Result: WOULD MISS — scanner or threshold has an issue");
 
     if (bestSym >= 0 && bestSym + PREAMBLE_LENGTH <= (int)softAll.size()) {
-        QString got, want;
+        std::string got, want;
         for (int i = 0; i < PREAMBLE_LENGTH; ++i) {
             const auto& e = softAll[bestSym + i];
             int argMax = static_cast<int>(
                 std::max_element(e.begin(), e.end()) - e.begin());
-            got  += QString::number(argMax) + " ";
-            want += QString::number(PREAMBLE_SYMBOLS[i]) + " ";
+            got  += std::to_string(argMax) + " ";
+            want += std::to_string(PREAMBLE_SYMBOLS[i]) + " ";
         }
-        qDebug() << "  got :" << got;
-        qDebug() << "  want:" << want;
+        dspLog("  got : %s", got.c_str());
+        dspLog("  want: %s", want.c_str());
     }
-    qDebug() << "==============================";
-    qDebug() << "";
+    dspLog("==============================");
+    dspLog("");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -630,8 +630,8 @@ void MfskModem::runDiagnosticSelfTest() {
 void MfskModem::setRxState(ModemRxState newState) {
     if (m_rxState != newState) {
         m_rxState = newState;
-        qDebug() << "MfskModem: RX state ->"
-                 << (newState == ModemRxState::Idle ? "Idle" : "Collecting");
+        dspLog("MfskModem: RX state -> %s",
+               newState == ModemRxState::Idle ? "Idle" : "Collecting");
     }
 }
 

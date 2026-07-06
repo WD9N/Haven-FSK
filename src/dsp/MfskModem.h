@@ -14,13 +14,11 @@
 // the modem abstraction (Phase 2) was introduced — relocated, not
 // rewritten, so the tuned thresholds/behavior are unchanged.
 //
-// Note: unlike IModem.h itself, this implementation is not Qt-free — it
-// uses QDebug for logging, matching the pre-refactor DspPipeline exactly.
-// DspPipeline was already the Qt-facing exception within src/dsp/ before
-// this refactor (QObject, QString, QDateTime); this preserves that,
-// rather than rewriting every debug line during a relocation. New modes
-// (e.g. Psk31Modem) should stay Qt-free per ADR-003 since they have no
-// such legacy logging to preserve.
+// Qt-free per ADR-003. Diagnostic logging goes through the DspLog shim
+// (dspLog/dspWarn — printf-style), which the application wires to
+// qDebug/qWarning in main.cpp; the legacy QDebug logging this file
+// carried over from the pre-refactor DspPipeline was converted when
+// DspPipeline itself moved out of src/dsp/ (ADR-124).
 
 namespace HavenFSK {
 

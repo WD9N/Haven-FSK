@@ -4,11 +4,15 @@
 #include "Demodulator.h"
 #include "Preamble.h"
 #include "Interleaver.h"
+#include "DspLog.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cassert>
-#include <QDebug>
-#include <QString>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace HavenFSK {
 
@@ -127,8 +131,7 @@ std::vector<float> Frame::assemble(const std::string& text) const {
     std::vector<uint8_t> payload(padded.begin(), padded.end());
 
     // 2. FEC encode
-    FEC fec;
-    auto enc = fec.encodeMessage(payload);
+    auto enc = m_fec.encodeMessage(payload);
 
     // 3. Build header
     auto hdr = buildHeader(static_cast<uint8_t>(enc.nBlocks));
@@ -189,6 +192,24 @@ std::vector<float> Frame::assemble(const std::string& text) const {
     frame.insert(frame.end(), crcAudio.begin(),      crcAudio.end());
     frame.insert(frame.end(), payloadAudio.begin(),  payloadAudio.end());
 
+    // 8. Raised-cosine amplitude envelope over the WHOLE transmission —
+    // RAMP_SAMPLES up at the very start, RAMP_SAMPLES down at the very
+    // end. The waveform starts at phase 0 so key-up is already nearly
+    // clean, but without the tail ramp the transmission ends mid-sine:
+    // an instantaneous full-amplitude-to-zero step that splatters as a
+    // key click on adjacent frequencies (and goes out on the air, since
+    // PTT is still held through the tail delay). Per-transmission edges
+    // can't pulse at the symbol rate — only the per-symbol ramps that
+    // were removed did (see Preamble.cpp on the 31.25 Hz artifact).
+    const int r = std::min<int>(RAMP_SAMPLES,
+                                static_cast<int>(frame.size() / 2));
+    for (int i = 0; i < r; ++i) {
+        float w = 0.5f * (1.0f - std::cos(
+            M_PI * i / static_cast<float>(r)));   // 0 → 1
+        frame[i] *= w;
+        frame[frame.size() - 1 - i] *= w;
+    }
+
     return frame;
 }
 
@@ -223,17 +244,15 @@ ParseResult Frame::parse(
     }
 
     if (!(hdrCopies[0] == hdrCopies[1] && hdrCopies[1] == hdrCopies[2])) {
-        qDebug() << "Frame::parse: header copies differ — nBlocks candidates:"
-                 << hdrCopies[0][1] << hdrCopies[1][1] << hdrCopies[2][1]
-                 << "— using bit-level majority vote";
+        dspLog("Frame::parse: header copies differ — nBlocks candidates: "
+               "%d %d %d — using bit-level majority vote",
+               hdrCopies[0][1], hdrCopies[1][1], hdrCopies[2][1]);
     }
     std::array<uint8_t, 2> hdr = majorityVoteHeader(hdrCopies);
 
-    qDebug() << "Frame::parse hdr[0]=0x"
-                + QString::number(hdr[0], 16).rightJustified(2, '0')
-                + " hdr[1]=0x"
-                + QString::number(hdr[1], 16).rightJustified(2, '0')
-                + " expect hdr[0]=0x21 (3x-header majority vote, PAYLOAD_START=16)";
+    dspLog("Frame::parse hdr[0]=0x%02x hdr[1]=0x%02x "
+           "expect hdr[0]=0x21 (3x-header majority vote, PAYLOAD_START=16)",
+           hdr[0], hdr[1]);
 
     uint8_t version, flags, nBlocks;
     if (!parseHeader(hdr, version, flags, nBlocks)) {
@@ -253,7 +272,7 @@ ParseResult Frame::parse(
         return result;
     }
 
-    // ── Decode CRC (symbols 8-11, after double header) ────────────────────
+    // ── Decode CRC (symbols 12-15, after the 3x header) ───────────────────
     auto crcBytes = hardDecodeSymbols(softSymbols, HEADER_TOTAL_SYMS, CRC_SYMS);
     if ((int)crcBytes.size() < CRC_BYTES) {
         result.error = "CRC decode failed";
@@ -278,12 +297,11 @@ ParseResult Frame::parse(
         // the TX-side interleave (see Frame::assemble()) before FEC
         // decode — LLRs are still in the interleaved (transmission)
         // order at this point, matching Interleaver's bit-level domain.
-        FEC fec;
-        auto llr = fec.softToLLR(payloadSoft);
+        auto llr = m_fec.softToLLR(payloadSoft);
         auto deinterleavedLlr = Interleaver::deinterleave(llr, nBlocks);
 
         int origLen = nBlocks * LDPC_BYTES_PER_BLOCK;
-        auto decRes = fec.decodeMessage(deinterleavedLlr, nBlocks, origLen);
+        auto decRes = m_fec.decodeMessage(deinterleavedLlr, nBlocks, origLen);
 
         result.converged     = decRes.allConverged;
         result.fecIterations = decRes.totalIterations;

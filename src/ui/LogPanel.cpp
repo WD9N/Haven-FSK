@@ -412,8 +412,9 @@ void LogPanel::onLogIt() {
     fields["their_fd"]        = m_fdExchange->text().trimmed().toUpper();
     fields["notes"]           = m_notes->text().trimmed();
     fields["frequency_hz"]    = QVariant::fromValue(m_frequency);
-    fields["mode"]            = "DIGITAL";
-    fields["submode"]         = "HAVEN-FSK";
+    // mode/submode intentionally not set here — LogManager::logContact()
+    // derives them from the active modem (fields["modem_name"], stamped
+    // by MainWindow) so PSK31 QSOs aren't logged as HAVEN-FSK.
     fields["my_callsign"]     = myInfo.callsign;
     fields["my_grid"]         = myInfo.grid;
     fields["my_pota_refs"]    = myInfo.potaRefs;

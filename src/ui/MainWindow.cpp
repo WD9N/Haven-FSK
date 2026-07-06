@@ -20,7 +20,7 @@
 #include "../radio/RigctldClient.h"
 #include "../radio/TCIClient.h"
 #include "../radio/HamlibClient.h"
-#include "../dsp/DspPipeline.h"
+#include "../pipeline/DspPipeline.h"
 #include "../dsp/Constants.h"
 // TODO(Phase 5): BASE_FREQ usages below are MFSK-specific tuning-offset
 // math; should become mode-generic once IModem passband is UI-wired.
@@ -83,6 +83,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_pttManager = new PTTManager(nullptr, this);
     connect(m_pttManager, &PTTManager::watchdogTripped,
             this, &MainWindow::onWatchdogTripped);
+    connect(m_pttManager, &PTTManager::pttReleaseFailed,
+            this, &MainWindow::onPttReleaseFailed);
 
     setupMenu();
     setupUi();
@@ -873,6 +875,8 @@ void MainWindow::startRadio() {
                 });
                 connect(m_pttManager, &PTTManager::watchdogTripped,
                         this, &MainWindow::onWatchdogTripped);
+                connect(m_pttManager, &PTTManager::pttReleaseFailed,
+                        this, &MainWindow::onPttReleaseFailed);
             });
     connect(m_radio, &RadioInterface::disconnected,
             this, &MainWindow::onRadioDisconnected);
@@ -1199,6 +1203,18 @@ void MainWindow::onWatchdogTripped() {
     onTxComplete();
 }
 
+void MainWindow::onPttReleaseFailed() {
+    // A rig that won't unkey is the one failure that must interrupt the
+    // operator — it transmits a dead carrier until physically stopped.
+    m_statusLabel->setText("PTT RELEASE FAILED — CHECK YOUR RIG");
+    QMessageBox::critical(this, "PTT Release Failed",
+        "The command to stop transmitting could not be confirmed.\n\n"
+        "YOUR RADIO MAY STILL BE TRANSMITTING.\n\n"
+        "Check the rig's TX indicator now. If it is still keyed, unkey it "
+        "manually (power off if necessary), then check the rig control "
+        "connection (rigctld/TCI) before transmitting again.");
+}
+
 
 void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
     m_logPanel->populateField(scheme, value);
@@ -1218,7 +1234,9 @@ void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
 
 void MainWindow::onContactLogged(const QVariantMap& fields) {
     if (m_logManager && m_logManager->isOpen()) {
-        if (!m_logManager->logContact(fields)) {
+        QVariantMap stamped = fields;
+        stamped["modem_name"] = m_currentModeName;
+        if (!m_logManager->logContact(stamped)) {
             m_statusLabel->setText(
                 "Warning: contact may not have been saved");
         } else {
@@ -1316,6 +1334,7 @@ void MainWindow::onModeReady(HavenFSK::ModemMode /*mode*/, double loHz,
                                Qt::AutoConnection,
                                static_cast<float>(m_squelchSpin->value()));
 
+    m_currentModeName = modeName;
     m_statusLabel->setText("Mode: " + modeName);
 }
 

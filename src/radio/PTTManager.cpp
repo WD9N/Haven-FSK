@@ -14,6 +14,10 @@ PTTManager::PTTManager(RadioInterface* radio, QObject* parent)
 }
 
 PTTManager::~PTTManager() {
+    // txOff() only performs (blocking) socket I/O when the rig is
+    // believed keyed (m_pttKeyed) — a normal idle shutdown does nothing
+    // here, and a shutdown mid-TX deliberately blocks to unkey the rig
+    // rather than leave it transmitting.
     txOff();
 }
 
@@ -23,8 +27,13 @@ bool PTTManager::requestTX() {
         return false;
     }
 
-    if (m_radio && m_radio->isConnected())
-        m_radio->setPTT(true);
+    if (m_radio && m_radio->isConnected()) {
+        if (!m_radio->setPTT(true)) {
+            qWarning() << "PTTManager: PTT key-up failed — refusing to start TX";
+            return false;
+        }
+        m_pttKeyed = true;
+    }
 
     m_transmitting = true;
     m_watchdog.start();
@@ -36,8 +45,23 @@ bool PTTManager::requestTX() {
 void PTTManager::txOff() {
     m_watchdog.stop();
 
-    if (m_radio && m_radio->isConnected())
-        m_radio->setPTT(false);
+    // Gate on m_pttKeyed, not isConnected() — see the member doc comment.
+    if (m_pttKeyed && m_radio) {
+        bool released = false;
+        for (int attempt = 1; attempt <= UNKEY_ATTEMPTS && !released; ++attempt) {
+            released = m_radio->setPTT(false);
+            if (!released)
+                qWarning() << "PTTManager: unkey attempt" << attempt
+                           << "of" << UNKEY_ATTEMPTS << "failed";
+        }
+        if (released) {
+            m_pttKeyed = false;
+        } else {
+            qCritical() << "PTTManager: could not confirm PTT release —"
+                        << "rig may still be keyed";
+            emit pttReleaseFailed();
+        }
+    }
 
     if (m_transmitting) {
         m_transmitting = false;

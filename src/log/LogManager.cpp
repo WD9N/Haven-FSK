@@ -25,7 +25,13 @@ QString LogManager::buildDbPath() const {
 bool LogManager::open() {
     m_dbPath = buildDbPath();
 
-    m_db = QSqlDatabase::addDatabase("QSQLITE", "haven_log");
+    // A repeated open() without an intervening close() must not call
+    // addDatabase() again — Qt warns about the duplicate connection name
+    // and replaces the live connection out from under it.
+    if (QSqlDatabase::contains("haven_log"))
+        m_db = QSqlDatabase::database("haven_log", /*open=*/false);
+    else
+        m_db = QSqlDatabase::addDatabase("QSQLITE", "haven_log");
     m_db.setDatabaseName(m_dbPath);
 
     if (!m_db.open()) {
@@ -76,7 +82,7 @@ bool LogManager::createSchema() {
             their_fd        TEXT,
             frequency_hz    INTEGER,
             band            TEXT,
-            mode            TEXT DEFAULT 'DIGITAL',
+            mode            TEXT DEFAULT 'MFSK',
             submode         TEXT DEFAULT 'HAVEN-FSK',
             notes           TEXT,
             my_callsign     TEXT,
@@ -170,10 +176,25 @@ bool LogManager::logContact(const QVariantMap& fields) {
     q.bindValue(":their_name",      fields["their_name"].toString());
     q.bindValue(":their_qth",       fields["their_qth"].toString());
     q.bindValue(":their_fd",        fields["their_fd"].toString().toUpper());
+    // Map the active modem (fields["modem_name"], stamped by MainWindow)
+    // to its ADIF MODE/SUBMODE pair. "DIGITAL" is not in the ADIF mode
+    // enumeration — LoTW/QRZ/POTA reject it or bucket it as unknown. The
+    // convention for experimental MFSK modes is MODE=MFSK with the mode
+    // name in SUBMODE; PSK31 is a proper ADIF submode of PSK.
+    QString modemName = fields["modem_name"].toString();
+    QString adifMode, adifSubmode;
+    if (modemName == "PSK31") {
+        adifMode    = "PSK";
+        adifSubmode = "PSK31";
+    } else {  // "Haven MFSK" (and default when no modem name was stamped)
+        adifMode    = "MFSK";
+        adifSubmode = "HAVEN-FSK";
+    }
+
     q.bindValue(":frequency_hz",    QVariant::fromValue(hz));
     q.bindValue(":band",            band);
-    q.bindValue(":mode",            "DIGITAL");
-    q.bindValue(":submode",         "HAVEN-FSK");
+    q.bindValue(":mode",            adifMode);
+    q.bindValue(":submode",         adifSubmode);
     q.bindValue(":notes",           fields["notes"].toString());
     q.bindValue(":my_callsign",     fields["my_callsign"].toString().toUpper());
     q.bindValue(":my_grid",         fields["my_grid"].toString().toUpper());

@@ -54,8 +54,16 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     rec += field("QSO_DATE",         adifDate(c["date_utc"].toString()));
     rec += field("TIME_ON",          adifTime(c["time_utc"].toString()));
     rec += field("BAND",             c["band"].toString());
-    rec += field("MODE",             "DIGITAL");
-    rec += field("SUBMODE",          "HAVEN-FSK");
+    // Rows written by current LogManager already hold a valid ADIF
+    // MODE/SUBMODE pair. Rows from pre-v0.3 databases hold MODE=DIGITAL —
+    // not a valid ADIF mode — so map those by their submode instead.
+    QString submode = c["submode"].toString();
+    if (submode.isEmpty()) submode = "HAVEN-FSK";
+    QString mode = c["mode"].toString();
+    if (mode.isEmpty() || mode == "DIGITAL")
+        mode = (submode == "PSK31") ? "PSK" : "MFSK";
+    rec += field("MODE",             mode);
+    rec += field("SUBMODE",          submode);
     rec += field("FREQ",             hzToMhz(c["frequency_hz"].toULongLong()));
     rec += field("STATION_CALLSIGN", c["my_callsign"].toString());
     rec += field("OPERATOR",         c["my_callsign"].toString());

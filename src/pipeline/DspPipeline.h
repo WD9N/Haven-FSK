@@ -8,8 +8,8 @@
 #include <atomic>
 #include <mutex>
 #include <optional>
-#include "Constants.h"
-#include "IModem.h"
+#include "../dsp/Constants.h"
+#include "../dsp/IModem.h"
 
 namespace HavenFSK {
 
