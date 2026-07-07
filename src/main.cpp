@@ -3,7 +3,9 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QMutex>
+#include <QDebug>
 #include "dsp/Constants.h"
+#include "dsp/DspLog.h"
 #include "ui/MainWindow.h"
 
 #ifdef QT_DEBUG
@@ -68,14 +70,32 @@ int main(int argc, char* argv[]) {
 #endif
 // Linux desktop: no override — Qt auto-selects PulseAudio/PipeWire
 
+    QApplication app(argc, argv);
+
     // Open rolling log file next to the executable.
     // Truncated on each launch so it never grows unbounded.
+    // Must come AFTER QApplication construction: applicationDirPath()
+    // returns an empty string (with a warning) before the app object
+    // exists, which pointed the log at the drive root where open()
+    // silently fails — so no haven_debug.log was ever written.
     g_logFile.setFileName(
         QCoreApplication::applicationDirPath() + "/haven_debug.log");
-    g_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+    if (!g_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate |
+                        QIODevice::Text))
+        fputs("haven_debug.log could not be opened — logging to stderr only\n",
+              stderr);
     qInstallMessageHandler(messageHandler);
 
-    QApplication app(argc, argv);
+    // Route the Qt-free DSP layer's logging (DspLog shim, ADR-124) into
+    // the same qDebug/qWarning stream as everything else, so DSP lines
+    // land in haven_debug.log with the usual timestamps and flushing.
+    HavenFSK::setDspLogSink([](HavenFSK::DspLogLevel level,
+                               const std::string& msg) {
+        if (level == HavenFSK::DspLogLevel::Warning)
+            qWarning().noquote() << QString::fromStdString(msg);
+        else
+            qDebug().noquote() << QString::fromStdString(msg);
+    });
 
     // Buffered DEBUG lines (see messageHandler) could otherwise leave the
     // last <50 lines unflushed at clean shutdown.

@@ -2,7 +2,51 @@
 
 ---
 
-## v0.2.0 — June 2026 *(current — cpp-rewrite branch)*
+## v0.3.0-beta — July 2026 *(current)*
+
+### External review fixes (see DECISIONS.md ADR-124 through ADR-126)
+
+**Safety / on-air behavior**
+- PTT release failure is now loud: txOff() verifies the unkey command,
+  retries up to 3 times, and raises a modal "YOUR RADIO MAY STILL BE
+  TRANSMITTING" alarm if the rig can't be confirmed unkeyed — including
+  when the rig-control connection dropped mid-TX (previously the unkey
+  was silently skipped). A failed key-up now aborts the transmission
+  instead of playing audio into an unkeyed rig.
+- End-of-transmission key click eliminated: one raised-cosine amplitude
+  envelope over the whole transmission (ramp-up at start, ramp-down at
+  end) — the frame previously ended mid-sine at full amplitude, which
+  splattered on adjacent frequencies.
+- rigctld replies are now framed properly: stale bytes from timed-out
+  commands are drained before each new command, and reads continue until
+  the reply is structurally complete — a stale "RPRT 0" from a frequency
+  poll can no longer be mistaken for a successful PTT command.
+
+**Stability**
+- Fixed a cross-thread use-after-free: moving the TX gain fader in the
+  final moments of a transmission could call into a just-deleted audio
+  device object. TX gain is now an atomic value owned by AudioEngine.
+
+**Logging (ADIF/QSO)**
+- ADIF exports use MODE=MFSK / SUBMODE=HAVEN-FSK (and MODE=PSK /
+  SUBMODE=PSK31) instead of the invalid MODE=DIGITAL, so LoTW/QRZ/POTA
+  uploads are accepted. Legacy DIGITAL rows are mapped at export time.
+- PSK31 contacts are now logged as PSK31, not HAVEN-FSK.
+
+**Architecture / infrastructure**
+- src/dsp is Qt-free again (ADR-003): new DspLog shim replaces QDebug in
+  Frame/MfskModem; DspPipeline (deliberately Qt-facing) moved to
+  src/pipeline/.
+- Debug self-tests actually run now — QT_DEBUG was never defined under
+  CMake, so every previous "Debug build" silently compiled them out.
+- haven_debug.log is actually written now — the log path was resolved
+  before QApplication existed, so the file never opened.
+- FEC matrices built once per Frame instead of per assemble()/parse()
+  call; assorted log/comment accuracy fixes.
+
+---
+
+## v0.2.0 — June 2026 *(cpp-rewrite branch)*
 
 Complete rewrite in C++17 / Qt6. This is a ground-up reimplementation
 replacing the Python/tkinter prototype. No Python dependency.

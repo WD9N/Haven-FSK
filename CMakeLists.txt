@@ -11,6 +11,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# main.cpp gates the startup self-tests on QT_DEBUG, which qmake defines
+# in debug builds but CMake does not — without this, Debug builds
+# silently compiled the self-tests out and they never ran.
+add_compile_definitions($<$<CONFIG:Debug>:QT_DEBUG>)
+
 # Qt configuration
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)

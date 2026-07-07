@@ -43,20 +43,23 @@ No external test framework. Tests run automatically in Debug builds via `main.cp
 #ifdef QT_DEBUG
     HavenFSK::runFecSelfTest();
     HavenFSK::runFrameSelfTest();
+    HavenFSK::runMfskLoopbackSelfTest();
     HavenFSK::runAudioSelfTest();
 #endif
 ```
 
-Test headers: `src/dsp/FecSelfTest.h`, `src/dsp/FrameSelfTest.h`, `src/audio/AudioSelfTest.h`. Output goes to stdout and `build/selftest_out.txt`.
+`QT_DEBUG` is defined for Debug configs by CMakeLists.txt — it is a qmake convention CMake doesn't provide, and without that define the self-tests silently compile out (ADR-126).
 
-To run tests: build in Debug mode and launch the executable. Non-zero exit = test failure.
+Test headers: `src/dsp/FecSelfTest.h`, `src/dsp/FrameSelfTest.h`, `src/dsp/MfskLoopbackSelfTest.h`, `src/audio/AudioSelfTest.h`. Output goes to stdout and (for DSP/Qt log lines) `haven_debug.log` next to the executable.
+
+To run tests: build in Debug mode and launch the executable. Non-zero exit = test failure; if the GUI appears, all self-tests passed.
 
 ## Architecture
 
-Six subsystems with strict layering:
+Seven subsystems with strict layering:
 
 ### DSP Layer (`src/dsp/`) — Qt-free C++17
-The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use `std::vector`, `std::string`, `uint8_t`, etc. This allows compilation and testing without Qt. Conversion to/from Qt types happens only at the `AudioEngine` boundary.
+The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use `std::vector`, `std::string`, `uint8_t`, etc. This allows compilation and testing without Qt. Conversion to/from Qt types happens only at the `AudioEngine` boundary. Diagnostic logging goes through the `DspLog` shim (`dspLog()`/`dspWarn()`, printf-style), whose sink `main.cpp` wires to qDebug/qWarning — never `#include <QDebug>` in this layer (ADR-124).
 
 - **Constants.h** — All protocol parameters as `constexpr`. SAMPLE_RATE=48000, SYMBOL_RATE=31.25 Hz, NUM_TONES=16, FFT_SIZE=12288 (8× zero-padded). Change protocol parameters here only.
 - **Modulator** — Continuous Phase FSK (CPFSK); phase accumulator carries across all symbol boundaries, never reset.
@@ -65,7 +68,10 @@ The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use 
 - **Preamble** — 16-symbol sequence `{0,15,0,15,7,8,7,8,...}`, soft correlation detection, threshold score ≥ 6.0.
 - **Frame** — Assembly: preamble + header + CRC-16/CCITT-FALSE + payload. `Frame.h` defines the wire format.
 - **FEC** — LDPC(192,96) with Belief Propagation (200 iterations max). Parity check matrix is hard-coded from the Python reference (ADR-012) — do not regenerate without verifying interoperability.
-- **DspPipeline** — State machine orchestrating the full RX path (Idle → preamble scan → frame collect → FEC decode → emit) and TX path (text → frame → modulate → audio). Also contains AFC (±75 Hz max tracking) and RX measurement cache.
+- **DspLog** — printf-style logging shim (`dspLog`/`dspWarn`); no-op until `main.cpp` installs the qDebug/qWarning sink.
+
+### Pipeline (`src/pipeline/`)
+- **DspPipeline** — Qt-facing glue (QObject) between AudioEngine and the active IModem: orchestrates the RX path (Idle → preamble scan → frame collect → FEC decode → emit) and TX path (text → frame → modulate → audio), plus AFC tracking and the RX measurement cache. Lives outside `src/dsp/` because it is deliberately Qt-dependent (signals, QString) — moved from `src/dsp/` in ADR-124.
 
 ### Audio (`src/audio/`)
 - **AudioEngine** — Wraps Qt6 `QAudioSource` (RX) and `QMediaPlayer` (TX). TX uses QMediaPlayer with in-memory WAV; do not use QAudioSink for TX (fires IdleState before hardware drains).

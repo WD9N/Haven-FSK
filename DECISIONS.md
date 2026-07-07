@@ -3407,3 +3407,147 @@ width fix) shows Refresh/Save/Close fully un-clipped with a vertical
 scrollbar handling the extra height. Not yet verified: an actual small
 laptop display (this was tested via the screen-height-cap logic and a
 large-monitor multi-monitor setup, not a real small-screen device).
+
+
+---
+
+## ADR-124 — Restored ADR-003's Qt-free DSP layer: DspLog shim; DspPipeline moved to src/pipeline/
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** The "no Qt in `src/dsp/`" invariant (ADR-003) had drifted:
+`Frame.cpp` included QDebug/QString, `MfskModem.cpp` carried the legacy
+QDebug logging it inherited when it was split out of DspPipeline (a
+deliberate, documented exception at the time), and `DspPipeline` — a
+QObject with signals, QString, QMap, QDateTime by design — lived inside
+`src/dsp/`. Three changes restore the invariant instead of re-scoping it:
+
+1. **`DspLog.h/.cpp`** — a tiny Qt-free logging shim: printf-style
+   `dspLog()`/`dspWarn()` feeding a `std::function` sink that defaults
+   to no-op. `main.cpp` wires the sink to qDebug/qWarning at startup, so
+   DSP log lines land in `haven_debug.log` exactly as before.
+2. **`Frame.cpp` and `MfskModem.cpp` converted** to the shim (message
+   text preserved; `qEnvironmentVariableIsSet` → `std::getenv`). The
+   MfskModem exception existed only to avoid rewriting debug lines
+   during the Phase-2 relocation; converting it now ends the exception.
+3. **`DspPipeline` moved to `src/pipeline/`** (git mv, includes and
+   CMakeLists updated). It is deliberately Qt-facing glue and can never
+   satisfy ADR-003 — the honest fix is location, not exemption.
+
+**Why:** CLAUDE.md calls the Qt-free DSP layer the most critical
+constraint, and the project actively uses it (diag_sync.cpp, the PSK31
+standalone verification builds in ADR-104). Documentation promising an
+invariant the code doesn't keep is worse than either fixing the code or
+the doc; fixing the code preserves the testing benefit.
+
+**Verification:** grep confirms zero Qt includes/types in `src/dsp/`
+(comments aside). Full Debug rebuild clean; all startup self-tests pass
+(see ADR-126 — this session also made them actually run); MFSK loopback
+self-test decodes end-to-end with DSP log lines flowing through the shim
+into haven_debug.log.
+
+---
+
+## ADR-125 — July 2026 external review fixes: TX-gain use-after-free, PTT release failure alarm, end-of-TX amplitude ramp, ADIF mode mapping, rigctld reply framing
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** An external code review of v0.3.0-beta flagged six issues;
+five are fixed here (the sixth is ADR-124), plus its minor notes:
+
+1. **TX gain fader use-after-free.** The GUI-thread fader lambda called
+   `AudioEngine::setTxGain()` directly, which dereferenced
+   `m_txGainDevice` — an object the DSP thread deletes at end of TX.
+   The gain value now lives in AudioEngine itself
+   (`std::atomic<float> m_txGain`); GainedAudioDevice holds a pointer to
+   it. `setTxGain()` never touches the per-transmission device object,
+   so the cross-thread call is safe and stays latency-free (no queued
+   invoke needed). Extends ADR-111's audit of this class.
+2. **A failed PTT-off no longer passes silently.** `PTTManager::txOff()`
+   previously ignored `setPTT(false)`'s result and skipped the command
+   entirely when `isConnected()` was false — a rig could stay keyed
+   while the UI showed "Listening...". txOff() now gates on a new
+   `m_pttKeyed` flag (not connection state, so a mid-TX disconnect still
+   attempts the unkey and a racing auto-reconnect can deliver it),
+   retries up to 3 attempts, and emits `pttReleaseFailed()` on failure —
+   MainWindow raises a modal critical alarm ("YOUR RADIO MAY STILL BE
+   TRANSMITTING"). `requestTX()` now treats a failed `setPTT(true)` as
+   fatal and refuses to start TX audio. The 120s watchdog inherits all
+   of this via txOff().
+3. **End-of-transmission key click fixed.** The transmission ended
+   mid-sine at full amplitude — an instantaneous step that splatters on
+   adjacent frequencies, transmitted on-air since PTT is still held
+   through the tail delay. `Frame::assemble()` now applies one
+   raised-cosine envelope over the WHOLE assembled frame (RAMP_SAMPLES
+   up at the very start, down at the very end). This is the correct
+   re-introduction of the constant orphaned when the per-symbol ramps
+   were removed (per-symbol ramps pulsed at 31.25 Hz — see CHANGELOG
+   Phase 8; per-transmission edges cannot pulse).
+4. **ADIF exports no longer emit MODE=DIGITAL** (not a valid ADIF mode —
+   LoTW/QRZ/POTA reject or bucket it as unknown). The active modem's
+   name is stamped into each contact (MainWindow → `modem_name` field);
+   LogManager maps it to the proper pair (Haven MFSK → MODE=MFSK,
+   SUBMODE=HAVEN-FSK; PSK31 → MODE=PSK, SUBMODE=PSK31) at insert, and
+   AdifExporter maps legacy MODE=DIGITAL rows by submode at export. This
+   also fixes PSK31 QSOs being logged as HAVEN-FSK contacts.
+5. **rigctld reply framing.** `sendCommand()` took whatever bytes
+   followed the first readyRead: replies split across TCP segments were
+   truncated, and a reply arriving after a timeout sat in the buffer to
+   be prepended to the NEXT command's response — so a stale "RPRT 0"
+   from a frequency poll could read as a successful PTT command
+   (compounding issue 2). sendCommand() now drains stale bytes before
+   each write and reads until the reply is structurally complete
+   (expectedLines newline-terminated lines, or a terminal "RPRT n"
+   line), looping on waitForReadyRead within the timeout budget.
+
+Minor notes from the same review, also fixed: FEC (whose constructor
+runs Gaussian elimination) is now a `Frame` member instead of being
+rebuilt in every assemble()/parse() call; MfskModem's decoded-message
+log reports the real CRC outcome instead of unconditional "CRC OK";
+Frame.cpp's stale "double header" comment now says 3x;
+`LogManager::open()` no longer calls addDatabase() for an
+already-registered connection name; PTTManager's destructor documents
+that it only blocks on socket I/O when the rig is actually keyed.
+
+**Verification:** full Debug rebuild clean; all startup self-tests pass,
+including the MFSK loopback test decoding a complete frame assembled
+WITH the new amplitude ramp (preamble lock score 0.999, CRC OK, FEC
+converged). PTT failure paths and the modal alarm are code-reviewed but
+not yet exercised against a real rigctld failure — worth a live test by
+killing rigctld mid-TX.
+
+---
+
+## ADR-126 — Debug self-tests and haven_debug.log were silently non-functional under CMake
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** Two pieces of verification infrastructure the project
+believed it had were discovered dead while verifying ADR-124/125:
+
+1. **The `#ifdef QT_DEBUG` self-test chain in main.cpp never ran.**
+   `QT_DEBUG` is defined by qmake in debug builds; CMake defines only
+   `QT_NO_DEBUG` (in release). No build configuration ever defined
+   `QT_DEBUG`, so every "Debug build" compiled the self-tests out.
+   CMakeLists.txt now adds `$<$<CONFIG:Debug>:QT_DEBUG>`.
+2. **haven_debug.log was never written.** main.cpp resolved
+   `QCoreApplication::applicationDirPath()` BEFORE constructing
+   QApplication — that returns an empty string, pointing the log at the
+   drive root, where open() fails silently. The log-file setup now runs
+   right after QApplication construction, and a failed open() prints a
+   stderr notice instead of failing silently.
+
+**Why this matters beyond the fix:** several past ADRs record
+"all QT_DEBUG self-tests pass" as verification. Those runs were
+vacuous — the tests weren't compiled in. The underlying features were
+verified by other means at the time (loopback captures, live QSOs), but
+future verification claims should note WHICH mechanism actually ran.
+
+**Verification:** Debug rebuild now emits self-test activity at startup
+(Frame::parse header line, demod self-test PASS, full MFSK loopback
+decode) and haven_debug.log is created next to the executable with all
+DSP/Qt log lines present. A deliberately-broken self-test was not
+exercised; the pass path is confirmed live.
