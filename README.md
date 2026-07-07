@@ -313,10 +313,10 @@ implement a compatible encoder or decoder without restriction.
 
 Copyright (C) 2026 WD9N
 
-This software is licensed under the **GNU General Public License v3**.  
-The HAVEN-FSK **mode specification** is released to the public domain.
-
-Commercial use of the software requires written permission from the author.
+This software is licensed under the **GNU General Public License v3** —
+see [LICENSE](LICENSE) for the full terms.  
+The HAVEN-FSK **mode specification** is released to the public domain:
+anyone may implement a compatible encoder or decoder without restriction.
 
 ---
 
