@@ -1,0 +1,4 @@
+// Windows resource script — stamps the application icon onto HavenFSK.exe
+// so Explorer, the taskbar, and installer shortcuts show the HAVEN-FSK icon.
+// Referenced by APP_ICON_RESOURCE_WINDOWS in CMakeLists.txt (WIN32 only).
+IDI_ICON1 ICON "Haven_fsk.ico"

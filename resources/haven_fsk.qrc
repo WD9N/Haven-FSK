@@ -1,5 +1,11 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
-    <qresource prefix="/">
+    <qresource prefix="/icons">
+        <file>Haven_fsk_16.png</file>
+        <file>Haven_fsk_32.png</file>
+        <file>Haven_fsk_48.png</file>
+        <file>Haven_fsk_64.png</file>
+        <file>Haven_fsk_128.png</file>
+        <file>Haven_fsk_256.png</file>
     </qresource>
 </RCC>

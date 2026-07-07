@@ -39,6 +39,8 @@
 #include <QDebug>
 #include <QFile>
 #include <QCoreApplication>
+#include <QStandardPaths>
+#include <QDir>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -1123,15 +1125,26 @@ void MainWindow::onRecordRxToggled(bool on) {
 void MainWindow::saveRxRecording() {
     if (m_rxRecordBuffer.empty()) return;
 
-    const QString path =
+    // Next to the exe when possible (portable convention); per-user
+    // AppData when the exe dir isn't writable (e.g. unzipped into
+    // Program Files). Attempting the open is the reliable writability
+    // test on Windows — directory-permission queries don't reflect ACLs.
+    QString path =
         QCoreApplication::applicationDirPath() + "/rx_capture.wav";
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly)) {
-        qWarning() << "MainWindow: could not open" << path << "for writing";
-        m_statusLabel->setText("Failed to save rx_capture.wav — see debug log");
-        m_rxRecordBuffer.clear();
-        return;
+        const QString dataDir = QStandardPaths::writableLocation(
+            QStandardPaths::AppDataLocation);
+        QDir().mkpath(dataDir);
+        path = dataDir + "/rx_capture.wav";
+        f.setFileName(path);
+        if (!f.open(QIODevice::WriteOnly)) {
+            qWarning() << "MainWindow: could not open" << path << "for writing";
+            m_statusLabel->setText("Failed to save rx_capture.wav — see debug log");
+            m_rxRecordBuffer.clear();
+            return;
+        }
     }
 
     // Standard 44-byte PCM WAV header — mono, 16-bit, 48000 Hz, matching

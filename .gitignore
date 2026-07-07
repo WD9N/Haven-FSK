@@ -12,6 +12,10 @@ CLAUDE_CODE_*.md
 
 # C++ build artifacts
 build/
+build-release/
+
+# Release staging output (scripts/package-release.ps1)
+dist/
 **/*.o
 **/*.obj
 *.exe

@@ -27,16 +27,37 @@ deeper into the noise at the same transmit power.
 
 ## Current Version
 
-**v0.2.0 — C++ / Qt6 rewrite (cpp-rewrite branch)**  
-Pre-release development. Published for FCC Part 97 §97.309 disclosure.
-Not yet tested on the air.
+**v0.3.0-beta — C++ / Qt6 (cpp-rewrite branch)**  
+Beta. Verified on the air station-to-station; wider beta testing in
+progress. Published for FCC Part 97 §97.309 disclosure.
 
-The v0.2.0 rewrite is a complete reimplementation in C++17 / Qt6 with no
-Python dependency. See [CHANGELOG.md](CHANGELOG.md) for the full feature list.
+The C++/Qt6 implementation is a complete rewrite of the original Python
+prototype with no Python dependency. See [CHANGELOG.md](CHANGELOG.md)
+for the full feature list.
 
 ---
 
-## Key Features (v0.2.0)
+## Download (Windows)
+
+Grab the latest `HavenFSK-vX.Y.Z-win64.zip` from the
+[**Releases page**](https://github.com/WD9N/Haven-FSK/releases),
+unzip it anywhere convenient (Desktop, Documents, a `HamRadio` folder),
+and run `HavenFSK.exe`. No installation required; delete the folder to
+uninstall. Settings and your QSO log live in your user profile and
+survive upgrades — to upgrade, just unzip the new version over (or next
+to) the old one.
+
+> **Windows SmartScreen:** the first launch may show "Windows protected
+> your PC" because the beta is not code-signed. Click **More info →
+> Run anyway**.
+
+**Requirements:** Windows 10/11 64-bit; an SSB radio with USB audio
+interface or virtual audio cable, **set to 48000 Hz mono**; optionally
+Hamlib rigctld or a TCI-capable SDR (Thetis/ExpertSDR) for rig control.
+
+---
+
+## Key Features
 
 - **16-tone MFSK** — 500 Hz bandwidth, 500–968.75 Hz audio range
 - **LDPC(192,96) FEC** — rate 1/2 forward error correction, CRC-16 verification
@@ -59,24 +80,21 @@ Python dependency. See [CHANGELOG.md](CHANGELOG.md) for the full feature list.
 
 ---
 
-## Quick Start (v0.2.0 — Windows)
+## Quick Start (Windows)
 
-**Requirements:**
-- Windows 10/11 64-bit
-- An SSB radio with USB audio interface or VAC
-- Optionally: Hamlib rigctld running, or Thetis/HPSDR with TCI enabled
+Most users should use the pre-built download above. To build from
+source instead (Qt 6.11 with MinGW 13 required):
 
-**Build from source:**
 ```
 git clone https://github.com/WD9N/Haven-FSK.git
+cd Haven-FSK
 git checkout cpp-rewrite
-cd cpp
-mkdir build && cd build
-cmake .. -G Ninja -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/mingw_64
-cmake --build . --config Release
+build.bat            (Debug build — runs startup self-tests)
+build-release.bat    (Release build — what the distributed zip contains)
 ```
 
-Qt 6.11 with MinGW 13 is required. See `DECISIONS.md` for build notes.
+Set `QT_DIR`/`HAMLIB_DIR` inside the .bat files if your paths differ.
+See `CLAUDE.md` and `DECISIONS.md` for build notes.
 
 **First-time setup:**
 1. Launch `HavenFSK.exe`
@@ -109,7 +127,7 @@ Signal appears 500–968 Hz above the dial frequency.
 
 ---
 
-## UI Layout (v0.2.0)
+## UI Layout
 
 ```
 ┌─────────────────────────────────────────────────┐

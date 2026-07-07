@@ -4,6 +4,9 @@
 #include <QDateTime>
 #include <QMutex>
 #include <QDebug>
+#include <QIcon>
+#include <QStandardPaths>
+#include <QDir>
 #include "dsp/Constants.h"
 #include "dsp/DspLog.h"
 #include "ui/MainWindow.h"
@@ -72,19 +75,42 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
 
-    // Open rolling log file next to the executable.
-    // Truncated on each launch so it never grows unbounded.
+    // Window/taskbar icon on all platforms (embedded via haven_fsk.qrc).
+    // The exe's Explorer icon comes separately from resources/haven_fsk.rc.
+    // Multiple sizes so Windows picks a crisp one per context instead of
+    // scaling a single bitmap.
+    {
+        QIcon appIcon;
+        for (int size : {16, 32, 48, 64, 128, 256})
+            appIcon.addFile(QString(":/icons/Haven_fsk_%1.png").arg(size));
+        app.setWindowIcon(appIcon);
+    }
+
+    // Open rolling log file next to the executable (portable convention),
+    // truncated on each launch so it never grows unbounded. Falls back to
+    // the per-user AppData folder when the exe dir isn't writable (e.g.
+    // the app was unzipped into Program Files) — attempting the open is
+    // the reliable writability test on Windows.
     // Must come AFTER QApplication construction: applicationDirPath()
     // returns an empty string (with a warning) before the app object
     // exists, which pointed the log at the drive root where open()
     // silently fails — so no haven_debug.log was ever written.
+    const QIODevice::OpenMode logMode =
+        QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text;
     g_logFile.setFileName(
         QCoreApplication::applicationDirPath() + "/haven_debug.log");
-    if (!g_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate |
-                        QIODevice::Text))
-        fputs("haven_debug.log could not be opened — logging to stderr only\n",
-              stderr);
+    if (!g_logFile.open(logMode)) {
+        const QString dataDir = QStandardPaths::writableLocation(
+            QStandardPaths::AppDataLocation);
+        QDir().mkpath(dataDir);
+        g_logFile.setFileName(dataDir + "/haven_debug.log");
+        if (!g_logFile.open(logMode))
+            fputs("haven_debug.log could not be opened — logging to stderr only\n",
+                  stderr);
+    }
     qInstallMessageHandler(messageHandler);
+    if (g_logFile.isOpen())
+        qDebug() << "Debug log:" << g_logFile.fileName();
 
     // Route the Qt-free DSP layer's logging (DspLog shim, ADR-124) into
     // the same qDebug/qWarning stream as everything else, so DSP lines

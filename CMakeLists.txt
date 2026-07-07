@@ -159,11 +159,14 @@ set(RESOURCES
     resources/haven_fsk.qrc
 )
 
-# Main executable
+# Main executable. APP_ICON_RESOURCE_WINDOWS (set in the platform block
+# above) compiles resources/haven_fsk.rc into the exe so Explorer/taskbar
+# show the HAVEN-FSK icon; it is empty/undefined on non-Windows.
 qt_add_executable(HavenFSK
     ${SOURCES}
     ${HEADERS}
     ${RESOURCES}
+    ${APP_ICON_RESOURCE_WINDOWS}
 )
 
 # Qt libraries
@@ -211,13 +214,13 @@ target_include_directories(HavenFSK PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# DEBUG: temporarily disabled for console output
-# Restore before release packaging
-# if(WIN32)
-#     set_target_properties(HavenFSK PROPERTIES
-#         WIN32_EXECUTABLE TRUE
-#     )
-# endif()
+# Windowed app (no console) for release packaging; Debug keeps the
+# console so startup self-test output stays visible during development.
+if(WIN32 AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set_target_properties(HavenFSK PROPERTIES
+        WIN32_EXECUTABLE TRUE
+    )
+endif()
 
 # Install rules
 install(TARGETS HavenFSK
