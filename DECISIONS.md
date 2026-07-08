@@ -3551,3 +3551,46 @@ future verification claims should note WHICH mechanism actually ran.
 decode) and haven_debug.log is created next to the executable with all
 DSP/Qt log lines present. A deliberately-broken self-test was not
 exercised; the pass path is confirmed live.
+
+---
+
+## ADR-127 — Delete CPP_REWRITE.md; fold its rationale into this document
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `CPP_REWRITE.md` — the original plan/status document for the
+Python→C++ rewrite — is deleted. The rewrite it planned is complete
+(v0.3.0-beta shipped), and its useful content lives elsewhere: build
+instructions in CLAUDE.md/README.md, architecture in CLAUDE.md, history in
+CHANGELOG.md, decisions here.
+
+**Reasoning:** The July 2026 audit found the document stale to the point
+of being actively misleading: it claimed v0.2.0-beta status with "Phase 2
+in progress" (contradicting its own completed-phases list), gave build
+instructions for the removed `cpp/` subdirectory, repeated the pre-ADR-107
+"TX uses QMediaPlayer" audio guidance, described the demodulator as
+Hann-windowed (it is deliberately rectangular — see Demodulator.cpp),
+referred readers to a Python implementation on `main` that was deleted in
+commit 0be7261, and listed a "DCD + backoff" feature that was never built.
+A third architecture document duplicating CLAUDE.md is exactly how it
+rotted; deleting it removes the maintenance burden rather than
+transferring it.
+
+**Rationale preserved from the deleted document** (extends ADR-001, which
+already records the deployment-complexity/GIL-jitter/tkinter reasons for
+the rewrite):
+
+- **Performance headroom:** the DSP workload itself is light (31.25
+  symbols/sec), but C++ leaves headroom for the waterfall, spectrum
+  analysis, and real-time signal monitoring without CPU concern on any
+  target platform, including Raspberry Pi.
+- **Maintainability/handoff:** a typed, compiled codebase with proper
+  headers is easier to maintain, extend, and hand off to other
+  contributors than the prototype's Python.
+
+**Supersession note:** ADR-001's statement that "the Python prototype will
+be preserved on `main` as a reference" no longer holds — the prototype was
+removed entirely in commit 0be7261. `HAVEN-FSK_Specification.md` is the
+interoperability reference; this C++ implementation is the sole
+implementation.
