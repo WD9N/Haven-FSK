@@ -65,7 +65,7 @@ The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use 
 - **Modulator** — Continuous Phase FSK (CPFSK); phase accumulator carries across all symbol boundaries, never reset.
 - **Demodulator** — FFT-based soft symbol detection with 8× zero-padding and ±3 bin guard window.
 - **DCD** — Carrier detect via SNR: signal band 450–1050 Hz vs noise reference 150–400 Hz, threshold 12 dB.
-- **Preamble** — 16-symbol sequence `{0,15,0,15,7,8,7,8,...}`, soft correlation detection, threshold score ≥ 6.0.
+- **Preamble** — 16-symbol sequence `{0,15,0,15,7,8,7,8,...}`. Live RX detection is **PreambleSync** (per-sample sliding DFT, ADR-105): soft correlation score in [0,1], threshold 0.45 (`PreambleSync::SCORE_THRESHOLD`). The legacy block detector in `Preamble` (`PREAMBLE_THRESHOLD` = 6.0 matches of 16) is used only by self-tests/diagnostics, not the RX path.
 - **Frame** — Assembly: preamble + header + CRC-16/CCITT-FALSE + payload. `Frame.h` defines the wire format.
 - **FEC** — LDPC(192,96) with Belief Propagation (200 iterations max). Parity check matrix is hard-coded from the Python reference (ADR-012) — do not regenerate without verifying interoperability.
 - **DspLog** — printf-style logging shim (`dspLog`/`dspWarn`); no-op until `main.cpp` installs the qDebug/qWarning sink.
@@ -74,9 +74,9 @@ The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use 
 - **DspPipeline** — Qt-facing glue (QObject) between AudioEngine and the active IModem: orchestrates the RX path (Idle → preamble scan → frame collect → FEC decode → emit) and TX path (text → frame → modulate → audio), plus AFC tracking and the RX measurement cache. Lives outside `src/dsp/` because it is deliberately Qt-dependent (signals, QString) — moved from `src/dsp/` in ADR-124.
 
 ### Audio (`src/audio/`)
-- **AudioEngine** — Wraps Qt6 `QAudioSource` (RX) and `QMediaPlayer` (TX). TX uses QMediaPlayer with in-memory WAV; do not use QAudioSink for TX (fires IdleState before hardware drains).
+- **AudioEngine** — Wraps Qt6 `QAudioSource` (RX) and `QAudioSink` in pull mode (TX, raw int16 PCM — no WAV container; see ADR-107). TX completion is a computed-duration QTimer, NOT `QAudioSink::stateChanged()`/IdleState — that signal fires when data is handed to the driver, not when playback finishes.
 - Converts int16 PCM ↔ float32 at the boundary to DSP.
-- **GainedAudioDevice** — Inline QIODevice with `std::atomic<float>` gain; allows real-time TX level control without thread locks.
+- **GainedAudioDevice** — Inline QIODevice applying real-time TX gain per read; reads AudioEngine's `std::atomic<float>` (the atomic outlives the per-transmission device), so the GUI thread can adjust level without locks.
 
 ### Radio Control (`src/radio/`)
 - **RadioInterface** — Pure virtual base; all rig control code depends only on this interface.
@@ -106,4 +106,4 @@ The most critical constraint: **no Qt types in `src/dsp/`**. All interfaces use 
 
 ## Architecture Decisions
 
-`DECISIONS.md` (ADR-001 through ADR-101 and growing) is the authoritative record. Consult it before changing any of the above invariants. Status "Decided" means the decision is not open for re-discussion without new information. Status "Revisable" means reasonable to reconsider.
+`DECISIONS.md` (ADR-001 through ADR-126 and growing) is the authoritative record. Consult it before changing any of the above invariants. Status "Decided" means the decision is not open for re-discussion without new information. Status "Revisable" means reasonable to reconsider.
