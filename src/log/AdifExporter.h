@@ -15,7 +15,8 @@
 // General:        {callsign}-{YYYYMMDD}.adi
 //
 // Combined POTA+SOTA: POTA files each contain MY_SOTA_REF.
-// MODE always DIGITAL, SUBMODE always HAVEN-FSK.
+// MODE/SUBMODE come from the logged row (MFSK/HAVEN-FSK or PSK/PSK31);
+// legacy MODE=DIGITAL rows are remapped at export time (see makeRecord).
 
 class AdifExporter
 {

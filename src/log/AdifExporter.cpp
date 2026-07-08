@@ -7,9 +7,13 @@
 
 QString AdifExporter::field(const QString& name, const QString& value) {
     if (value.isEmpty()) return QString();
+    // Length must count the bytes actually written — writeFile() encodes
+    // UTF-8, so QString::length() (UTF-16 code units) understates any
+    // non-ASCII value (e.g. a name like "José"), and byte-counting ADIF
+    // parsers then misread every field after it.
     return QString("<%1:%2>%3\n")
         .arg(name)
-        .arg(value.length())
+        .arg(value.toUtf8().length())
         .arg(value);
 }
 
