@@ -3594,3 +3594,32 @@ be preserved on `main` as a reference" no longer holds — the prototype was
 removed entirely in commit 0be7261. `HAVEN-FSK_Specification.md` is the
 interoperability reference; this C++ implementation is the sole
 implementation.
+
+---
+
+## ADR-128 — Drop unused Qt6::Charts link; GPLv3 rationale unaffected
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** `Qt6::Charts` is removed from `find_package()` and
+`target_link_libraries()` in CMakeLists.txt. The July 2026 audit found no
+QtCharts include or symbol anywhere in `src/` — the module was linked but
+never used (a leftover from an early waterfall/spectrum-display plan that
+was ultimately implemented with QPainter in WaterfallWidget instead).
+
+**Effect on ADR-101:** none on the decision, one correction to the record.
+ADR-101 cited the Charts link as "concrete evidence the project was already
+implicitly GPL-obligated" — with the unused link gone, that evidence never
+actually bound a shipped binary's license. ADR-101's primary rationale
+(GPLv3 intended from inception; copyleft aligned with keeping the mode out
+of closed-source forks) is independent of Qt Charts and stands unchanged.
+THIRD_PARTY_LICENSES.md's Qt section is reworded accordingly: every Qt
+module now linked is available under LGPLv3.
+
+**Practical effect:** windeployqt no longer bundles Qt6Charts.dll, so the
+next release ZIP shrinks slightly. Also noted during the same audit:
+`Qt6::MultimediaWidgets` likewise has no users in `src/` (no QVideoWidget);
+it is left in place pending its own check because Multimedia backend
+loading was historically finicky (ADR-107) — remove it in a follow-up
+only after a verified build+TX/RX smoke test without it.

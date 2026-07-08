@@ -29,7 +29,7 @@ cmake .. -DCMAKE_PREFIX_PATH=/path/to/qt6
 make -j$(nproc)
 ```
 
-Qt 6.11.1 minimum. Components used: Core, Widgets, Network, WebSockets, SerialPort, Multimedia, MultimediaWidgets, Charts, Sql. KissFFT is vendored in `src/third_party/kissfft/`.
+Qt 6.11.1 minimum. Components used: Core, Widgets, Network, WebSockets, SerialPort, Multimedia, MultimediaWidgets, Sql. KissFFT is vendored in `src/third_party/kissfft/`.
 
 **Hamlib (optional, for direct CAT rig control — see ADR-103):** not required to build; `HAVEN_ENABLE_HAMLIB` gracefully disables itself if not found, and `RigctldClient`/`TCIClient` are unaffected either way.
 - **Windows:** download an official Hamlib release SDK (e.g. `hamlib-w64-4.7.2.zip`) from https://github.com/Hamlib/Hamlib/releases, extract it, and set `HAMLIB_DIR` in `build.bat` to the extracted path.

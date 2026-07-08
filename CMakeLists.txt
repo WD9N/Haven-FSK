@@ -30,7 +30,6 @@ find_package(Qt6 REQUIRED COMPONENTS
     SerialPort
     Multimedia
     MultimediaWidgets
-    Charts
     Sql
 )
 
@@ -178,7 +177,6 @@ target_link_libraries(HavenFSK PRIVATE
     Qt6::SerialPort
     Qt6::Multimedia
     Qt6::MultimediaWidgets
-    Qt6::Charts
     Qt6::Sql
     kissfft
 )

@@ -28,15 +28,14 @@ incorporated into GPL works without conflict.
 commercial license, depending on module.
 **Components used** (see `CMakeLists.txt`, `target_link_libraries(HavenFSK ...)`):
 Core, Widgets, Network, WebSockets, SerialPort, Multimedia,
-MultimediaWidgets, Charts, Sql.
+MultimediaWidgets, Sql.
 
-**Important:** In Qt's open-source distribution, the **Qt Charts** module is
-available **only under GPLv3** — it has no LGPL option. Since this project
-links `Qt6::Charts`, the application's distribution is bound by GPLv3 terms
-for that dependency regardless of any other module's licensing. This is the
-concrete fact that motivated correcting the project's own license to GPLv3
-(see `DECISIONS.md` ADR-101). All other linked Qt6 modules are available
-under LGPLv3, which is also compatible with a GPLv3 application.
+All linked Qt6 modules are available under LGPLv3, which is compatible
+with this GPLv3 application. (An earlier revision linked `Qt6::Charts` —
+GPL-only in Qt's open-source distribution — and cited that link as
+evidence the project was already GPL-bound; the module was never actually
+used and was dropped in ADR-128. The project's GPLv3 license stands on
+its own merits per ADR-101, independent of any Qt module's terms.)
 
 ---
 
