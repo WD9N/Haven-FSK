@@ -5,6 +5,7 @@
 #include <QUrl>
 #include <QList>
 #include <tuple>
+#include <algorithm>
 
 RxDisplay::RxDisplay(QWidget* parent)
     : QTextBrowser(parent)
@@ -194,6 +195,43 @@ QString RxDisplay::renderMessage(const QString& text,
                              linkHtml});
     }
 
+    // Callsign links are collected the same way — (position, length, html)
+    // ranges over the original text — so every callsign can be linked in
+    // the same single splice pass as the tag links. The old approach
+    // patched callsigns into the already-built HTML with QString::replace,
+    // which also matches inside href attributes (the ADR-110 corruption
+    // class); its whole-string "already linked?" guard prevented that but
+    // made every callsign after the first a dead letter. Matching against
+    // the uppercased text also fixes the old replace()'s case sensitivity.
+    // Callsign-shaped words inside an already-linked tag value (e.g. the
+    // "W7W" in SOTA:W7W/SE-001) are skipped via the overlap check.
+    static QRegularExpression wordRe(
+        "\\b([A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z])\\b");
+    const QString senderUpper = senderCallsign.toUpper();
+    auto wordIt = wordRe.globalMatch(text.toUpper());
+    while (wordIt.hasNext()) {
+        auto m = wordIt.next();
+        int pos = m.capturedStart(1);
+        int len = m.capturedLength(1);
+        bool overlaps = false;
+        for (const auto& rep : replacements) {
+            int rPos = std::get<0>(rep);
+            int rLen = std::get<1>(rep);
+            if (pos < rPos + rLen && rPos < pos + len) { overlaps = true; break; }
+        }
+        if (overlaps) continue;
+
+        QString call = m.captured(1);
+        QString link = makeLink("callsign", call, text.mid(pos, len));
+        if (call == senderUpper)
+            link = "<b>" + link + "</b>";   // sender highlighted bold
+        replacements.append({pos, len, link});
+    }
+    std::sort(replacements.begin(), replacements.end(),
+              [](const auto& a, const auto& b) {
+                  return std::get<0>(a) < std::get<0>(b);
+              });
+
     // Splice escaped plain-text segments around the generated link HTML.
     // The message text arrived over the air and is untrusted: unescaped,
     // insertHtml() would render any markup a station transmits (spoofed
@@ -209,34 +247,6 @@ QString RxDisplay::renderMessage(const QString& text,
         cursor = pos + len;
     }
     processed += text.mid(cursor).toHtmlEscaped();
-
-    // Highlight sender callsign (bold + clickable). A single replace() only
-    // -- the link HTML itself contains the callsign text (in both the
-    // haven://callsign/<call> href and the visible link text), so a second
-    // replace() pass over the same string would match those and re-wrap
-    // them, corrupting the markup (this actually happened -- see
-    // DECISIONS.md).
-    if (!senderCallsign.isEmpty()) {
-        QString callLink = "<b>" + makeLink("callsign",
-                                             senderCallsign,
-                                             senderCallsign) + "</b>";
-        processed.replace(senderCallsign, callLink);
-    }
-
-    // Link any remaining callsign-like words not already linked
-    static QRegularExpression wordRe(
-        "\\b([A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z])\\b");
-    auto wordIt = wordRe.globalMatch(text.toUpper());
-    QStringList foundCalls;
-    while (wordIt.hasNext()) {
-        QString word = wordIt.next().captured(1);
-        if (word != senderCallsign.toUpper() && !foundCalls.contains(word))
-            foundCalls.append(word);
-    }
-    for (const QString& call : foundCalls) {
-        if (!processed.contains("haven://callsign/"))
-            processed.replace(call, makeLink("callsign", call, call));
-    }
 
     return processed;
 }
