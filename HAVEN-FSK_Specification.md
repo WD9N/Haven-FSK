@@ -227,12 +227,21 @@ without corrupting the recovered header.
 ```
 Bits 7-4: VERSION  — protocol version (currently 0010 = 2)
 Bits 3-0: FLAGS    — bit 0: FEC enabled (1=yes)
-                     bits 1-3: reserved
+                     bits 1-3: reserved (must be 0)
 ```
 A receiver that decodes a VERSION it does not recognize (e.g. a v1 station
 hearing a v2 transmission that also added payload interleaving, or vice
 versa) rejects the frame rather than attempting to decode it — the two
 versions are not wire-compatible.
+
+In protocol v2, byte 0 has exactly one valid value: 0x21 (VERSION=2,
+FEC=1). The FEC flag is always transmitted as 1 — v2 defines no
+FEC-disabled mode of operation — and the reserved bits are always 0. The
+reference receiver enforces this strictly, discarding any frame whose
+byte 0 differs (a nonzero reserved bit or FEC=0 is treated as header
+corruption, which the strictness helps reject early). A future extension
+that assigns meaning to a reserved bit therefore also requires a VERSION
+bump; it cannot be introduced compatibly under v2.
 
 **Byte 1:**
 ```
@@ -255,6 +264,10 @@ payload.
 - Polynomial: 0x1021
 - Initial value: 0xFFFF
 - Input/output reflection: None
+- Byte order on the wire: most-significant byte first (big-endian) —
+  the high byte of the 16-bit CRC is transmitted as the first of the
+  two CRC bytes
+- Test vector: CRC over the ASCII bytes "123456789" = 0x29B1
 
 ### 4.4 FEC-Encoded Payload
 
@@ -403,6 +416,7 @@ Primary character set: printable ASCII (0x20 through 0x7E).
 
 | Version     | Date     | Changes                                         |
 |-------------|----------|-------------------------------------------------|
+| 0.2.0-beta  | Jul 2026 (rev. 3) | Closed two disclosure gaps, no wire-format change: documented CRC-16 wire byte order (§4.3, big-endian) and added the standard test vector; documented that v2 header byte 0 has exactly one valid value (0x21 — FEC always 1, reserved bits always 0, receiver rejects otherwise), so reserved-bit extensions require a VERSION bump (§4.2). |
 | 0.2.0-beta  | Jul 2026 (rev. 2) | Corrected two disclosure errors, no wire-format change: documented Gray-coding of transmitted tone indices (§3.2/§3.3), previously omitted; corrected end-of-frame detection (§4) to header-disclosed message length rather than carrier sensing. |
 | 0.2.0-beta  | Jul 2026 | Protocol v2: header sent 3x with bit-level majority vote (was 2x, "prefer copy 1"); payload interleaving across LDPC blocks added — both are wire-format-breaking changes, gated by the header VERSION field. Modulator confirmed/documented as continuous-phase (CPMFSK). Effective NBLOCKS maximum corrected to 125 (receiver-enforced sanity cap), not the 255 the field width alone would allow. |
 | 0.1.0-alpha | Jun 2026 | Initial specification, pre-release alpha        |
