@@ -194,12 +194,21 @@ QString RxDisplay::renderMessage(const QString& text,
                              linkHtml});
     }
 
-    // Apply tag replacements to original text in reverse order (preserves positions)
-    QString processed = text;
-    for (int i = replacements.size() - 1; i >= 0; i--) {
-        auto [pos, len, html] = replacements[i];
-        processed = processed.left(pos) + html + processed.mid(pos + len);
+    // Splice escaped plain-text segments around the generated link HTML.
+    // The message text arrived over the air and is untrusted: unescaped,
+    // insertHtml() would render any markup a station transmits (spoofed
+    // "[hh:mm:ss] CALL:" lines, hidden/styled text) and silently swallow
+    // legitimate angle-bracket text like the "<sk>" prosign as an unknown
+    // tag. Only the link HTML built above goes in unescaped.
+    QString processed;
+    int cursor = 0;
+    for (const auto& rep : replacements) {
+        const auto& [pos, len, html] = rep;
+        processed += text.mid(cursor, pos - cursor).toHtmlEscaped();
+        processed += html;
+        cursor = pos + len;
     }
+    processed += text.mid(cursor).toHtmlEscaped();
 
     // Highlight sender callsign (bold + clickable). A single replace() only
     // -- the link HTML itself contains the callsign text (in both the
