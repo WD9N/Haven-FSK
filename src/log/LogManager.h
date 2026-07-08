@@ -6,6 +6,7 @@
 #include <QList>
 #include <QString>
 #include <QDate>
+#include <cstdint>
 
 // LogManager — persistent QSO log using SQLite via Qt6::Sql.
 //
@@ -56,6 +57,10 @@ signals:
 private:
     bool    createSchema();
     QString buildDbPath() const;
+
+    // Amateur band name for a frequency — used on insert AND update so an
+    // edited frequency can't leave a stale band behind in ADIF exports.
+    static QString bandForHz(uint64_t hz);
 
     QSqlDatabase m_db;
     QString      m_dbPath;

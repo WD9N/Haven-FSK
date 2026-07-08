@@ -119,28 +119,30 @@ bool LogManager::createSchema() {
     return true;
 }
 
+QString LogManager::bandForHz(uint64_t hz) {
+    if      (hz >= 1800000   && hz <= 2000000)   return "160m";
+    else if (hz >= 3500000   && hz <= 4000000)   return "80m";
+    else if (hz >= 5330500   && hz <= 5403500)   return "60m";
+    else if (hz >= 7000000   && hz <= 7300000)   return "40m";
+    else if (hz >= 10100000  && hz <= 10150000)  return "30m";
+    else if (hz >= 14000000  && hz <= 14350000)  return "20m";
+    else if (hz >= 18068000  && hz <= 18168000)  return "17m";
+    else if (hz >= 21000000  && hz <= 21450000)  return "15m";
+    else if (hz >= 24890000  && hz <= 24990000)  return "12m";
+    else if (hz >= 28000000  && hz <= 29700000)  return "10m";
+    else if (hz >= 50000000  && hz <= 54000000)  return "6m";
+    else if (hz >= 144000000 && hz <= 148000000) return "2m";
+    return "HF";
+}
+
 bool LogManager::logContact(const QVariantMap& fields) {
     if (!m_open) return false;
 
     QStringList theirParks = fields["their_pota_refs"].toStringList();
     QStringList myParks    = fields["my_pota_refs"].toStringList();
 
-    // Derive band from frequency
-    uint64_t hz = fields["frequency_hz"].toULongLong();
-    QString band;
-    if      (hz >= 1800000   && hz <= 2000000)   band = "160m";
-    else if (hz >= 3500000   && hz <= 4000000)   band = "80m";
-    else if (hz >= 5330500   && hz <= 5403500)   band = "60m";
-    else if (hz >= 7000000   && hz <= 7300000)   band = "40m";
-    else if (hz >= 10100000  && hz <= 10150000)  band = "30m";
-    else if (hz >= 14000000  && hz <= 14350000)  band = "20m";
-    else if (hz >= 18068000  && hz <= 18168000)  band = "17m";
-    else if (hz >= 21000000  && hz <= 21450000)  band = "15m";
-    else if (hz >= 24890000  && hz <= 24990000)  band = "12m";
-    else if (hz >= 28000000  && hz <= 29700000)  band = "10m";
-    else if (hz >= 50000000  && hz <= 54000000)  band = "6m";
-    else if (hz >= 144000000 && hz <= 148000000) band = "2m";
-    else band = "HF";
+    uint64_t hz   = fields["frequency_hz"].toULongLong();
+    QString  band = bandForHz(hz);
 
     QSqlQuery q(m_db);
     q.prepare(R"(
@@ -239,6 +241,7 @@ bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
             their_qth       = :their_qth,
             their_fd        = :their_fd,
             frequency_hz    = :frequency_hz,
+            band            = :band,
             notes           = :notes
         WHERE id = :id
     )");
@@ -255,8 +258,11 @@ bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
     q.bindValue(":their_name",   fields["their_name"].toString());
     q.bindValue(":their_qth",    fields["their_qth"].toString());
     q.bindValue(":their_fd",     fields["their_fd"].toString().toUpper());
-    q.bindValue(":frequency_hz",
-        QVariant::fromValue(fields["frequency_hz"].toULongLong()));
+    uint64_t hz = fields["frequency_hz"].toULongLong();
+    q.bindValue(":frequency_hz", QVariant::fromValue(hz));
+    // Recompute band from the (possibly edited) frequency — leaving the
+    // insert-time band would put a stale BAND in later ADIF exports.
+    q.bindValue(":band",         bandForHz(hz));
     q.bindValue(":notes",        fields["notes"].toString());
     q.bindValue(":id",           dbId);
 
