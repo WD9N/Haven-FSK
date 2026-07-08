@@ -63,7 +63,7 @@ Hamlib rigctld or a TCI-capable SDR (Thetis/ExpertSDR) for rig control.
 - **LDPC(192,96) FEC** — rate 1/2 forward error correction, CRC-16 verification
 - **Free text** — type anything, no rigid exchange format required
 - **Waterfall display** — four color palettes, adjustable speed and range, 120-row history
-- **AFC** — digital RX-only NCO correction ±75 Hz; VFO and TX frequency never move
+- **AFC** — digital RX-only correction up to ±200 Hz; VFO and TX frequency never move
 - **Clickable RX display** — callsigns and structured tags (POTA/SOTA/grid/RS/name)
   are clickable and auto-populate log entry fields
 - **TX in RX window** — transmitted messages shown in amber for conversation continuity
@@ -71,11 +71,11 @@ Hamlib rigctld or a TCI-capable SDR (Thetis/ExpertSDR) for rig control.
 - **rigctld** — Hamlib server support for IC-705, IC-7300, TS-590SG, FT-891, G90,
   and most HF radios
 - **TCI WebSocket** — direct integration with Thetis, ExpertSDR, HPSDR (PTT + VFO)
-- **Three-tier TX backoff** — CQ/Activator/Standard delays, DCD gating, 120-sec watchdog
+- **TX sequencing** — configurable PTT lead/tail delays, 120-sec FCC watchdog
 - **POTA / SOTA / Field Day** — activity-aware logging with correct ADIF export per program
 - **SQLite log** — WAL crash-safe, written immediately on Log It, no contacts lost
 - **Inline log edit** — double-click any logged QSO to edit or delete in place
-- **Macro system** — 2 banks × 8 buttons with variable tags; `<TX>` for auto-transmit
+- **Macro system** — 18 configurable buttons with variable tags; `<TX>` for auto-transmit
 - **FCC Part 97 compliance** — TX blocked until callsign entered; cites §97.119
 
 ---
@@ -133,32 +133,34 @@ Signal appears 500–968 Hz above the dial frequency.
 ┌─────────────────────────────────────────────────┐
 │ File  Radio  Operating  Help                    │  Menu bar
 ├─────────────────────────────────────────────────┤
-│ [WD9N  DN31  IL]  [POTA: US-1234]  [ACTIVATOR] │  Station info
-├──────────────────────────────────────┬──────────┤
-│                                      │  Splitter│
-│  Waterfall (120 rows, Earth palette) │  (drag-  │
-│  -- gray passband markers --         │  gable)  │
-│  -- green AFC tracking lines --      │          │
-├──────────────────────────────────────┤          │
-│  Received (RX decoded messages)      │          │
-│  [14:23] W1XXX: CQ POTA DE W1XXX... │          │
-│  [14:23][TX] WD9N: W1XXX DE WD9N.. │          │
-├──────────────────────────────────────┤          │
-│ Log  [Time][Call][Freq][RS-R][RS-S] │          │
-│      [Parks/SOTA][Grid][Notes]       │          │
-│ [Their Call][RS-R][RS-S][Parks]      │          │
-│ [Grid][Name][QTH][Notes]    [Log It] │          │
-└──────────────────────────────────────┘          │
-│ Macros: [A][B]  [CQ POTA][Stn Info][TU 73]...  │  Macro panel
+│ [WD9N DN31 IL] [POTA: US-1234]  14.090000 MHz  │  Top toolbar: station
+│ [Haven MFSK] [Squelch] [Rig ✓]  RX:[====]      │  info, freq, mode, rig
 ├─────────────────────────────────────────────────┤
-│ Transmit: [________________text___________][TX] │  TX input
+│  Waterfall (120 rows, four palettes)            │  Dock panel
+│  -- gray passband markers --                    │
+│  -- green AFC tracking lines --                 │
 ├─────────────────────────────────────────────────┤
-│ DCD:--  Idle  14.090000 MHz  No rig  RX:[====]  │  Status bar
+│  Received (RX decoded messages)                 │  Dock panel
+│  [14:23] W1XXX: CQ POTA DE W1XXX...            │
+│  [14:23][TX] WD9N: W1XXX DE WD9N..             │
+├─────────────────────────────────────────────────┤
+│ Log  [Time][Call][Freq][RS-R][RS-S]             │  Dock panel
+│ [Their Call][RS-R][RS-S][Parks]                 │
+│ [Grid][Name][QTH][Notes]           [Log It]     │
+├─────────────────────────────────────────────────┤
+│ Levels: RX [====]  TX [====]                    │  Dock panel
+├─────────────────────────────────────────────────┤
+│ Macros: [CQ POTA][Stn Info][TU 73][QRZ?]...    │  Dock panel: macros
+│ Transmit: [______________text__________][TX]    │  + TX input together
+├─────────────────────────────────────────────────┤
+│ Status: Listening...                            │  Bottom bar
 └─────────────────────────────────────────────────┘
 ```
 
-Splitter dividers between waterfall, RX window, and log panel are draggable.
-Positions are saved and restored between sessions.
+The five panels (Waterfall, Received, Log, Levels, Transmit) are dock
+widgets — each can be dragged to a new position, resized, floated as its
+own window, or closed. The arrangement is saved and restored between
+sessions.
 
 ---
 
@@ -206,9 +208,10 @@ auto-populates RS-S in the log entry and `<rstSent>` in macros.
 
 ## Macro System
 
-Two banks (A and B) of 8 buttons each. Switch banks manually. Right-click
-any button to open the editor. Macros with `<TX>` auto-transmit; without
-`<TX>`, text is placed in the TX input for review.
+A 6×3 grid of 18 configurable buttons. Right-click any button to open the
+editor — the editor's tag reference list is clickable and inserts the tag
+at the cursor. Macros with `<TX>` auto-transmit; without `<TX>`, text is
+placed in the TX input for review.
 
 | Tag            | Expands to                              |
 |----------------|-----------------------------------------|
@@ -217,16 +220,18 @@ any button to open the editor. Macros with `<TX>` auto-transmit; without
 | `<mySOTA>`     | SOTA summit reference                   |
 | `<myGrid>`     | Grid square                             |
 | `<myName>`     | Operator name                           |
-| `<myQTH>`      | Operator name (QTH alias)               |
+| `<myQTH>`      | Operator QTH (free text from Settings)  |
 | `<myState>`    | State or province                       |
 | `<myCounty>`   | County                                  |
 | `<myFD>`       | Field Day class + section               |
 | `<theirCall>`  | Callsign from log entry (when clicked)  |
 | `<rstSent>`    | Auto-computed RS report                 |
+| `<clr>`        | Clears the TX input before inserting    |
 | `<TX>`         | Triggers automatic transmission         |
 
-**Default Bank A** (activating): CQ POTA, Stn Info, TU 73, QRZ?, AGN?, QSL  
-**Default Bank B** (chasing/general): CQ, Stn Info, TU 73, AGN?
+**Defaults** (first 10 buttons): CQ POTA, Stn Info, TU 73, QRZ?, AGN?,
+QSL, CQ, plus plain-QSO Stn Info / TU 73 / AGN? variants. Remaining
+buttons are blank — right-click to configure.
 
 ---
 
@@ -243,12 +248,14 @@ any button to open the editor. Macros with `<TX>` auto-transmit; without
 ## AFC (Automatic Frequency Correction)
 
 HAVEN-FSK AFC corrects for inter-station frequency calibration differences
-and thermal VFO drift — without ever moving the radio's VFO.
+— without ever moving the radio's VFO.
 
-- **Range:** ±75 Hz
-- **Hard lock:** direct centroid measurement on preamble detection
-- **Slow tracking:** α=0.02 exponential average during frame (~1.6 sec)
-- **Partial reset:** offset × 0.5 on DCD drop — head start for next station
+- **Range:** ±200 Hz digital RX-only correction; the status bar warns
+  when the limit is reached (retune closer to the signal)
+- **Acquisition:** the preamble search itself scans ~±220 Hz of frequency
+  offset; on detection the winning offset is refined with a sub-bin
+  spectral-centroid measurement over the preamble symbols and applied
+  for the whole frame
 - **Waterfall:** gray markers show where signal should be; green markers
   float with AFC offset (hidden when offset < 0.5 Hz)
 - **Toggle:** Operating → AFC — Auto Frequency Correct
