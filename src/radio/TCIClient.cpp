@@ -31,6 +31,7 @@ TCIClient::~TCIClient() {
 }
 
 bool TCIClient::connect() {
+    m_userDisconnected = false;
     if (m_connected) return true;
     m_inInit = true;
     m_ready  = false;
@@ -41,6 +42,7 @@ bool TCIClient::connect() {
 }
 
 void TCIClient::disconnect() {
+    m_userDisconnected = true;
     m_reconnTimer->stop();
     m_reconnectAttempt = 0;
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
@@ -58,6 +60,9 @@ void TCIClient::onDisconnected() {
     m_connected = false;
     m_ready     = false;   // must re-handshake on reconnect
     emit disconnected();
+
+    // User asked for this disconnect — do not auto-reconnect.
+    if (m_userDisconnected) return;
 
     // A connection that has never completed the TCI handshake gets a
     // bounded number of attempts, then gives up cleanly instead of
@@ -85,7 +90,7 @@ void TCIClient::onDisconnected() {
 
 void TCIClient::onReconnectTimer() {
     // Fix 7: only reconnect if socket is not already in use
-    if (!m_connected && !m_socket->isValid()) {
+    if (!m_userDisconnected && !m_connected && !m_socket->isValid()) {
         qDebug() << "TCIClient: attempting reconnect";
         connect();
     }

@@ -85,6 +85,14 @@ private:
     bool        m_everConnected    {false};
     int         m_reconnectAttempt {0};
 
+    // True while the disconnect was requested by the user (Radio menu /
+    // shutdown) rather than the link dropping. disconnect() closes the
+    // socket, which fires onDisconnected() — without this flag that
+    // handler restarts the reconnect timer and the client re-connects to
+    // a rig the operator just asked to leave. Same convention as
+    // RigctldClient::m_userDisconnected.
+    bool        m_userDisconnected {false};
+
     static constexpr int RECONNECT_INTERVAL_MS = 10000;
 
     // How many attempts to make on a connection that has never succeeded
