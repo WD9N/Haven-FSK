@@ -40,7 +40,7 @@ public:
         const std::vector<std::vector<float>>& softSymbols) const;
 
     // Total post-preamble symbols needed for a complete frame.
-    // Used by DspPipeline::tryCompleteFrame() to know when to decode.
+    // Used by MfskModem::tryCompleteFrame() to know when to decode.
     static int frameSymsNeeded(int nBlocks) {
         return HEADER_TOTAL_SYMS + CRC_SYMS
                + nBlocks * (LDPC_N / BITS_PER_SYMBOL);

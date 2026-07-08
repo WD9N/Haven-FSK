@@ -57,6 +57,9 @@ void LogManager::close() {
         m_db.close();
         m_open = false;
     }
+    // Release our handle before removeDatabase(), or Qt warns
+    // "connection 'haven_log' is still in use".
+    m_db = QSqlDatabase();
     QSqlDatabase::removeDatabase("haven_log");
 }
 

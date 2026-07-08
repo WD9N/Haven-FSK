@@ -280,7 +280,7 @@ ParseResult Frame::parse(
     }
     uint16_t rxCrc = (static_cast<uint16_t>(crcBytes[0]) << 8) | crcBytes[1];
 
-    // ── Decode payload (symbols 8+) ───────────────────────────────────────
+    // ── Decode payload (symbols PAYLOAD_START+) ───────────────────────────
     if (result.useFec && nBlocks > 0) {
         int symsNeeded = nBlocks * (LDPC_N / BITS_PER_SYMBOL);  // nBlocks * 48
         if ((int)softSymbols.size() < PAYLOAD_START + symsNeeded) {
