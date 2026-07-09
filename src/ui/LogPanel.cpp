@@ -436,6 +436,18 @@ void LogPanel::onContactPersisted(const QVariantMap& fields) {
 
 void LogPanel::setRsSent(const QString& rs)    { m_rsSent->setText(rs); }
 
+bool LogPanel::maybeSetAutoRsSent(const QString& senderCallsign,
+                                   const QString& rs)
+{
+    if (senderCallsign.trimmed().toUpper() !=
+        m_callEntry->text().trimmed().toUpper())
+        return false;
+    if (m_callEntry->text().trimmed().isEmpty()) return false;
+    if (!m_rsSent->text().trimmed().isEmpty())   return false;
+    m_rsSent->setText(rs);
+    return true;
+}
+
 QString LogPanel::mhzText(uint64_t hz) {
     QString s = QString::number(static_cast<double>(hz) / 1e6, 'f', 6);
     while (s.endsWith('0')) s.chop(1);

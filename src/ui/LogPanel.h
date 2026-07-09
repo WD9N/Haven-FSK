@@ -32,6 +32,13 @@ public:
 
     void populateField(const QString& scheme, const QString& value);
     void setRsSent(const QString& rs);
+
+    // RS-S from a decoded message, hands-off path (vs. setRsSent, the
+    // explicit callsign-click path which always applies). Applies only
+    // when the sender is the station currently in the entry and RS-S is
+    // still empty — a bystander's decode, or a manual override, must not
+    // be clobbered mid-QSO. Returns true if applied.
+    bool maybeSetAutoRsSent(const QString& senderCallsign, const QString& rs);
     void setFrequency(uint64_t hz);
     void refresh();
 

@@ -1041,8 +1041,23 @@ void MainWindow::onMessageReceived(const HavenFSK::RxMessage& msg) {
 
     // Only feed confirmed-good decodes into the log entry -- a CRC/FEC
     // failure's text may be corrupted and shouldn't seed field values.
-    if (msg.crcOk)
+    if (msg.crcOk) {
         m_logPanel->autoPopulateFromMessage(msg.senderCallsign, msg.text);
+
+        // RS-S with zero clicks: if this message's station is the one now
+        // in the log entry (autoPopulate just verified/filled that), fill
+        // an empty RS-S from the measurement cache — same computation as
+        // the callsign-click path in onElementClicked().
+        if (!msg.senderCallsign.isEmpty()) {
+            std::optional<HavenFSK::RxMeasurement> m =
+                m_pipeline->getRxMeasurement(msg.senderCallsign);
+            if (m) {
+                QString rs = HavenFSK::DspPipeline::computeRS(*m);
+                if (m_logPanel->maybeSetAutoRsSent(msg.senderCallsign, rs))
+                    m_macroPanel->setRsSent(rs);
+            }
+        }
+    }
 
     m_statusLabel->setText(
         QString("RX — CRC: %1  FEC: %2")
