@@ -82,6 +82,7 @@ bool LogManager::createSchema() {
             their_grid      TEXT,
             their_name      TEXT,
             their_qth       TEXT,
+            their_state     TEXT,
             their_fd        TEXT,
             frequency_hz    INTEGER,
             band            TEXT,
@@ -117,6 +118,7 @@ bool LogManager::createSchema() {
     QSqlQuery mig(m_db);
     mig.exec("ALTER TABLE contacts ADD COLUMN my_state TEXT");
     mig.exec("ALTER TABLE contacts ADD COLUMN my_county TEXT");
+    mig.exec("ALTER TABLE contacts ADD COLUMN their_state TEXT");
     // Fail silently if columns already exist — that's expected
 
     return true;
@@ -153,7 +155,7 @@ bool LogManager::logContact(const QVariantMap& fields) {
             date_utc, time_utc, their_callsign,
             rs_received, rs_sent,
             their_pota_refs, their_sota_ref,
-            their_grid, their_name, their_qth, their_fd,
+            their_grid, their_name, their_qth, their_state, their_fd,
             frequency_hz, band, mode, submode, notes,
             my_callsign, my_grid, my_pota_refs, my_sota_ref,
             my_fd_class, my_fd_section, my_op_name,
@@ -162,7 +164,7 @@ bool LogManager::logContact(const QVariantMap& fields) {
             :date_utc, :time_utc, :their_callsign,
             :rs_received, :rs_sent,
             :their_pota_refs, :their_sota_ref,
-            :their_grid, :their_name, :their_qth, :their_fd,
+            :their_grid, :their_name, :their_qth, :their_state, :their_fd,
             :frequency_hz, :band, :mode, :submode, :notes,
             :my_callsign, :my_grid, :my_pota_refs, :my_sota_ref,
             :my_fd_class, :my_fd_section, :my_op_name,
@@ -180,6 +182,7 @@ bool LogManager::logContact(const QVariantMap& fields) {
     q.bindValue(":their_grid",      fields["their_grid"].toString().toUpper());
     q.bindValue(":their_name",      fields["their_name"].toString());
     q.bindValue(":their_qth",       fields["their_qth"].toString());
+    q.bindValue(":their_state",     fields["their_state"].toString().toUpper());
     q.bindValue(":their_fd",        fields["their_fd"].toString().toUpper());
     // Map the active modem (fields["modem_name"], stamped by MainWindow)
     // to its ADIF MODE/SUBMODE pair. "DIGITAL" is not in the ADIF mode
@@ -244,6 +247,7 @@ bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
             their_grid      = :their_grid,
             their_name      = :their_name,
             their_qth       = :their_qth,
+            their_state     = :their_state,
             their_fd        = :their_fd,
             frequency_hz    = :frequency_hz,
             band            = :band,
@@ -264,6 +268,7 @@ bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
         fields["their_grid"].toString().toUpper());
     q.bindValue(":their_name",   fields["their_name"].toString());
     q.bindValue(":their_qth",    fields["their_qth"].toString());
+    q.bindValue(":their_state",  fields["their_state"].toString().toUpper());
     q.bindValue(":their_fd",     fields["their_fd"].toString().toUpper());
     uint64_t hz = fields["frequency_hz"].toULongLong();
     q.bindValue(":frequency_hz", QVariant::fromValue(hz));

@@ -103,6 +103,7 @@ private:
     QLineEdit*   m_theirGrid   {nullptr};
     QLineEdit*   m_theirName   {nullptr};
     QLineEdit*   m_theirQth    {nullptr};
+    QLineEdit*   m_theirState  {nullptr};
     QLineEdit*   m_fdExchange  {nullptr};
     QLineEdit*   m_notes       {nullptr};
     // Frequency/date/time entry — blank means "auto": live dial frequency
@@ -120,6 +121,7 @@ private:
     QLabel* m_gridLabel  {nullptr};
     QLabel* m_nameLabel  {nullptr};
     QLabel* m_qthLabel   {nullptr};
+    QLabel* m_stateLabel {nullptr};
     QLabel* m_fdLabel    {nullptr};
 
     // ── Recent contacts table ─────────────────────────────────────────────

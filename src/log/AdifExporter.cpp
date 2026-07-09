@@ -85,6 +85,7 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     rec += field("GRIDSQUARE",       c["their_grid"].toString());
     rec += field("NAME",             c["their_name"].toString());
     rec += field("QTH",              c["their_qth"].toString());
+    rec += field("STATE",            c["their_state"].toString());
     rec += field("COMMENT",          c["notes"].toString());
     rec += field("MY_GRIDSQUARE",    c["my_grid"].toString());
     rec += field("MY_STATE",         c["my_state"].toString());

@@ -12,6 +12,13 @@
 #include <QList>
 #include <cmath>
 
+// "20260709" -> "2026-07-09" for the contacts-table date column
+static QString displayDate(const QString& yyyymmdd) {
+    if (yyyymmdd.length() != 8) return yyyymmdd;
+    return yyyymmdd.mid(0, 4) + "-" + yyyymmdd.mid(4, 2) + "-"
+         + yyyymmdd.mid(6, 2);
+}
+
 // Auto-correct POTA ref to canonical XX-NNNN format
 static QString fixPotaRef(const QString& raw) {
     QString s = raw.trimmed().toUpper();
@@ -239,6 +246,15 @@ void LogPanel::setupEntryStrip() {
     m_theirQth->setFont(mono);
     row2->addWidget(m_theirQth);
 
+    m_stateLabel = new QLabel("State:");
+    row2->addWidget(m_stateLabel);
+    m_theirState = new QLineEdit;
+    m_theirState->setMaximumWidth(50);
+    m_theirState->setFont(mono);
+    m_theirState->setToolTip("Their state/province (e.g. IL, ON)");
+    forceUpper(m_theirState);
+    row2->addWidget(m_theirState);
+
     row2->addWidget(new QLabel("Notes:"));
     m_notes = new QLineEdit;
     m_notes->setFont(mono);
@@ -261,10 +277,10 @@ void LogPanel::setupEntryStrip() {
 }
 
 void LogPanel::setupContactTable() {
-    m_contactTable = new QTableWidget(0, 8, this);
+    m_contactTable = new QTableWidget(0, 10, this);
     m_contactTable->setHorizontalHeaderLabels({
-        "Time", "Callsign", "Freq MHz",
-        "RS-R", "RS-S", "Parks/SOTA", "Grid", "Notes"
+        "UTC Date", "UTC", "Callsign", "Freq MHz",
+        "RS-R", "RS-S", "Parks/SOTA", "Grid", "St", "Notes"
     });
     m_contactTable->horizontalHeader()->setStretchLastSection(true);
     m_contactTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -274,13 +290,15 @@ void LogPanel::setupContactTable() {
     m_contactTable->verticalHeader()->setVisible(false);
     m_contactTable->setMinimumHeight(80);
 
-    m_contactTable->setColumnWidth(0, 65);
-    m_contactTable->setColumnWidth(1, 90);
+    m_contactTable->setColumnWidth(0, 80);
+    m_contactTable->setColumnWidth(1, 65);
     m_contactTable->setColumnWidth(2, 90);
-    m_contactTable->setColumnWidth(3, 45);
+    m_contactTable->setColumnWidth(3, 90);
     m_contactTable->setColumnWidth(4, 45);
-    m_contactTable->setColumnWidth(5, 140);
-    m_contactTable->setColumnWidth(6, 60);
+    m_contactTable->setColumnWidth(5, 45);
+    m_contactTable->setColumnWidth(6, 140);
+    m_contactTable->setColumnWidth(7, 60);
+    m_contactTable->setColumnWidth(8, 35);
 
     static_cast<QVBoxLayout*>(layout())->addWidget(m_contactTable);
 
@@ -312,6 +330,8 @@ void LogPanel::updateFieldVisibility() {
     m_theirName->setVisible(showGeneral);
     m_qthLabel->setVisible(showGeneral);
     m_theirQth->setVisible(showGeneral);
+    m_stateLabel->setVisible(showGeneral);
+    m_theirState->setVisible(showGeneral);
     m_fdLabel->setVisible(m_fdMode);
     m_fdExchange->setVisible(m_fdMode);
 }
@@ -469,6 +489,9 @@ void LogPanel::exitEditMode() {
     m_logButton->setStyleSheet("");
     m_clearButton->setText("Clear");
     m_deleteButton->setVisible(false);
+    // Edit mode showed the row's original date/time as placeholders
+    m_dateEntry->setPlaceholderText("auto");
+    m_timeEntry->setPlaceholderText("auto");
 }
 
 void LogPanel::onLogIt() {
@@ -542,6 +565,7 @@ void LogPanel::onLogIt() {
     fields["their_grid"]      = m_theirGrid->text().trimmed().toUpper();
     fields["their_name"]      = m_theirName->text().trimmed();
     fields["their_qth"]       = m_theirQth->text().trimmed();
+    fields["their_state"]     = m_theirState->text().trimmed().toUpper();
     fields["their_fd"]        = m_fdExchange->text().trimmed().toUpper();
     fields["notes"]           = m_notes->text().trimmed();
     fields["frequency_hz"]    = QVariant::fromValue(hz);
@@ -596,6 +620,7 @@ void LogPanel::onClear() {
     m_theirGrid->clear();
     m_theirName->clear();
     m_theirQth->clear();
+    m_theirState->clear();
     m_fdExchange->clear();
     m_notes->clear();
     m_dateEntry->clear();
@@ -655,6 +680,8 @@ void LogPanel::addContactRow(const QVariantMap& fields) {
     QString fd = fields["their_fd"].toString();
     if (!fd.isEmpty()) activity = fd;
 
+    auto* dateItem = new QTableWidgetItem(
+        displayDate(fields["date_utc"].toString()));
     auto* timeItem = new QTableWidgetItem(fields["time_utc"].toString());
     auto* callItem = new QTableWidgetItem(fields["their_callsign"].toString());
     auto* freqItem = new QTableWidgetItem(freqStr);
@@ -663,16 +690,19 @@ void LogPanel::addContactRow(const QVariantMap& fields) {
     auto* rssItem  = new QTableWidgetItem(fields["rs_sent"].toString());
     auto* actItem  = new QTableWidgetItem(activity);
     auto* gridItem = new QTableWidgetItem(fields["their_grid"].toString());
+    auto* stItem   = new QTableWidgetItem(fields["their_state"].toString());
     auto* noteItem = new QTableWidgetItem(fields["notes"].toString());
 
-    m_contactTable->setItem(0, 0, timeItem);
-    m_contactTable->setItem(0, 1, callItem);
-    m_contactTable->setItem(0, 2, freqItem);
-    m_contactTable->setItem(0, 3, rsrItem);
-    m_contactTable->setItem(0, 4, rssItem);
-    m_contactTable->setItem(0, 5, actItem);
-    m_contactTable->setItem(0, 6, gridItem);
-    m_contactTable->setItem(0, 7, noteItem);
+    m_contactTable->setItem(0, 0, dateItem);
+    m_contactTable->setItem(0, 1, timeItem);
+    m_contactTable->setItem(0, 2, callItem);
+    m_contactTable->setItem(0, 3, freqItem);
+    m_contactTable->setItem(0, 4, rsrItem);
+    m_contactTable->setItem(0, 5, rssItem);
+    m_contactTable->setItem(0, 6, actItem);
+    m_contactTable->setItem(0, 7, gridItem);
+    m_contactTable->setItem(0, 8, stItem);
+    m_contactTable->setItem(0, 9, noteItem);
 
     m_contactTable->item(0, 0)->setData(Qt::UserRole, fields);
 
@@ -697,14 +727,17 @@ void LogPanel::updateContactRow(int row, const QVariantMap& fields) {
     QString fd = fields["their_fd"].toString();
     if (!fd.isEmpty()) activity = fd;
 
-    m_contactTable->item(row, 0)->setText(fields["time_utc"].toString());
-    m_contactTable->item(row, 1)->setText(fields["their_callsign"].toString());
-    m_contactTable->item(row, 2)->setText(freqStr);
-    m_contactTable->item(row, 3)->setText(fields["rs_received"].toString());
-    m_contactTable->item(row, 4)->setText(fields["rs_sent"].toString());
-    m_contactTable->item(row, 5)->setText(activity);
-    m_contactTable->item(row, 6)->setText(fields["their_grid"].toString());
-    m_contactTable->item(row, 7)->setText(fields["notes"].toString());
+    m_contactTable->item(row, 0)->setText(
+        displayDate(fields["date_utc"].toString()));
+    m_contactTable->item(row, 1)->setText(fields["time_utc"].toString());
+    m_contactTable->item(row, 2)->setText(fields["their_callsign"].toString());
+    m_contactTable->item(row, 3)->setText(freqStr);
+    m_contactTable->item(row, 4)->setText(fields["rs_received"].toString());
+    m_contactTable->item(row, 5)->setText(fields["rs_sent"].toString());
+    m_contactTable->item(row, 6)->setText(activity);
+    m_contactTable->item(row, 7)->setText(fields["their_grid"].toString());
+    m_contactTable->item(row, 8)->setText(fields["their_state"].toString());
+    m_contactTable->item(row, 9)->setText(fields["notes"].toString());
     m_contactTable->item(row, 0)->setData(Qt::UserRole, fields);
 }
 
@@ -722,6 +755,7 @@ void LogPanel::onContactRowClicked(int row, int col) {
     m_theirGrid->setText(fields["their_grid"].toString());
     m_theirName->setText(fields["their_name"].toString());
     m_theirQth->setText(fields["their_qth"].toString());
+    m_theirState->setText(fields["their_state"].toString());
     m_fdExchange->setText(fields["their_fd"].toString());
     m_notes->setText(fields["notes"].toString());
 }
@@ -729,17 +763,21 @@ void LogPanel::onContactRowClicked(int row, int col) {
 void LogPanel::onContactRowDoubleClicked(int row, int col) {
     onContactRowClicked(row, col);
 
-    // Edit mode edits the row's own frequency/date/time, not the live
-    // dial values — without this, updating an old contact silently
-    // rewrote its frequency to wherever the radio is tuned right now.
+    // Edit mode edits the row's own frequency, not the live dial value —
+    // without this, updating an old contact silently rewrote its
+    // frequency to wherever the radio is tuned right now. Date/time stay
+    // BLANK: blank keeps the row's originals (shown as placeholders), so
+    // they only change when the operator specifically types new values.
     QVariant data = m_contactTable->item(row, 0)->data(Qt::UserRole);
     if (data.isValid()) {
         QVariantMap orig = data.toMap();
         uint64_t hz = orig["frequency_hz"].toULongLong();
         m_freqEntry->setText(hz > 0 ? mhzText(hz) : QString());
         m_freqManual = true;
-        m_dateEntry->setText(orig["date_utc"].toString());
-        m_timeEntry->setText(orig["time_utc"].toString());
+        m_dateEntry->clear();
+        m_timeEntry->clear();
+        m_dateEntry->setPlaceholderText(orig["date_utc"].toString());
+        m_timeEntry->setPlaceholderText(orig["time_utc"].toString());
     }
 
     m_editingRow = row;
