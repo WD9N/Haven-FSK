@@ -6,6 +6,7 @@
 #include <QVBoxLayout>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QLinearGradient>
 #include <cmath>
 #include <algorithm>
@@ -72,6 +73,14 @@ public:
         m_db   = std::max(DB_MIN, std::min(DB_MAX, db));
         m_capY = dbToY(m_db);
         update();
+    }
+
+    // setDb + dbChanged — for adjustments that aren't a drag (wheel).
+    void nudgeDb(float delta) {
+        float clamped = std::max(DB_MIN, std::min(DB_MAX, m_db + delta));
+        if (clamped == m_db) return;
+        setDb(clamped);
+        emit dbChanged(m_db);
     }
 
 signals:
@@ -256,6 +265,15 @@ public:
 
 signals:
     void faderChanged(float db);
+
+protected:
+    // Wheel anywhere over the strip (scale, LEDs, fader, labels) adjusts
+    // the fader — children don't handle wheel, so it propagates here.
+    // 1 dB per notch; trackpads deliver proportionally finer deltas.
+    void wheelEvent(QWheelEvent* e) override {
+        m_fader->nudgeDb(e->angleDelta().y() / 120.0f);
+        e->accept();
+    }
 
 private:
     void updateDbLabel(float db) {
