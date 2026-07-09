@@ -2,7 +2,31 @@
 
 ---
 
-## v0.3.0-beta — July 2026 *(current)*
+## v0.4.0-beta — July 2026 *(current)*
+
+**Operating**
+- Tune button: transmits a steady 1000 Hz tone through the normal TX
+  path (PTT keyed, level from the TX fader, 30 s auto-stop) for setting
+  drive level into the radio. Read power on an average-reading meter —
+  peak-reading meters show MFSK slightly high from TX filter ringing at
+  symbol transitions. Replaces the Tone TX / Monitor bring-up
+  diagnostics, which are removed.
+- Clear button for the Transmit input, matching the Received window.
+- Level faders adjust with the mouse wheel — hover anywhere over a
+  channel strip, 1 dB per notch.
+
+**Fixes (July 2026 audit)**
+- Interleaver: guarded a latent heap overflow on short input.
+- Received text is HTML-escaped before display, and every callsign in a
+  message gets linked (position-based, no false matches).
+- ADIF export: field lengths declared in UTF-8 bytes, so records with
+  non-ASCII characters import correctly elsewhere.
+- Log: band recomputed when a contact's frequency is edited.
+- TCI: no auto-reconnect after a user-requested disconnect.
+
+---
+
+## v0.3.0-beta — July 2026
 
 ### External review fixes (see DECISIONS.md ADR-124 through ADR-126)
 
