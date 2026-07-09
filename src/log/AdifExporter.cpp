@@ -140,13 +140,21 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     return rec;
 }
 
+QString AdifExporter::theirPrimaryPark(const QVariantMap& c) {
+    QStringList parks = c["their_pota_refs"].toString()
+                            .split(' ', Qt::SkipEmptyParts);
+    return parks.isEmpty() ? QString() : parks.first().toUpper();
+}
+
 QString AdifExporter::makeRecords(const QVariantMap& c,
                                    const QString& myPotaRef,
                                    const QString& mySotaRef)
 {
     // P2P with a multi-park station: one record per park, single-ref
     // SIG_INFO each. POTA's dedup keys on SIG_INFO — a space-joined
-    // multi-ref value (the old behavior) forfeits P2P credits.
+    // multi-ref value (the old behavior) forfeits P2P credits. This is a
+    // POTA *upload* convention: only the per-park activation files use it;
+    // the general and SOTA files carry one record per QSO.
     QStringList theirParks = c["their_pota_refs"].toString()
                                  .split(' ', Qt::SkipEmptyParts);
     if (theirParks.isEmpty())
@@ -225,7 +233,11 @@ QStringList AdifExporter::exportDate(
                 c["my_pota_refs"].toString().split(' ', Qt::SkipEmptyParts);
             QString primaryPota = myParks.isEmpty() ? QString()
                                                     : myParks.first().toUpper();
-            content += makeRecords(c, primaryPota, sotaRef);
+            // Single record per QSO — the per-their-park duplication is a
+            // POTA upload convention (see makeRecords); to sotadata's
+            // checker duplicated records just look like duplicate QSOs.
+            content += makeRecord(c, primaryPota, sotaRef,
+                                  theirPrimaryPark(c));
         }
 
         QString filename = QString("%1-%2-%3.adi")
@@ -249,7 +261,11 @@ QStringList AdifExporter::exportDate(
             QString primaryPota = myParks.isEmpty() ? QString()
                                                     : myParks.first().toUpper();
             QString mySota      = c["my_sota_ref"].toString().toUpper();
-            content += makeRecords(c, primaryPota, mySota);
+            // Single record per QSO — this file feeds QRZ/LoTW/the master
+            // log, where duplicated records read as duplicate QSOs. The
+            // full multi-park list stays in the local database.
+            content += makeRecord(c, primaryPota, mySota,
+                                  theirPrimaryPark(c));
         }
 
         QString filename = QString("%1-%2.adi").arg(myCall, dateUtc);

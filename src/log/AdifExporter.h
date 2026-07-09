@@ -18,9 +18,13 @@
 // and the SOTA file is generated as well (it was previously suppressed
 // whenever POTA refs existed the same day).
 //
-// P2P: a QSO with a station at N parks is written as N records, one park
-// per SIG_INFO — POTA's dedup keys on SIG_INFO, and a multi-ref value
-// forfeits P2P credits (docs.pota.app park_2_park).
+// P2P: in the per-park POTA activation files, a QSO with a station at N
+// parks is written as N records, one park per SIG_INFO — POTA's dedup
+// keys on SIG_INFO, and a multi-ref value forfeits P2P credits
+// (docs.pota.app park_2_park). This duplication is a POTA upload
+// convention only: the general and SOTA files carry one record per QSO
+// (their first park in SIG_INFO), and the database always holds a single
+// row per QSO regardless.
 // MODE/SUBMODE come from the logged row (MFSK/HAVEN-FSK or PSK/PSK31);
 // legacy MODE=DIGITAL rows are remapped at export time (see makeRecord).
 
@@ -40,10 +44,14 @@ private:
                                const QString& theirPotaRef);
 
     // All records for one contact — duplicates the record once per park
-    // the other station was at (see P2P note above).
+    // the other station was at. POTA per-park activation files ONLY (see
+    // P2P note above); other files use a single makeRecord().
     static QString makeRecords(const QVariantMap& contact,
                                 const QString& myPotaRef = QString(),
                                 const QString& mySotaRef = QString());
+
+    // First of the contacted station's parks (uppercased), or empty.
+    static QString theirPrimaryPark(const QVariantMap& contact);
 
     // Cabrillo log for ARRL Field Day — generated when any contact of the
     // day carries a received FD exchange (their_fd). ARRL's submission
