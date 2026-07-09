@@ -69,7 +69,6 @@ public:
     RxState rxState()        const;
     bool    dcdActive()      const { return m_dcdActive; }
     bool    isTransmitting()     const { return m_transmitting; }
-    bool    toneMonitorActive()  const { return m_modem->toneMonitorActive(); }
 
     // ── RX gain ───────────────────────────────────────────────────────────
     // atomic: written from GUI-thread UI code, read from onAudioChunk() on
@@ -112,23 +111,12 @@ public slots:
     void onAudioChunk(const std::vector<float>& samples);
     void onTxComplete();
 
-    // Internal demodulator diagnostic — no radio required.
-    void runToneSweepTest();
-
-    // Enable/disable continuous per-symbol tone logging on received audio.
-    void setToneMonitor(bool active);
-
-    // Generates diagnostic audio for RF testing (mode-dependent content;
-    // MFSK: 16-tone x 500ms sweep). Does NOT set m_transmitting — the RX
-    // pipeline and tone monitor stay active so the received signal can be
-    // logged while TX is in progress.
-    std::vector<float> generateToneSweepAudio() const;
-
-    // Same as generateToneSweepAudio(), but delivers the result via
-    // toneSweepAudioReady() instead of a synchronous return value — callers
-    // should use this one, since a direct return value can't be read
-    // synchronously once this runs on a different thread than the caller.
-    void requestToneSweepAudio();
+    // Generates steady tune-tone audio (mode-dependent; MFSK: 1000 Hz at
+    // TX_AMPLITUDE) for adjusting TX level into the radio. Delivered via
+    // tuneAudioReady() instead of a synchronous return value, since a
+    // direct return can't be read once this runs on a different thread
+    // than the caller. Does NOT set m_transmitting.
+    void requestTuneAudio();
 
 signals:
     void messageReceived(const HavenFSK::RxMessage& msg);
@@ -140,8 +128,8 @@ signals:
     void dcdChanged(bool active);
     void rxStateChanged(HavenFSK::RxState state);
     void txAudioReady(const std::vector<float>& samples);
-    // Result of requestToneSweepAudio() — see its doc comment above.
-    void toneSweepAudioReady(const std::vector<float>& samples);
+    // Result of requestTuneAudio() — see its doc comment above.
+    void tuneAudioReady(const std::vector<float>& samples);
     void preambleDetected(float score);
     void rxProgress(int symbolsReceived, int symbolsExpected);
     void afcOffsetChanged(float hz);

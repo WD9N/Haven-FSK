@@ -40,10 +40,7 @@ public:
     bool  afcEnabled()  const override { return m_afcEnabled; }
     float afcOffsetHz() const override { return m_afcOffsetHz; }
 
-    void setToneMonitor(bool active) override;
-    bool toneMonitorActive() const override { return m_toneMonitorActive; }
-    std::vector<float> generateDiagnosticAudio() const override;
-    void runDiagnosticSelfTest() override;
+    std::vector<float> generateTuneAudio() const override;
 
     ModemMode   mode()     const override { return ModemMode::Mfsk16; }
     std::string modeName() const override { return "Haven MFSK"; }
@@ -115,11 +112,6 @@ private:
     int m_diagChunkCount = 0;
     static constexpr int DIAG_LOG_INTERVAL_CHUNKS =
         static_cast<int>(SAMPLE_RATE * 1.0 / AUDIO_CHUNK_SAMPLES); // ~1s
-
-    // ── Tone monitor ─────────────────────────────────────────────────────
-    bool               m_toneMonitorActive = false;
-    std::vector<float> m_monitorBuf;
-    int                m_monitorSymCount   = 0;
 
     // ── AFC state ─────────────────────────────────────────────────────────
     float m_afcOffsetHz = 0.0f;

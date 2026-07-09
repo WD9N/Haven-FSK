@@ -408,42 +408,29 @@ void MainWindow::setupUi() {
     auto* txBtnRow = new QHBoxLayout;
     txBtnRow->addStretch();
 
-    m_toneTestButton = new QPushButton("Tone TX", txContainer);
-    m_toneTestButton->setMinimumWidth(80);
-    m_toneTestButton->setToolTip(
-        "Transmit all 16 HAVEN tones (500 ms each) across the RF path\n"
-        "and log what the receiver hears, symbol by symbol.\n"
-        "Watch the debug output for ToneMon[] lines while TX plays.\n"
-        "RX pipeline stays active — use with two radios on dummy loads.");
-    m_toneTestButton->setStyleSheet(
+    auto* txClearButton = new QPushButton("Clear", txContainer);
+    txClearButton->setToolTip("Clear the Transmit input");
+    connect(txClearButton, &QPushButton::clicked,
+            m_txInput, &QTextEdit::clear);
+    txBtnRow->addWidget(txClearButton);
+    txBtnRow->addSpacing(8);
+
+    m_tuneButton = new QPushButton("Tune", txContainer);
+    m_tuneButton->setMinimumWidth(72);
+    m_tuneButton->setCheckable(true);
+    m_tuneButton->setToolTip(
+        "Steady 1000 Hz tone for setting TX level (click again to stop).\n"
+        "Read power on an average-reading meter.");
+    m_tuneButton->setStyleSheet(
         "QPushButton {"
         "  background: #1a1a2e; color: #7a9ab0;"
         "  border: 1px solid #2a3a4a; border-radius: 3px;"
         "  padding: 4px 12px;"
         "}"
-        "QPushButton:hover { background: #222240; }");
-    txBtnRow->addWidget(m_toneTestButton);
-    txBtnRow->addSpacing(4);
-
-    m_monitorButton = new QPushButton("Monitor", txContainer);
-    m_monitorButton->setMinimumWidth(72);
-    m_monitorButton->setCheckable(true);
-    m_monitorButton->setToolTip(
-        "Toggle per-symbol tone logging.\n"
-        "When ON, every received symbol logs one line:\n"
-        "  ToneMon[N]: toneT (FFF.FF Hz)  frac=0.870\n"
-        "Turn on while 590SG is transmitting tones to see\n"
-        "exactly what the HermesLite demodulator hears.");
-    m_monitorButton->setStyleSheet(
-        "QPushButton {"
-        "  background: #1a1a2e; color: #7a9ab0;"
-        "  border: 1px solid #2a3a4a; border-radius: 3px;"
-        "  padding: 4px 10px;"
-        "}"
         "QPushButton:hover   { background: #222240; }"
-        "QPushButton:checked { background: #0d2d0d; color: #7ab07a;"
-        "                      border-color: #2a4a2a; }");
-    txBtnRow->addWidget(m_monitorButton);
+        "QPushButton:checked { background: #2e1a1a; color: #b07a7a;"
+        "                      border-color: #4a2a2a; }");
+    txBtnRow->addWidget(m_tuneButton);
     txBtnRow->addSpacing(8);
 
     m_txButton = new QPushButton("Transmit", txContainer);
@@ -520,20 +507,8 @@ void MainWindow::setupConnections() {
     // TX
     connect(m_txButton, &QPushButton::clicked,
             this, &MainWindow::onTransmit);
-    connect(m_toneTestButton, &QPushButton::clicked,
-            this, &MainWindow::onToneSweepTx);
-    connect(m_monitorButton, &QPushButton::toggled,
-            this, [this](bool on) {
-                QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setToneMonitor,
-                                           Qt::AutoConnection, on);
-                m_monitorButton->setText(on ? "Monitor ON" : "Monitor");
-                if (on)
-                    m_statusLabel->setText(
-                        "Tone monitor active — transmit tones from 590SG, "
-                        "watch debug log for ToneMon[] lines");
-                else
-                    m_statusLabel->setText("Tone monitor off");
-            });
+    connect(m_tuneButton, &QPushButton::toggled,
+            this, &MainWindow::onTuneToggled);
     // QTextEdit: Ctrl+Enter transmits, plain Enter adds newline
     auto* txShortcut = new QShortcut(
         QKeySequence(Qt::CTRL | Qt::Key_Return), m_txInput);
@@ -643,8 +618,8 @@ void MainWindow::setupConnections() {
                 }
             });
 
-    connect(m_pipeline, &HavenFSK::DspPipeline::toneSweepAudioReady,
-            this, &MainWindow::onToneSweepAudioReady);
+    connect(m_pipeline, &HavenFSK::DspPipeline::tuneAudioReady,
+            this, &MainWindow::onTuneAudioReady);
 
     // DspPipeline → AudioEngine (TX audio) — PTT lead then audio
     connect(m_pipeline, &HavenFSK::DspPipeline::txAudioReady,
@@ -987,16 +962,18 @@ void MainWindow::onTxStartError(const QString& message) {
     m_awaitingTxStart = false;
     qWarning() << "TX: startTx failed —" << message << "— aborting";
 
-    if (m_toneSweepActive) {
-        // Tone-sweep-specific cleanup, distinct from onTxComplete()'s
-        // success-path tone-sweep branch (which reports "complete", not a
-        // failure, and releases PTT only after the normal tail delay).
-        m_toneSweepActive = false;
-        QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setToneMonitor,
-                                   Qt::AutoConnection, false);
-        m_toneTestButton->setEnabled(true);
-        m_statusLabel->setText("Tone sweep: audio start failed");
+    if (m_tuneActive) {
+        // Tune-specific cleanup, distinct from onTxComplete()'s
+        // success-path tune branch. Clear m_tuneActive first so
+        // setChecked(false)'s toggled handler early-outs instead of
+        // repeating the stopTx/PTT-off done here.
+        m_tuneActive = false;
+        m_tuneButton->setChecked(false);
+        m_statusLabel->setText("Tune: audio start failed");
         if (m_pttManager) m_pttManager->txOff();
+        if (m_levelPanel) m_levelPanel->setTxLevel(-96.0f);
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::startRx, Qt::AutoConnection,
+                                   HavenFSK::savedInputDevice());
         return;
     }
 
@@ -1007,20 +984,13 @@ void MainWindow::onTxStartError(const QString& message) {
 }
 
 void MainWindow::onTxComplete() {
-    m_awaitingTxStart = false;  // TX genuinely started (or this is the tone-sweep/failure cleanup path)
+    m_awaitingTxStart = false;  // TX genuinely started (or this is the tune/failure cleanup path)
 
-    // Tone sweep TX completes here too.  Don't restart audio (RX was never
-    // stopped) — just stop the monitor, release PTT, and re-enable the button.
-    if (m_toneSweepActive) {
-        m_toneSweepActive = false;
-        m_monitorButton->setChecked(false);   // also calls setToneMonitor(false) via toggled signal
-        int tailMs = HavenFSK::txTailMs();
-        QTimer::singleShot(tailMs, this, [this]() {
-            if (m_pttManager) m_pttManager->txOff();
-            m_statusLabel->setText(
-                "Tone sweep complete — check debug log for ToneMon[] lines");
-        });
-        m_toneTestButton->setEnabled(true);
+    // Tune tone hit its max length without the operator toggling off.
+    // Unchecking triggers onTuneToggled(false), which releases PTT and
+    // updates status — don't restart audio (RX was never stopped).
+    if (m_tuneActive) {
+        m_tuneButton->setChecked(false);
         return;
     }
 
@@ -1359,42 +1329,56 @@ void MainWindow::onSquelchChanged(double value) {
     s.setValue("mode/squelch", value);
 }
 
-void MainWindow::onToneSweepTx() {
-    if (m_audio->isTransmitting()) {
-        m_statusLabel->setText("TX in progress — wait for it to finish");
-        return;
+void MainWindow::onTuneToggled(bool on) {
+    if (on) {
+        if (m_audio->isTransmitting()) {
+            m_statusLabel->setText("TX in progress — wait for it to finish");
+            m_tuneButton->setChecked(false);  // re-enters here; m_tuneActive
+            return;                           // still false, so it early-outs
+        }
+        m_tuneActive = true;
+        // Same sequence as a real transmission (onTransmit): RX stops
+        // before TX audio starts, so the tone goes out the TX device only.
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::stopRx, Qt::AutoConnection);
+        m_statusLabel->setText(
+            "Tune — 1000 Hz tone, adjust TX level slider (click Tune to stop)");
+
+        // Audio generation happens asynchronously — see onTuneAudioReady(),
+        // connected to DspPipeline::tuneAudioReady. Not a direct
+        // return-value read, since that becomes unsafe once this runs on a
+        // different thread than the caller.
+        QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::requestTuneAudio,
+                                   Qt::AutoConnection);
+    } else {
+        if (!m_tuneActive) return;  // failure paths already cleaned up
+        m_tuneActive = false;
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::stopTx,
+                                   Qt::AutoConnection);
+        if (m_pttManager) m_pttManager->txOff();
+        if (m_levelPanel) m_levelPanel->setTxLevel(-96.0f);
+        QMetaObject::invokeMethod(m_audio, &AudioEngine::startRx, Qt::AutoConnection,
+                                   HavenFSK::savedInputDevice());
+        m_statusLabel->setText("Tune off");
     }
-
-    m_toneSweepActive = true;
-    m_toneTestButton->setEnabled(false);
-    m_statusLabel->setText("Tone sweep TX (8s) — watch debug log for ToneMon[] lines");
-
-    // Start tone monitor BEFORE TX so no received symbols are missed.
-    m_monitorButton->setChecked(true);   // visually reflects active state
-
-    // Audio generation happens asynchronously — see onToneSweepAudioReady(),
-    // connected to DspPipeline::toneSweepAudioReady. Not a direct
-    // generateToneSweepAudio() return-value read, since that becomes unsafe
-    // once this runs on a different thread than the caller.
-    QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::requestToneSweepAudio,
-                               Qt::AutoConnection);
 }
 
-void MainWindow::onToneSweepAudioReady(const std::vector<float>& audio) {
-    if (!m_toneSweepActive) return;  // stale/cancelled request
+void MainWindow::onTuneAudioReady(const std::vector<float>& audio) {
+    if (!m_tuneActive) return;  // stale/cancelled request
 
     float gain = 1.0f;
     if (m_levelPanel) {
         float dBFS = m_levelPanel->txFaderDbFS();
         gain = std::max(0.0f, std::min(1.0f, std::pow(10.0f, dBFS / 20.0f)));
+        m_levelPanel->setTxLevel(dBFS);
     }
     QString outDev = HavenFSK::savedOutputDevice();
     int leadMs = HavenFSK::pttLeadMs();
 
-    // Failure recovery happens in onTxStartError() (its m_toneSweepActive
+    // Failure recovery happens in onTxStartError() (its m_tuneActive
     // branch), connected to AudioEngine::audioError — not via startTx()'s
     // bool return.
     auto startAudio = [this, audio, outDev, gain]() {
+        if (!m_tuneActive) return;  // operator toggled off during PTT lead
         m_awaitingTxStart = true;
         QMetaObject::invokeMethod(m_audio, &AudioEngine::startTx,
                                    Qt::AutoConnection, outDev, audio, gain);
@@ -1402,11 +1386,12 @@ void MainWindow::onToneSweepAudioReady(const std::vector<float>& audio) {
 
     if (m_pttManager && m_radio && m_radio->isConnected()) {
         if (!m_pttManager->requestTX()) {
-            m_toneSweepActive = false;
-            QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setToneMonitor,
-                                       Qt::AutoConnection, false);
-            m_toneTestButton->setEnabled(true);
-            m_statusLabel->setText("Tone sweep: PTT request failed");
+            m_tuneActive = false;
+            m_tuneButton->setChecked(false);
+            if (m_levelPanel) m_levelPanel->setTxLevel(-96.0f);
+            QMetaObject::invokeMethod(m_audio, &AudioEngine::startRx, Qt::AutoConnection,
+                                       HavenFSK::savedInputDevice());
+            m_statusLabel->setText("Tune: PTT request failed");
             return;
         }
         QTimer::singleShot(leadMs, this, startAudio);

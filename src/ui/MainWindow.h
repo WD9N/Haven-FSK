@@ -70,8 +70,8 @@ private slots:
     void onExport();
     void onWaterfallTune(float audioHz);
     void onOpenRadioConfig();
-    void onToneSweepTx();
-    void onToneSweepAudioReady(const std::vector<float>& audio);
+    void onTuneToggled(bool on);
+    void onTuneAudioReady(const std::vector<float>& audio);
     void onModeChanged(int index);
     void onModeReady(HavenFSK::ModemMode mode, double passbandLowHz,
                       double passbandHighHz, const QString& modeName);
@@ -108,9 +108,8 @@ private:
     QToolBar*          m_bottomBar     {nullptr};  // fixed, non-movable — status row
     LevelPanel*        m_levelPanel   {nullptr};
     QPushButton*       m_txButton        {nullptr};
-    QPushButton*       m_toneTestButton  {nullptr};
-    QPushButton*       m_monitorButton   {nullptr};
-    bool               m_toneSweepActive {false};
+    QPushButton*       m_tuneButton      {nullptr};
+    bool               m_tuneActive      {false};
     // Guards onTxStartError() (connected to AudioEngine::audioError) so it
     // only reacts to a failure of the startTx() call it's paired with, not
     // an unrelated audioError (e.g. an RX format mismatch) firing at some

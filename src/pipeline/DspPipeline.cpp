@@ -219,22 +219,10 @@ void DspPipeline::expireRxCache() {
     }
 }
 
-// ── Diagnostics ────────────────────────────────────────────────────────────
+// ── Tune ───────────────────────────────────────────────────────────────────
 
-void DspPipeline::setToneMonitor(bool active) {
-    m_modem->setToneMonitor(active);
-}
-
-std::vector<float> DspPipeline::generateToneSweepAudio() const {
-    return m_modem->generateDiagnosticAudio();
-}
-
-void DspPipeline::requestToneSweepAudio() {
-    emit toneSweepAudioReady(generateToneSweepAudio());
-}
-
-void DspPipeline::runToneSweepTest() {
-    m_modem->runDiagnosticSelfTest();
+void DspPipeline::requestTuneAudio() {
+    emit tuneAudioReady(m_modem->generateTuneAudio());
 }
 
 } // namespace HavenFSK

@@ -67,29 +67,6 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
     // DCD — advisory only; does not gate the RX pipeline.
     m_dcdActive = m_dcd.update(corrected);
 
-    // Tone monitor — active even while RX is suspended (TX in progress),
-    // matching pre-refactor placement before the transmitting gate.
-    if (m_toneMonitorActive) {
-        m_monitorBuf.insert(m_monitorBuf.end(),
-                            corrected.begin(), corrected.end());
-        while (static_cast<int>(m_monitorBuf.size()) >= SAMPLES_PER_SYMBOL) {
-            auto soft = m_demodulator.demodulateToSoft(m_monitorBuf, 0, 0);
-            if (!soft.empty()) {
-                const auto& e = soft[0];
-                int detected = static_cast<int>(
-                    std::max_element(e.begin(), e.end()) - e.begin());
-                float total = 0.0f;
-                for (float x : e) total += x;
-                float frac = (total > 1e-10f) ? e[detected] / total : 0.0f;
-                dspLog("ToneMon[%4d]: tone%2d (%7.2f Hz)  frac=%5.3f",
-                       m_monitorSymCount++, detected,
-                       BASE_FREQ + detected * SYMBOL_RATE, frac);
-            }
-            m_monitorBuf.erase(m_monitorBuf.begin(),
-                               m_monitorBuf.begin() + SAMPLES_PER_SYMBOL);
-        }
-    }
-
     if (m_rxSuspended) return events;
 
     // ── Continuous preamble sync ────────────────────────────────────────
@@ -490,139 +467,31 @@ void MfskModem::applyFineTimingCorrection() {
     }
 }
 
-// ── Tone monitor & sweep audio ────────────────────────────────────────────
+// ── Tune audio ────────────────────────────────────────────────────────────
 
-void MfskModem::setToneMonitor(bool active) {
-    m_toneMonitorActive = active;
-    if (active) {
-        m_monitorBuf.clear();
-        m_monitorSymCount = 0;
-        dspLog("MfskModem: tone monitor ON — one debug line per received symbol");
-    } else {
-        m_monitorBuf.clear();
-        dspLog("MfskModem: tone monitor OFF (%d symbols logged)",
-               m_monitorSymCount);
-    }
-}
-
-std::vector<float> MfskModem::generateDiagnosticAudio() const {
-    // 16 tones x 500 ms each = 8 s total, continuous phase.
-    const int samplesPerTone = SAMPLE_RATE / 2;
-    std::vector<float> audio;
-    audio.reserve(NUM_TONES * samplesPerTone);
+std::vector<float> MfskModem::generateTuneAudio() const {
+    // Steady 1000 Hz (the conventional digital-mode tune tone) at
+    // TX_AMPLITUDE peak — same amplitude the modulator produces, so the
+    // level the operator sets while tuning is the level a real
+    // transmission gets. Capped at TUNE_MAX_SECONDS in case the operator
+    // forgets to toggle Tune off (PTTManager's 120 s watchdog is the
+    // backstop, not the intended stop).
+    constexpr double TUNE_FREQ_HZ    = 1000.0;
+    constexpr int    TUNE_MAX_SECONDS = 30;
+    const int nSamples = SAMPLE_RATE * TUNE_MAX_SECONDS;
+    std::vector<float> audio(nSamples);
 
     double phase = 0.0;
-    for (int t = 0; t < NUM_TONES; ++t) {
-        double freq = BASE_FREQ + t * SYMBOL_RATE;
-        double phaseInc = 2.0 * M_PI * freq / SAMPLE_RATE;
-        for (int i = 0; i < samplesPerTone; ++i) {
-            audio.push_back(static_cast<float>(std::sin(phase)));
-            phase += phaseInc;
-            if (phase >  M_PI) phase -= 2.0 * M_PI;
-            if (phase < -M_PI) phase += 2.0 * M_PI;
-        }
+    double phaseInc = 2.0 * M_PI * TUNE_FREQ_HZ / SAMPLE_RATE;
+    for (float& s : audio) {
+        s = static_cast<float>(TX_AMPLITUDE * std::sin(phase));
+        phase += phaseInc;
+        if (phase > M_PI) phase -= 2.0 * M_PI;
     }
 
-    dspLog("MfskModem: tone sweep audio: %d samples = %.2f s  "
-           "(16 tones x 500ms, tone0=500Hz ... tone15=968.75Hz)",
-           static_cast<int>(audio.size()),
-           audio.size() / static_cast<double>(SAMPLE_RATE));
+    dspLog("MfskModem: tune audio: %.0f Hz steady tone, %d s max",
+           TUNE_FREQ_HZ, TUNE_MAX_SECONDS);
     return audio;
-}
-
-void MfskModem::runDiagnosticSelfTest() {
-    dspLog("");
-    dspLog("==============================");
-    dspLog(" TONE SWEEP TEST");
-    dspLog("==============================");
-    dspLog("500ms of pure sine at each of the 16 HAVEN tones, demodulated.");
-    dspLog("PASS = demodulator correctly identifies the tone.");
-    dspLog("Expected frac ~0.87 (8x zero-pad sinc sidelobes absorb ~13%%)");
-
-    bool allPass = true;
-    for (int t = 0; t < NUM_TONES; ++t) {
-        double freq = BASE_FREQ + t * SYMBOL_RATE;
-
-        const int nSamples = SAMPLE_RATE / 2;
-        std::vector<float> audio(nSamples);
-        double phase = 0.0;
-        double phaseInc = 2.0 * M_PI * freq / SAMPLE_RATE;
-        for (float& s : audio) {
-            s = 0.5f * static_cast<float>(std::sin(phase));
-            phase += phaseInc;
-        }
-
-        auto soft = m_demodulator.demodulateToSoft(audio, 0, 0);
-        if (soft.empty()) {
-            dspLog("  tone%2d (%7.2f Hz) — demodulateToSoft returned empty [FAIL]",
-                   t, freq);
-            allPass = false;
-            continue;
-        }
-
-        const auto& sym = soft[0];
-        int detected = static_cast<int>(
-            std::max_element(sym.begin(), sym.end()) - sym.begin());
-        float total = 0.0f;
-        for (float e : sym) total += e;
-        float fracExp = (total > 1e-10f) ? sym[t] / total : 0.0f;
-        float fracMax = (total > 1e-10f) ?
-            *std::max_element(sym.begin(), sym.end()) / total : 0.0f;
-
-        bool pass = (detected == t);
-        if (!pass) allPass = false;
-
-        dspLog("  tone%2d (%7.2f Hz) -> detected=%2d  frac@expected=%5.3f  "
-               "maxFrac=%5.3f  [%s]",
-               t, freq, detected, fracExp, fracMax, pass ? "PASS" : "FAIL");
-    }
-    dspLog("%s", allPass
-        ? "Result: ALL PASS — demodulator maps all 16 tones correctly"
-        : "Result: FAILURES — demodulator has a tone bin mapping error");
-
-    dspLog("");
-    dspLog("------------------------------");
-    dspLog(" PREAMBLE SCAN INJECTION TEST");
-    dspLog("------------------------------");
-
-    auto preambleAudio = m_preamble.generate();
-    const int silenceSamples = SAMPLE_RATE / 2;
-    std::vector<float> testBuf(silenceSamples, 0.0f);
-    testBuf.insert(testBuf.end(), preambleAudio.begin(), preambleAudio.end());
-    testBuf.resize(testBuf.size() + SAMPLE_RATE, 0.0f);
-
-    auto softAll = m_demodulator.demodulateToSoft(testBuf, 0, 0);
-
-    float bestScore = 0.0f;
-    int   bestSym   = -1;
-    for (int i = 0; i <= static_cast<int>(softAll.size()) - PREAMBLE_LENGTH; ++i) {
-        float s = m_preamble.softCorrelate(softAll, i);
-        if (s > bestScore) { bestScore = s; bestSym = i; }
-    }
-
-    int expectedSym = silenceSamples / SAMPLES_PER_SYMBOL;
-    dspLog("  Preamble injected at sample %d = symbol %d",
-           silenceSamples, expectedSym);
-    dspLog("  Best softCorrelate = %.4f at sym=%d  (threshold=%.3f)",
-           bestScore, bestSym, PreambleSync::SCORE_THRESHOLD);
-    dspLog("%s", bestScore >= PreambleSync::SCORE_THRESHOLD
-        ? "  Result: WOULD DETECT — scanner and threshold are correct"
-        : "  Result: WOULD MISS — scanner or threshold has an issue");
-
-    if (bestSym >= 0 && bestSym + PREAMBLE_LENGTH <= (int)softAll.size()) {
-        std::string got, want;
-        for (int i = 0; i < PREAMBLE_LENGTH; ++i) {
-            const auto& e = softAll[bestSym + i];
-            int argMax = static_cast<int>(
-                std::max_element(e.begin(), e.end()) - e.begin());
-            got  += std::to_string(argMax) + " ";
-            want += std::to_string(PREAMBLE_SYMBOLS[i]) + " ";
-        }
-        dspLog("  got : %s", got.c_str());
-        dspLog("  want: %s", want.c_str());
-    }
-    dspLog("==============================");
-    dspLog("");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

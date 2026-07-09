@@ -95,11 +95,9 @@ public:
     virtual void  setSquelchThreshold(float) {}
     virtual float squelchThreshold() const { return 0.0f; }
 
-    // ── Optional diagnostics — default no-op for modes without them ───────
-    virtual void setToneMonitor(bool) {}
-    virtual bool toneMonitorActive() const { return false; }
-    virtual std::vector<float> generateDiagnosticAudio() const { return {}; }
-    virtual void runDiagnosticSelfTest() {}
+    // ── Tune audio — steady tone for adjusting TX level into the radio.
+    //    Default empty for modes without a natural tune tone. ──────────────
+    virtual std::vector<float> generateTuneAudio() const { return {}; }
 
     // ── Identification / UI passband hint ──────────────────────────────
     virtual ModemMode  mode()     const = 0;
