@@ -372,6 +372,35 @@ void LogPanel::autoPopulateFromMessage(const QString& senderCallsign,
     }
 }
 
+void LogPanel::loadContacts(const QList<QVariantMap>& contacts) {
+    m_contactTable->setRowCount(0);
+    // Ascending time order in, insert-at-row-0 per contact — newest ends
+    // up on top, matching live logging.
+    for (const auto& c : contacts) {
+        QVariantMap fields = c;
+        fields["db_id"] = c["id"];
+        // The DB stores parks space-joined; the table code expects a list.
+        fields["their_pota_refs"] =
+            c["their_pota_refs"].toString().split(' ', Qt::SkipEmptyParts);
+        addContactRow(fields);
+    }
+}
+
+void LogPanel::onContactPersisted(const QVariantMap& fields) {
+    // Row 0 is the row addContactRow() created for this same contact
+    // moments ago in the same synchronous signal chain (onLogIt →
+    // contactLogged → LogManager::logContact → contactSaved). Verify
+    // anyway — never stamp a foreign row.
+    if (m_contactTable->rowCount() == 0) return;
+    auto* item = m_contactTable->item(0, 0);
+    QVariantMap row = item->data(Qt::UserRole).toMap();
+    if (row["their_callsign"].toString() != fields["their_callsign"].toString() ||
+        row["time_utc"].toString()       != fields["time_utc"].toString())
+        return;
+    row["db_id"] = fields["db_id"];
+    item->setData(Qt::UserRole, row);
+}
+
 void LogPanel::setRsSent(const QString& rs)    { m_rsSent->setText(rs); }
 void LogPanel::setFrequency(uint64_t hz)        { m_frequency = hz; }
 

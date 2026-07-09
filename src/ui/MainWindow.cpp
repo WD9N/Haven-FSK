@@ -92,6 +92,13 @@ MainWindow::MainWindow(QWidget* parent)
     setupUi();
     setupConnections();
 
+    // Show today's already-logged contacts — a mid-day restart must not
+    // hide them (or leave them un-editable for lack of a db_id).
+    if (m_logManager->isOpen()) {
+        QString todayUtc = QDateTime::currentDateTimeUtc().toString("yyyyMMdd");
+        m_logPanel->loadContacts(m_logManager->contactsForDate(todayUtc));
+    }
+
     // Restore last-used mode; setting the combo index triggers
     // onModeChanged() -> DspPipeline::setMode(), so this both applies the
     // saved mode and updates the waterfall passband/labels for it.
@@ -771,6 +778,12 @@ void MainWindow::setupConnections() {
     // LogPanel → session log
     connect(m_logPanel, &LogPanel::contactLogged,
             this, &MainWindow::onContactLogged);
+
+    // Database id of the freshly-saved row back to the table row that was
+    // just added for it — edits/deletes of session rows need it to reach
+    // the database (they're gated on db_id > 0).
+    connect(m_logManager, &LogManager::contactSaved,
+            m_logPanel, &LogPanel::onContactPersisted);
 
     // Log panel's "Their Call" entry (typed or populated by clicking a
     // received callsign) drives <theirCall> in macros too, not just clicks.

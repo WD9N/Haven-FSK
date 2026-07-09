@@ -46,6 +46,19 @@ public:
     void autoPopulateFromMessage(const QString& senderCallsign,
                                   const QString& text);
 
+    // Repopulate the contacts table from database rows (today's contacts,
+    // ascending time order) — a mid-day restart must not hide already-
+    // logged contacts or orphan them from edit/delete (they'd have no
+    // db_id otherwise).
+    void loadContacts(const QList<QVariantMap>& contacts);
+
+    // Connected to LogManager::contactSaved — stamps the freshly-inserted
+    // database id onto the table row addContactRow() just created, so a
+    // later edit or delete of this row can reference the persisted record.
+    // Without this the db_id never reaches the table and updates/deletes
+    // silently touch only the display, never the database.
+    void onContactPersisted(const QVariantMap& fields);
+
 signals:
     void contactLogged(const QVariantMap& fields);
     void contactUpdated(const QVariantMap& fields);
