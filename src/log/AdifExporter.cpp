@@ -50,14 +50,20 @@ QString AdifExporter::makeHeader(const QString& description) {
 
 QString AdifExporter::makeRecord(const QVariantMap& c,
                                   const QString& myPotaRef,
-                                  const QString& mySotaRef)
+                                  const QString& mySotaRef,
+                                  const QString& theirPotaRef)
 {
     QString rec;
 
     rec += field("CALL",             c["their_callsign"].toString());
     rec += field("QSO_DATE",         adifDate(c["date_utc"].toString()));
     rec += field("TIME_ON",          adifTime(c["time_utc"].toString()));
-    rec += field("BAND",             c["band"].toString());
+    // "HF" is bandForHz()'s unknown-frequency fallback, not a member of
+    // the ADIF band enumeration — emitting it makes upload sites reject
+    // the record outright rather than merely lack band info.
+    QString band = c["band"].toString();
+    if (band != "HF")
+        rec += field("BAND", band);
     // Rows written by current LogManager already hold a valid ADIF
     // MODE/SUBMODE pair. Rows from pre-v0.3 databases hold MODE=DIGITAL —
     // not a valid ADIF mode — so map those by their submode instead.
@@ -68,7 +74,9 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
         mode = (submode == "PSK31") ? "PSK" : "MFSK";
     rec += field("MODE",             mode);
     rec += field("SUBMODE",          submode);
-    rec += field("FREQ",             hzToMhz(c["frequency_hz"].toULongLong()));
+    uint64_t hz = c["frequency_hz"].toULongLong();
+    if (hz > 0)
+        rec += field("FREQ", hzToMhz(hz));
     rec += field("STATION_CALLSIGN", c["my_callsign"].toString());
     rec += field("OPERATOR",         c["my_callsign"].toString());
     rec += field("RST_SENT",         c["rs_sent"].toString());
@@ -86,12 +94,13 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     if (!myPotaRef.isEmpty()) {
         rec += field("MY_SIG",      "POTA");
         rec += field("MY_SIG_INFO", myPotaRef);
+    }
 
-        QString theirParks = c["their_pota_refs"].toString();
-        if (!theirParks.isEmpty()) {
-            rec += field("SIG",      "POTA");
-            rec += field("SIG_INFO", theirParks);
-        }
+    // Their park goes in regardless of whether *I* was at one — a hunter's
+    // log should still carry the worked park for QRZ/LoTW/records.
+    if (!theirPotaRef.isEmpty()) {
+        rec += field("SIG",      "POTA");
+        rec += field("SIG_INFO", theirPotaRef);
     }
 
     if (!mySotaRef.isEmpty())
@@ -107,6 +116,24 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
 
     rec += "<EOR>\n\n";
     return rec;
+}
+
+QString AdifExporter::makeRecords(const QVariantMap& c,
+                                   const QString& myPotaRef,
+                                   const QString& mySotaRef)
+{
+    // P2P with a multi-park station: one record per park, single-ref
+    // SIG_INFO each. POTA's dedup keys on SIG_INFO — a space-joined
+    // multi-ref value (the old behavior) forfeits P2P credits.
+    QStringList theirParks = c["their_pota_refs"].toString()
+                                 .split(' ', Qt::SkipEmptyParts);
+    if (theirParks.isEmpty())
+        return makeRecord(c, myPotaRef, mySotaRef, QString());
+
+    QString out;
+    for (const QString& park : theirParks)
+        out += makeRecord(c, myPotaRef, mySotaRef, park.toUpper());
+    return out;
 }
 
 QStringList AdifExporter::exportDate(
@@ -148,10 +175,10 @@ QStringList AdifExporter::exportDate(
                 if (p.toUpper() == parkRef) { hasThisPark = true; break; }
             if (!hasThisPark) continue;
 
-            // Combined POTA+SOTA: include MY_SOTA_REF in POTA files
-            QString sotaForRecord = allSotaRefs.isEmpty() ?
-                                    QString() : allSotaRefs.first();
-            content += makeRecord(c, parkRef, sotaForRecord);
+            // Combined POTA+SOTA: each contact carries its OWN summit ref
+            // (not the day's first — the operator may have moved summits).
+            content += makeRecords(c, parkRef,
+                                   c["my_sota_ref"].toString().toUpper());
         }
 
         QString filename = QString("%1@%2-%3.adi")
@@ -163,24 +190,28 @@ QStringList AdifExporter::exportDate(
         }
     }
 
-    // ── SOTA-only export (when no POTA refs) ─────────────────────────────
-    if (allPotaRefs.isEmpty()) {
-        for (const QString& sotaRef : allSotaRefs) {
-            QString content = makeHeader(
-                QString("SOTA Activation — %1 — %2").arg(sotaRef, dateUtc));
+    // ── SOTA export: one file per summit — generated even when POTA refs
+    //    exist the same day (a combined activation needs BOTH uploads;
+    //    this file was previously suppressed whenever POTA was present) ──
+    for (const QString& sotaRef : allSotaRefs) {
+        QString content = makeHeader(
+            QString("SOTA Activation — %1 — %2").arg(sotaRef, dateUtc));
 
-            for (const auto& c : contacts) {
-                if (c["my_sota_ref"].toString().toUpper() != sotaRef) continue;
-                content += makeRecord(c, QString(), sotaRef);
-            }
+        for (const auto& c : contacts) {
+            if (c["my_sota_ref"].toString().toUpper() != sotaRef) continue;
+            QStringList myParks =
+                c["my_pota_refs"].toString().split(' ', Qt::SkipEmptyParts);
+            QString primaryPota = myParks.isEmpty() ? QString()
+                                                    : myParks.first().toUpper();
+            content += makeRecords(c, primaryPota, sotaRef);
+        }
 
-            QString filename = QString("%1-%2-%3.adi")
-                .arg(myCall, sanitizeRef(sotaRef), dateUtc);
-            QString path = exportPath + "/" + filename;
-            if (writeFile(path, content)) {
-                createdFiles.append(path);
-                qDebug() << "AdifExporter: wrote" << path;
-            }
+        QString filename = QString("%1-%2-%3.adi")
+            .arg(myCall, sanitizeRef(sotaRef), dateUtc);
+        QString path = exportPath + "/" + filename;
+        if (writeFile(path, content)) {
+            createdFiles.append(path);
+            qDebug() << "AdifExporter: wrote" << path;
         }
     }
 
@@ -193,9 +224,10 @@ QStringList AdifExporter::exportDate(
         for (const auto& c : contacts) {
             QStringList myParks =
                 c["my_pota_refs"].toString().split(' ', Qt::SkipEmptyParts);
-            QString primaryPota = myParks.isEmpty() ? QString() : myParks.first();
+            QString primaryPota = myParks.isEmpty() ? QString()
+                                                    : myParks.first().toUpper();
             QString mySota      = c["my_sota_ref"].toString().toUpper();
-            content += makeRecord(c, primaryPota, mySota);
+            content += makeRecords(c, primaryPota, mySota);
         }
 
         QString filename = QString("%1-%2.adi").arg(myCall, dateUtc);

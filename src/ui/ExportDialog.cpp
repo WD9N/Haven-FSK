@@ -131,18 +131,21 @@ void ExportDialog::refreshPreview() {
     QStringList lines;
 
     QStringList potaRefs = m_log->potaRefsForDate(dateUtc);
-    for (const QString& ref : potaRefs)
+    for (const QString& ref : potaRefs) {
+        int parkCount = m_log->contactsForDateAndPark(dateUtc, ref).size();
         lines << QString("  %1@%2-%3.adi  (%4 QSOs)")
-                 .arg(myCall, ref, dateUtc).arg(count);
+                 .arg(myCall, ref, dateUtc).arg(parkCount);
+    }
 
-    if (potaRefs.isEmpty()) {
-        QStringList sotaRefs = m_log->sotaRefsForDate(dateUtc);
-        for (const QString& ref : sotaRefs) {
-            QString sanitized = ref;
-            sanitized.replace('/', '-');
-            lines << QString("  %1-%2-%3.adi  (%4 QSOs)")
-                     .arg(myCall, sanitized, dateUtc).arg(count);
-        }
+    // SOTA files are generated alongside POTA ones (combined activations
+    // need both uploads), so list them unconditionally too.
+    QStringList sotaRefs = m_log->sotaRefsForDate(dateUtc);
+    for (const QString& ref : sotaRefs) {
+        int sotaCount = m_log->contactsForDateAndSota(dateUtc, ref).size();
+        QString sanitized = ref;
+        sanitized.replace('/', '-');
+        lines << QString("  %1-%2-%3.adi  (%4 QSOs)")
+                 .arg(myCall, sanitized, dateUtc).arg(sotaCount);
     }
 
     lines << QString("  %1-%2.adi  (%3 QSOs, general)")

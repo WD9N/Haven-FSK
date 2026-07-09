@@ -14,7 +14,13 @@
 // SOTA filename:  {callsign}-{sanitized_ref}-{YYYYMMDD}.adi
 // General:        {callsign}-{YYYYMMDD}.adi
 //
-// Combined POTA+SOTA: POTA files each contain MY_SOTA_REF.
+// Combined POTA+SOTA: POTA files carry each contact's own MY_SOTA_REF,
+// and the SOTA file is generated as well (it was previously suppressed
+// whenever POTA refs existed the same day).
+//
+// P2P: a QSO with a station at N parks is written as N records, one park
+// per SIG_INFO — POTA's dedup keys on SIG_INFO, and a multi-ref value
+// forfeits P2P credits (docs.pota.app park_2_park).
 // MODE/SUBMODE come from the logged row (MFSK/HAVEN-FSK or PSK/PSK31);
 // legacy MODE=DIGITAL rows are remapped at export time (see makeRecord).
 
@@ -27,9 +33,17 @@ public:
         const QString& dateUtc);
 
 private:
+    // One ADIF record; theirPotaRef is a single park (or empty).
     static QString makeRecord(const QVariantMap& contact,
-                               const QString& myPotaRef = QString(),
-                               const QString& mySotaRef = QString());
+                               const QString& myPotaRef,
+                               const QString& mySotaRef,
+                               const QString& theirPotaRef);
+
+    // All records for one contact — duplicates the record once per park
+    // the other station was at (see P2P note above).
+    static QString makeRecords(const QVariantMap& contact,
+                                const QString& myPotaRef = QString(),
+                                const QString& mySotaRef = QString());
 
     static QString makeHeader(const QString& description);
 
