@@ -151,6 +151,13 @@ void ExportDialog::refreshPreview() {
     lines << QString("  %1-%2.adi  (%3 QSOs, general)")
              .arg(myCall, dateUtc).arg(count);
 
+    int fdCount = 0;
+    for (const auto& c : contacts)
+        if (!c["their_fd"].toString().trimmed().isEmpty()) fdCount++;
+    if (fdCount > 0)
+        lines << QString("  %1-%2-FD.cab  (%3 QSOs, Field Day Cabrillo)")
+                 .arg(myCall, dateUtc).arg(fdCount);
+
     m_preview->setText(lines.join("\n"));
 }
 

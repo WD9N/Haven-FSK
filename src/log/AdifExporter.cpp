@@ -3,6 +3,7 @@
 #include <QTextStream>
 #include <QDir>
 #include <QDateTime>
+#include <QRegularExpression>
 #include <QDebug>
 
 QString AdifExporter::field(const QString& name, const QString& value) {
@@ -110,9 +111,30 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     if (!theirSota.isEmpty())
         rec += field("SOTA_REF", theirSota);
 
-    QString fdSection = c["my_fd_section"].toString();
-    if (!c["my_fd_class"].toString().isEmpty())
-        rec += field("ARRL_SECT", fdSection);
+    // Field Day — gated on the received exchange being present (a real FD
+    // QSO always has one; my class/section being configured in Settings is
+    // not evidence this particular QSO was FD). ADIF semantics: CLASS and
+    // ARRL_SECT describe the CONTACTED station's exchange; my own section
+    // goes in MY_ARRL_SECT (the old code wrote MY section into ARRL_SECT,
+    // claiming my section for every station worked).
+    QString theirFd = c["their_fd"].toString().trimmed().toUpper();
+    if (!theirFd.isEmpty()) {
+        rec += field("CONTEST_ID", "ARRL-FIELD-DAY");
+        static QRegularExpression ws("\\s+");
+        QStringList fdParts = theirFd.split(ws, Qt::SkipEmptyParts);
+        if (fdParts.size() >= 2) {
+            rec += field("CLASS",     fdParts[0]);
+            rec += field("ARRL_SECT", fdParts[1]);
+        }
+        rec += field("SRX_STRING", theirFd);
+
+        QString myClass = c["my_fd_class"].toString().trimmed().toUpper();
+        QString mySect  = c["my_fd_section"].toString().trimmed().toUpper();
+        if (!mySect.isEmpty())
+            rec += field("MY_ARRL_SECT", mySect);
+        if (!myClass.isEmpty() && !mySect.isEmpty())
+            rec += field("STX_STRING", myClass + " " + mySect);
+    }
 
     rec += "<EOR>\n\n";
     return rec;
@@ -238,7 +260,71 @@ QStringList AdifExporter::exportDate(
         }
     }
 
+    // ── Field Day Cabrillo — when any contact carries the FD exchange ────
+    {
+        QString path = exportFieldDayCabrillo(
+            contacts, exportPath, dateUtc, myCall);
+        if (!path.isEmpty()) {
+            createdFiles.append(path);
+            qDebug() << "AdifExporter: wrote" << path;
+        }
+    }
+
     return createdFiles;
+}
+
+QString AdifExporter::exportFieldDayCabrillo(
+    const QList<QVariantMap>& contacts,
+    const QString& exportPath,
+    const QString& dateUtc,
+    const QString& myCall)
+{
+    QList<QVariantMap> fd;
+    for (const auto& c : contacts)
+        if (!c["their_fd"].toString().trimmed().isEmpty())
+            fd.append(c);
+    if (fd.isEmpty()) return QString();
+
+    // My exchange, snapshotted per contact at log time; header uses the
+    // first FD contact's copy.
+    QString myClass = fd.first()["my_fd_class"].toString().trimmed().toUpper();
+    QString mySect  = fd.first()["my_fd_section"].toString().trimmed().toUpper();
+
+    QString out;
+    out += "START-OF-LOG: 3.0\n";
+    out += "CONTEST: ARRL-FD\n";
+    out += "CALLSIGN: " + myCall + "\n";
+    if (!mySect.isEmpty())
+        out += "LOCATION: " + mySect + "\n";
+    out += "CREATED-BY: HAVEN-FSK\n";
+
+    static QRegularExpression ws("\\s+");
+    for (const auto& c : fd) {
+        uint64_t hz = c["frequency_hz"].toULongLong();
+        QString date = c["date_utc"].toString();  // YYYYMMDD → YYYY-MM-DD
+        QString dashDate = date.mid(0, 4) + "-" + date.mid(4, 2) + "-"
+                         + date.mid(6, 2);
+        QStringList theirFd = c["their_fd"].toString().toUpper()
+                                  .split(ws, Qt::SkipEmptyParts);
+
+        // QSO: freq(kHz) mode date time mycall myclass mysect
+        //      theircall theirclass theirsect  — mode DG = digital
+        out += "QSO: " + QString::number(hz / 1000)
+             + " DG " + dashDate
+             + " "   + c["time_utc"].toString().left(4)
+             + " "   + myCall
+             + " "   + myClass
+             + " "   + mySect
+             + " "   + c["their_callsign"].toString().toUpper()
+             + " "   + theirFd.value(0)
+             + " "   + theirFd.value(1)
+             + "\n";
+    }
+    out += "END-OF-LOG:\n";
+
+    QString path = exportPath + "/" +
+        QString("%1-%2-FD.cab").arg(myCall, dateUtc);
+    return writeFile(path, out) ? path : QString();
 }
 
 bool AdifExporter::writeFile(const QString& path, const QString& content) {

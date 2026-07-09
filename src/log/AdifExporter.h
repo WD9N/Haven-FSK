@@ -45,6 +45,16 @@ private:
                                 const QString& myPotaRef = QString(),
                                 const QString& mySotaRef = QString());
 
+    // Cabrillo log for ARRL Field Day — generated when any contact of the
+    // day carries a received FD exchange (their_fd). ARRL's submission
+    // applet takes a Cabrillo log (or dupe sheet), not ADIF.
+    // Filename: {callsign}-{YYYYMMDD}-FD.cab. Returns the written path,
+    // or empty when no FD contacts exist / the write failed.
+    static QString exportFieldDayCabrillo(const QList<QVariantMap>& contacts,
+                                           const QString& exportPath,
+                                           const QString& dateUtc,
+                                           const QString& myCall);
+
     static QString makeHeader(const QString& description);
 
     static QString field(const QString& name, const QString& value);
