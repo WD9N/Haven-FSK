@@ -10,6 +10,7 @@
 #include <QRegularExpression>
 #include <QPair>
 #include <QList>
+#include <cmath>
 
 // Auto-correct POTA ref to canonical XX-NNNN format
 static QString fixPotaRef(const QString& raw) {
@@ -184,6 +185,38 @@ void LogPanel::setupEntryStrip() {
     row1->addWidget(m_clearButton);
 
     // ── Row 2 ─────────────────────────────────────────────────────────────
+    // Frequency/date/time — blank means auto (live dial + now-UTC). Manual
+    // entry covers no-radio operation and paper-log transcription; edit
+    // mode fills these with the row's original values so an edit can't
+    // silently pick up the current dial frequency (audit 2026-07-09).
+    row2->addWidget(new QLabel("MHz:"));
+    m_freqEntry = new QLineEdit;
+    m_freqEntry->setMaximumWidth(80);
+    m_freqEntry->setFont(mono);
+    m_freqEntry->setPlaceholderText("auto");
+    m_freqEntry->setToolTip(
+        "Frequency in MHz (e.g. 14.074).\n"
+        "Blank = current dial frequency.");
+    connect(m_freqEntry, &QLineEdit::textEdited,
+            this, [this]() { m_freqManual = true; });
+    row2->addWidget(m_freqEntry);
+
+    row2->addWidget(new QLabel("Date:"));
+    m_dateEntry = new QLineEdit;
+    m_dateEntry->setMaximumWidth(80);
+    m_dateEntry->setFont(mono);
+    m_dateEntry->setPlaceholderText("auto");
+    m_dateEntry->setToolTip("QSO date, UTC (YYYYMMDD). Blank = today.");
+    row2->addWidget(m_dateEntry);
+
+    row2->addWidget(new QLabel("Time:"));
+    m_timeEntry = new QLineEdit;
+    m_timeEntry->setMaximumWidth(64);
+    m_timeEntry->setFont(mono);
+    m_timeEntry->setPlaceholderText("auto");
+    m_timeEntry->setToolTip("QSO time, UTC (HHMM or HHMMSS). Blank = now.");
+    row2->addWidget(m_timeEntry);
+
     m_gridLabel = new QLabel("Grid:");
     row2->addWidget(m_gridLabel);
     m_theirGrid = new QLineEdit;
@@ -402,7 +435,21 @@ void LogPanel::onContactPersisted(const QVariantMap& fields) {
 }
 
 void LogPanel::setRsSent(const QString& rs)    { m_rsSent->setText(rs); }
-void LogPanel::setFrequency(uint64_t hz)        { m_frequency = hz; }
+
+QString LogPanel::mhzText(uint64_t hz) {
+    QString s = QString::number(static_cast<double>(hz) / 1e6, 'f', 6);
+    while (s.endsWith('0')) s.chop(1);
+    if (s.endsWith('.')) s.chop(1);
+    return s;
+}
+
+void LogPanel::setFrequency(uint64_t hz) {
+    m_frequency = hz;
+    // Mirror the live dial into the entry field unless the operator (or
+    // edit mode) has put their own value there.
+    if (!m_freqManual)
+        m_freqEntry->setText(hz > 0 ? mhzText(hz) : QString());
+}
 
 void LogPanel::exitEditMode() {
     m_editingRow = -1;
@@ -418,6 +465,51 @@ void LogPanel::onLogIt() {
         QMessageBox::warning(this, "Log Entry",
             "Please enter the contacted station's callsign.");
         return;
+    }
+
+    // Frequency: manual entry wins; blank = live dial frequency.
+    uint64_t hz = m_frequency;
+    QString freqText = m_freqEntry->text().trimmed();
+    if (!freqText.isEmpty()) {
+        bool ok = false;
+        double mhz = freqText.toDouble(&ok);
+        if (!ok || mhz <= 0.0) {
+            QMessageBox::warning(this, "Log Entry",
+                "Frequency must be in MHz, e.g. 14.074");
+            return;
+        }
+        hz = static_cast<uint64_t>(std::llround(mhz * 1e6));
+    }
+    if (hz == 0) {
+        // Contacts without a frequency get no valid BAND, and POTA (among
+        // others) rejects records without one — flag it now, while the
+        // operator still remembers the frequency, not at export time.
+        auto reply = QMessageBox::question(this, "Log Entry",
+            "No frequency set — the contact will export without\n"
+            "band information (POTA uploads reject such records).\n\n"
+            "Log it anyway?",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply != QMessageBox::Yes) return;
+    }
+
+    // Date/time: manual entry wins; blank = now (UTC).
+    QDateTime utcNow = QDateTime::currentDateTimeUtc();
+    QString dateText = m_dateEntry->text().trimmed().remove('-');
+    QString timeText = m_timeEntry->text().trimmed().remove(':');
+    static QRegularExpression dateRe("^\\d{8}$");
+    static QRegularExpression timeRe("^\\d{4}(\\d{2})?$");
+    if (!dateText.isEmpty() && !dateRe.match(dateText).hasMatch()) {
+        QMessageBox::warning(this, "Log Entry",
+            "Date must be YYYYMMDD (UTC), e.g. 20260709");
+        return;
+    }
+    if (!timeText.isEmpty()) {
+        if (!timeRe.match(timeText).hasMatch()) {
+            QMessageBox::warning(this, "Log Entry",
+                "Time must be HHMM or HHMMSS (UTC), e.g. 1832");
+            return;
+        }
+        if (timeText.length() == 4) timeText += "00";
     }
 
     HavenFSK::StationInfo myInfo = HavenFSK::loadStationInfo();
@@ -440,7 +532,7 @@ void LogPanel::onLogIt() {
     fields["their_qth"]       = m_theirQth->text().trimmed();
     fields["their_fd"]        = m_fdExchange->text().trimmed().toUpper();
     fields["notes"]           = m_notes->text().trimmed();
-    fields["frequency_hz"]    = QVariant::fromValue(m_frequency);
+    fields["frequency_hz"]    = QVariant::fromValue(hz);
     // mode/submode intentionally not set here — LogManager::logContact()
     // derives them from the active modem (fields["modem_name"], stamped
     // by MainWindow) so PSK31 QSOs aren't logged as HAVEN-FSK.
@@ -455,22 +547,27 @@ void LogPanel::onLogIt() {
     fields["my_county"]       = myInfo.county;   // STATION_FIELDS
 
     if (m_editingRow >= 0) {
-        // Edit mode: update existing entry, preserve original date/time and db_id
+        // Edit mode: update existing entry, keep its db_id. Date/time come
+        // from the entry fields (filled with the row's originals when edit
+        // mode was entered), falling back to the originals if cleared.
         QVariant origData = m_contactTable->item(m_editingRow, 0)
                                 ->data(Qt::UserRole);
         if (origData.isValid()) {
             QVariantMap orig = origData.toMap();
-            fields["date_utc"] = orig["date_utc"];
-            fields["time_utc"] = orig["time_utc"];
+            fields["date_utc"] = dateText.isEmpty() ? orig["date_utc"]
+                                                    : QVariant(dateText);
+            fields["time_utc"] = timeText.isEmpty() ? orig["time_utc"]
+                                                    : QVariant(timeText);
             fields["db_id"]    = orig["db_id"];
         }
         updateContactRow(m_editingRow, fields);
         emit contactUpdated(fields);
         exitEditMode();
     } else {
-        QDateTime utcNow = QDateTime::currentDateTimeUtc();
-        fields["date_utc"] = utcNow.toString("yyyyMMdd");
-        fields["time_utc"] = utcNow.toString("hhmmss");
+        fields["date_utc"] = dateText.isEmpty() ? utcNow.toString("yyyyMMdd")
+                                                : dateText;
+        fields["time_utc"] = timeText.isEmpty() ? utcNow.toString("hhmmss")
+                                                : timeText;
         addContactRow(fields);
         emit contactLogged(fields);
     }
@@ -489,6 +586,10 @@ void LogPanel::onClear() {
     m_theirQth->clear();
     m_fdExchange->clear();
     m_notes->clear();
+    m_dateEntry->clear();
+    m_timeEntry->clear();
+    m_freqManual = false;
+    m_freqEntry->setText(m_frequency > 0 ? mhzText(m_frequency) : QString());
     emit entryCleared();
 }
 
@@ -615,6 +716,19 @@ void LogPanel::onContactRowClicked(int row, int col) {
 
 void LogPanel::onContactRowDoubleClicked(int row, int col) {
     onContactRowClicked(row, col);
+
+    // Edit mode edits the row's own frequency/date/time, not the live
+    // dial values — without this, updating an old contact silently
+    // rewrote its frequency to wherever the radio is tuned right now.
+    QVariant data = m_contactTable->item(row, 0)->data(Qt::UserRole);
+    if (data.isValid()) {
+        QVariantMap orig = data.toMap();
+        uint64_t hz = orig["frequency_hz"].toULongLong();
+        m_freqEntry->setText(hz > 0 ? mhzText(hz) : QString());
+        m_freqManual = true;
+        m_dateEntry->setText(orig["date_utc"].toString());
+        m_timeEntry->setText(orig["time_utc"].toString());
+    }
 
     m_editingRow = row;
     m_logButton->setText("Update");

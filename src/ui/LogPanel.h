@@ -98,6 +98,12 @@ private:
     QLineEdit*   m_theirQth    {nullptr};
     QLineEdit*   m_fdExchange  {nullptr};
     QLineEdit*   m_notes       {nullptr};
+    // Frequency/date/time entry — blank means "auto": live dial frequency
+    // and now-UTC for new entries, the row's original values in edit mode.
+    // Manual entry supports no-radio operation and paper-log transcription.
+    QLineEdit*   m_freqEntry   {nullptr};
+    QLineEdit*   m_dateEntry   {nullptr};
+    QLineEdit*   m_timeEntry   {nullptr};
     QPushButton* m_logButton   {nullptr};
     QPushButton* m_clearButton {nullptr};
     QPushButton* m_deleteButton{nullptr};
@@ -115,6 +121,11 @@ private:
     bool     m_fdMode      {false};
     uint64_t m_frequency   {0};
     int      m_editingRow  {-1};
+    // True once the operator (or edit mode) has put a value in m_freqEntry —
+    // stops setFrequency()'s live radio updates from overwriting it.
+    bool     m_freqManual  {false};
+
+    static QString mhzText(uint64_t hz);
 
     static constexpr int MAX_VISIBLE_ROWS = 10;
 };

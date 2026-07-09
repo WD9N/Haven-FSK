@@ -234,6 +234,8 @@ bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
     QSqlQuery q(m_db);
     q.prepare(R"(
         UPDATE contacts SET
+            date_utc        = :date_utc,
+            time_utc        = :time_utc,
             their_callsign  = :their_callsign,
             rs_received     = :rs_received,
             rs_sent         = :rs_sent,
@@ -248,6 +250,8 @@ bool LogManager::updateContact(int dbId, const QVariantMap& fields) {
             notes           = :notes
         WHERE id = :id
     )");
+    q.bindValue(":date_utc",     fields["date_utc"].toString());
+    q.bindValue(":time_utc",     fields["time_utc"].toString());
     q.bindValue(":their_callsign",
         fields["their_callsign"].toString().toUpper());
     q.bindValue(":rs_received",  fields["rs_received"].toString());
