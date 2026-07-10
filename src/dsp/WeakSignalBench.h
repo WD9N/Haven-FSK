@@ -108,9 +108,14 @@ inline void addCrashes(std::vector<float>& buf, float signalRms,
 
 // One TX->impairment->RX round trip through the real chunked pipeline.
 // Success = a CRC-verified decode whose text matches exactly.
+// lockedOut (optional) reports whether preamble sync ever locked —
+// distinguishing sync-bound failures (lock never happened; decoder
+// improvements can't help) from decode-bound ones (locked but LDPC/CRC
+// failed; decoder-side work is in play).
 inline bool runTrial(const std::vector<float>& frameAudio,
                      const std::string& expectedText,
-                     const Impairment& imp)
+                     const Impairment& imp,
+                     bool* lockedOut = nullptr)
 {
     std::mt19937 rng(imp.seed);
 
@@ -127,15 +132,18 @@ inline bool runTrial(const std::vector<float>& frameAudio,
     addCrashes(full, rms, imp, rng);
 
     MfskModem rx;
+    bool decoded = false;
     for (size_t off = 0; off < full.size(); off += AUDIO_CHUNK_SAMPLES) {
         size_t end = std::min(full.size(), off + (size_t)AUDIO_CHUNK_SAMPLES);
         std::vector<float> chunk(full.begin() + off, full.begin() + end);
         chunk.resize(AUDIO_CHUNK_SAMPLES, 0.0f);
-        for (const auto& ev : rx.processAudioChunk(chunk))
+        for (const auto& ev : rx.processAudioChunk(chunk)) {
+            if (ev.preambleDetected && lockedOut) *lockedOut = true;
             if (ev.hasMessage && ev.crcOk && ev.text == expectedText)
-                return true;
+                decoded = true;
+        }
     }
-    return false;
+    return decoded;
 }
 
 } // namespace bench
@@ -177,36 +185,46 @@ inline bool runWeakSignalBench(int trialsPerPoint = 10) {
     logln("-- AWGN (SNR in 2500 Hz ref BW) --");
     const float snrPoints[] = {0.0f, -3.0f, -6.0f, -7.0f, -8.0f, -9.0f};
     for (float snr : snrPoints) {
-        int ok = 0;
+        int ok = 0, locks = 0;
         for (int t = 0; t < trialsPerPoint; t++) {
             Impairment imp;
             imp.snrDb = snr;
             imp.seed  = 1000u + (uint32_t)(snr * -10.0f) + (uint32_t)t * 7919u;
-            if (runTrial(frameAudio, msg, imp)) ok++;
+            bool locked = false;
+            if (runTrial(frameAudio, msg, imp, &locked)) ok++;
+            if (locked) locks++;
         }
-        logln("SNR %+5.1f dB : %2d/%2d decoded", snr, ok, trialsPerPoint);
+        logln("SNR %+5.1f dB : %2d/%2d decoded  (%2d/%2d locked)",
+              snr, ok, trialsPerPoint, locks, trialsPerPoint);
     }
 
     // ── Sweep 2: lightning crashes on a NEAR-THRESHOLD signal ────────────
-    // Baseline calibration (2026-07-09): at +6 dB AND at -3 dB the
+    // Baseline calibration (2026-07-09/10): at +6 dB AND at -3 dB the
     // interleaver+clipper already shrug off up to 120 crashes/min
-    // (9-10/10) — v1's crash story is genuinely strong. The measurable
-    // pain lives right above the cliff with a storm parked on the band,
-    // so the sweep runs at -6 dB (2 dB of margin) up to 240 crashes/min.
+    // (9-10/10) — v1's crash story is genuinely strong. At -6 dB (2 dB of
+    // margin): 9/10 @ 120, 8/10 @ 240, 4/10 @ 480 crashes/min. Per-symbol
+    // erasure/de-weighting was tried against these numbers and REJECTED —
+    // measured neutral at best, harmful when binary (see ADR-129): the
+    // demodulator's energy normalization already self-erases crash-hit
+    // symbols. The 480/min point stays as the stress case future work
+    // (pre-demod blanker, retry decoding) must move.
     logln("");
     logln("-- Lightning crashes (SNR -6 dB, strokes %g dB above signal) --",
           (double)Impairment{}.crashDb);
-    const float crashRates[] = {30.0f, 120.0f, 240.0f};
+    const float crashRates[] = {120.0f, 240.0f, 480.0f};
     for (float rate : crashRates) {
-        int ok = 0;
+        int ok = 0, locks = 0;
         for (int t = 0; t < trialsPerPoint; t++) {
             Impairment imp;
             imp.snrDb         = -6.0f;
             imp.crashesPerMin = rate;
             imp.seed          = 5000u + (uint32_t)rate + (uint32_t)t * 104729u;
-            if (runTrial(frameAudio, msg, imp)) ok++;
+            bool locked = false;
+            if (runTrial(frameAudio, msg, imp, &locked)) ok++;
+            if (locked) locks++;
         }
-        logln("%5.0f crashes/min : %2d/%2d decoded", rate, ok, trialsPerPoint);
+        logln("%5.0f crashes/min : %2d/%2d decoded  (%2d/%2d locked)",
+              rate, ok, trialsPerPoint, locks, trialsPerPoint);
     }
 
     double secs = std::chrono::duration<double>(clock::now() - t0).count();

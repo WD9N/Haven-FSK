@@ -3623,3 +3623,49 @@ next release ZIP shrinks slightly. Also noted during the same audit:
 it is left in place pending its own check because Multimedia backend
 loading was historically finicky (ADR-107) — remove it in a follow-up
 only after a verified build+TX/RX smoke test without it.
+
+## ADR-129 — Per-symbol impulse erasure/de-weighting and LLR scaling rejected: measured no gain
+
+**Status:** Decided
+**Date:** July 2026
+
+**Context:** The weak-signal RX hardening plan (phases: erasure marking,
+LLR confidence scaling, noise blanker, retry decoding) was gated on the
+`--bench` harness (WeakSignalBench.h): calibrated AWGN referenced to
+2500 Hz plus HF-realistic lightning crashes (multi-stroke, 300-600 ms
+events, 25 dB above signal). v1 baseline, 10 trials/point:
+
+    AWGN: 10/10 at -7 dB, 9/10 at -8 dB, 0/10 at -9 dB
+    Crashes at -6 dB: 9/10 @ 120/min, 8/10 @ 240/min, 4/10 @ 480/min
+
+**Decision:** Two proposed decoder-input improvements are rejected on
+benchmark evidence and are not to be re-attempted without new information:
+
+1. *Per-symbol impulse erasure/de-weighting* (flag crash-hit symbols via
+   time-domain power vs. running median; flatten or discount their soft
+   energies). Binary flattening was actively harmful (240 crashes/min:
+   8/10 -> 2/10) — after the 2.5x-RMS clipper, a crash-hit symbol is
+   degraded-but-informative and the LDPC decoder uses that partial
+   information. Proportional de-weighting (q = median/power) was exactly
+   neutral in a same-seed A/B at 120/240/480 crashes/min. Root cause:
+   Demodulator::detectSymbol's square-then-normalize step is already an
+   implicit per-symbol reliability weight — broadband crash energy raises
+   all 16 tone bins, and normalization flattens that symbol's soft vector
+   toward uniform on its own. Explicit marking is redundant.
+
+2. *Noise-scaled LLRs* (scale FEC::softToLLR output by an estimated
+   noise power so BP trusts strong symbols more). Void by architecture:
+   FEC::decodeBlock is normalized MIN-SUM, which is invariant to any
+   common scaling of its input LLRs — only relative per-symbol weights
+   can change decisions, and (1) measured those as neutral. The textbook
+   LLR-scaling gain applies to sum-product decoders only.
+
+**Consequences:** v1's surprising crash robustness is now understood and
+documented rather than accidental: clipper + interleaver + normalization
+self-erasure. Remaining weak-signal candidates operate on different
+mechanisms and stay open: a pre-demodulation time-domain noise blanker
+(removes crash energy before the FFT), retry decoding (timing/AFC
+perturbation on failure), and preamble-sync improvements — the bench's
+lock-vs-decode split (added with this ADR) attributes failures to sync
+or decode so future effort aims at the real bottleneck. Any change is
+gated on moving the -8/-9 dB AWGN rows or the 240/480 crashes/min rows.
