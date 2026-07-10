@@ -9,7 +9,10 @@
 #include <QDir>
 #include "dsp/Constants.h"
 #include "dsp/DspLog.h"
+#include "dsp/WeakSignalBench.h"
 #include "ui/MainWindow.h"
+#include <cstring>
+#include <cstdlib>
 
 #ifdef QT_DEBUG
 #include "dsp/FecSelfTest.h"
@@ -61,6 +64,17 @@ static void messageHandler(QtMsgType type, const QMessageLogContext&,
 }
 
 int main(int argc, char* argv[]) {
+    // Headless weak-signal benchmark — pure DSP, no Qt needed, so it
+    // runs before any Qt setup and exits. See WeakSignalBench.h.
+    // Usage: HavenFSK.exe --bench [trialsPerPoint]
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--bench") == 0) {
+            int trials = (i + 1 < argc) ? std::atoi(argv[i + 1]) : 0;
+            return HavenFSK::runWeakSignalBench(trials > 0 ? trials : 10)
+                       ? 0 : 1;
+        }
+    }
+
     // Select best audio backend per platform BEFORE QApplication.
     // Must precede any Qt object construction.
 #ifdef Q_OS_WIN
