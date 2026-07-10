@@ -86,6 +86,10 @@ void DspPipeline::onAudioChunk(const std::vector<float>& samples) {
         if (ev.preambleDetected)
             emit preambleDetected(ev.preambleScore);
 
+        if (!ev.syncAdjustReason.empty())
+            emit syncThresholdChanged(ev.syncThresholdNow,
+                QString::fromStdString(ev.syncAdjustReason));
+
         if (ev.symbolsExpected > 0)
             emit rxProgress(ev.symbolsReceived, ev.symbolsExpected);
 

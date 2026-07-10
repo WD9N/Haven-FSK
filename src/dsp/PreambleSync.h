@@ -51,7 +51,13 @@ public:
 
     void reset();
 
+    // Default detection threshold. Runtime-adjustable (setThreshold) for
+    // the bench's sensitivity/false-lock trade study and the planned
+    // adaptive threshold logic — the constant stays the resting default.
     static constexpr float SCORE_THRESHOLD = 0.45f;
+
+    void  setThreshold(float t) { m_threshold = t; }
+    float threshold() const     { return m_threshold; }
 
 private:
     // Tone 0 sits exactly at bin BASE_FREQ/SYMBOL_RATE = 500/31.25 = 16 —
@@ -74,6 +80,7 @@ private:
     std::vector<std::vector<float>> m_history; // [HISTORY_LEN][NUM_BINS]
     long long m_sampleCounter = 0;
     float m_lastScore = 0.0f;
+    float m_threshold = SCORE_THRESHOLD;
 
     // Peak-picking state for the current above-threshold run (see
     // pushSample's comment) — mirrors fldigi's synchronize(), which scans

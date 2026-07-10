@@ -46,6 +46,13 @@ struct ModemRxEvent {
     float       preambleScore    = 0.0f;
     int         symbolsReceived  = 0;
     int         symbolsExpected  = 0;    // 0 if unknown/not applicable
+
+    // Adaptive sync-threshold notice (MFSK false-lock defense): when the
+    // modem adjusts its preamble detection threshold it reports the new
+    // value and why, so the UI can keep the operator informed. reason
+    // empty = no adjustment in this event.
+    float       syncThresholdNow = 0.0f;
+    std::string syncAdjustReason;
 };
 
 // Optional per-mode construction parameters. Fields not applicable to a

@@ -73,6 +73,11 @@ int main(int argc, char* argv[]) {
             return HavenFSK::runWeakSignalBench(trials > 0 ? trials : 10)
                        ? 0 : 1;
         }
+        if (std::strcmp(argv[i], "--bench-sync") == 0) {
+            int trials = (i + 1 < argc) ? std::atoi(argv[i + 1]) : 0;
+            return HavenFSK::runSyncThresholdStudy(trials > 0 ? trials : 10)
+                       ? 0 : 1;
+        }
     }
 
     // Select best audio backend per platform BEFORE QApplication.

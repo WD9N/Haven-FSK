@@ -1,4 +1,5 @@
 #include "MfskModem.h"
+#include "Constants.h"   // PTT_WATCHDOG_SEC bounds plausible message length
 #include "DspLog.h"
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,11 @@ namespace HavenFSK {
 
 MfskModem::MfskModem() {
     m_rxBuffer.reserve(SAMPLE_RATE * 5);  // pre-allocate 5 seconds
+
+    // Adaptive resting threshold (see SYNC_RESTING's doc comment) — the
+    // PreambleSync default constant stays at its historical 0.45; this
+    // modem drives the live value.
+    m_sync.setThreshold(SYNC_RESTING);
 
     // Demodulator self-test: score a locally-generated preamble.
     {
@@ -100,8 +106,13 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
         }
         ++m_collectTicks;
         tryCompleteFrame(events);
-        if (m_collectTicks > COLLECT_TIMEOUT_CHUNKS) {
+        if (m_collectTicks > m_collectTimeoutChunks) {
             dspLog("MfskModem: collect timeout — discarding");
+            ModemRxEvent adj;
+            raiseSyncThreshold(m_nBlocks < 0
+                                   ? "no header after sync"
+                                   : "frame never completed", adj);
+            if (!adj.syncAdjustReason.empty()) events.push_back(adj);
             resetRx();
         }
         return events;
@@ -113,6 +124,19 @@ std::vector<ModemRxEvent> MfskModem::processAudioChunk(
         int trim = static_cast<int>(m_preTrigger.size()) - PRE_TRIGGER_SAMPLES;
         m_preTrigger.erase(m_preTrigger.begin(), m_preTrigger.begin() + trim);
         m_preTriggerDropped += trim;
+    }
+
+    // Slow decay of an adaptively-raised sync threshold back toward
+    // resting — interferers come and go; a threshold raised during a
+    // noisy spell must not deafen the receiver indefinitely.
+    if (m_syncAdaptEnabled &&
+        ++m_idleDecayTicks >= SYNC_DECAY_INTERVAL_CHUNKS)
+    {
+        m_idleDecayTicks = 0;
+        float cur = m_sync.threshold();
+        if (cur > SYNC_RESTING)
+            m_sync.setThreshold(
+                std::max(SYNC_RESTING, cur - SYNC_DECAY_STEP));
     }
 
     if (++m_diagChunkCount >= DIAG_LOG_INTERVAL_CHUNKS) {
@@ -161,7 +185,20 @@ void MfskModem::resetRx() {
     m_collectTicks     = 0;
     m_lastCheckSamples = 0;
     m_cachedSoftSymbols.clear();
+    m_collectTimeoutChunks = HEADER_TIMEOUT_CHUNKS;
     setRxState(ModemRxState::Idle);
+}
+
+void MfskModem::raiseSyncThreshold(const char* reason,
+                                    ModemRxEvent& outEvent)
+{
+    if (!m_syncAdaptEnabled) return;
+    float next = std::min(SYNC_MAX, m_sync.threshold() + SYNC_STEP);
+    if (next == m_sync.threshold()) return;
+    m_sync.setThreshold(next);
+    dspLog("MfskModem: sync threshold raised to %.2f (%s)", next, reason);
+    outEvent.syncThresholdNow = next;
+    outEvent.syncAdjustReason = reason;
 }
 
 // ── Preamble-triggered RX pipeline ───────────────────────────────────────
@@ -306,24 +343,48 @@ void MfskModem::tryCompleteFrame(std::vector<ModemRxEvent>& outEvents) {
         if (b0a != EXPECTED_HDR0) {
             dspLog("MfskModem: header byte0=0x%02x expected 0x21 "
                    "— discarding", b0a);
+            ModemRxEvent adj;
+            raiseSyncThreshold("no valid header after sync", adj);
+            if (!adj.syncAdjustReason.empty()) outEvents.push_back(adj);
             resetRx();
             return;
         }
 
         m_nBlocks = b1a;
 
-        constexpr int MAX_NBLOCKS = 125;
+        // Upper bound derived from what a compliant station can actually
+        // transmit: the TX PTT watchdog allows 120 s, and each LDPC block
+        // is 48 symbols x 32 ms — so anything claiming more blocks than
+        // fits in a legal transmission is a corrupted or false header.
+        // (Message length is otherwise deliberately open-ended — see the
+        // 2026-07-10 emcomm/HAVEN-E discussion; do not re-cap it lower.)
+        constexpr int MAX_NBLOCKS = static_cast<int>(
+            (PTT_WATCHDOG_SEC - 2.0) /
+            (48.0 * SAMPLES_PER_SYMBOL / SAMPLE_RATE));
         if (m_nBlocks <= 0 || m_nBlocks > MAX_NBLOCKS) {
             dspLog("MfskModem: nBlocks %d out of range [1,%d] — discarding",
                    m_nBlocks, MAX_NBLOCKS);
+            ModemRxEvent adj;
+            raiseSyncThreshold("implausible header after sync", adj);
+            if (!adj.syncAdjustReason.empty()) outEvents.push_back(adj);
             resetRx();
             return;
         }
 
         m_symsNeeded = frameStart + Frame::frameSymsNeeded(m_nBlocks);
 
-        dspLog("MfskModem: header decoded nBlocks=%d need %d total symbols",
-               m_nBlocks, m_symsNeeded);
+        // Listening window scales to the message the header promised —
+        // long-message support (previously a fixed 20 s cap silently made
+        // anything past ~11 blocks undecodable) AND bounded false-lock
+        // exposure: we never listen longer than the claimed frame needs.
+        double frameSecs = static_cast<double>(m_symsNeeded) *
+                           SAMPLES_PER_SYMBOL / SAMPLE_RATE;
+        m_collectTimeoutChunks = static_cast<int>(
+            (frameSecs + 3.0) * SAMPLE_RATE / AUDIO_CHUNK_SAMPLES);
+
+        dspLog("MfskModem: header decoded nBlocks=%d need %d total symbols "
+               "(~%.0f s, timeout %.0f s)",
+               m_nBlocks, m_symsNeeded, frameSecs, frameSecs + 3.0);
     }
 
     if (static_cast<int>(softSymbols.size()) < m_symsNeeded) {
@@ -373,6 +434,18 @@ void MfskModem::processFrame(
     outEvent.converged     = result.converged;
     outEvent.nBlocks       = result.nBlocks;
     outEvent.fecIterations = result.fecIterations;
+
+    // A verified decode is proof the current band supports real locks —
+    // snap an adaptively-raised threshold straight back to resting.
+    if (result.crcOk && m_syncAdaptEnabled &&
+        m_sync.threshold() > SYNC_RESTING)
+    {
+        m_sync.setThreshold(SYNC_RESTING);
+        dspLog("MfskModem: sync threshold back to resting %.2f "
+               "(verified decode)", SYNC_RESTING);
+        outEvent.syncThresholdNow = SYNC_RESTING;
+        outEvent.syncAdjustReason = "verified decode — threshold restored";
+    }
 
     // Report the actual CRC outcome — this used to say "CRC OK"
     // unconditionally, even right after logging a CRC failure above.

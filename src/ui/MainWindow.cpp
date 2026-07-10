@@ -707,6 +707,15 @@ void MainWindow::setupConnections() {
                     m_statusLabel->setText("Listening...");
             });
 
+    // Adaptive sync threshold — keep the operator informed when the
+    // receiver defends itself against false syncs (or relaxes again).
+    connect(m_pipeline, &HavenFSK::DspPipeline::syncThresholdChanged,
+            this, [this](float threshold, const QString& reason) {
+                m_statusLabel->setText(
+                    QString("Sync threshold %1 — %2")
+                        .arg(threshold, 0, 'f', 2).arg(reason));
+            });
+
     // RxDisplay → MainWindow (element clicks)
     connect(m_rxDisplay, &RxDisplay::elementClicked,
             this, &MainWindow::onElementClicked);

@@ -131,6 +131,9 @@ signals:
     // Result of requestTuneAudio() — see its doc comment above.
     void tuneAudioReady(const std::vector<float>& samples);
     void preambleDetected(float score);
+    // Adaptive sync-threshold change (MFSK false-lock defense) — new
+    // value plus a short human-readable reason for the status bar.
+    void syncThresholdChanged(float threshold, const QString& reason);
     void rxProgress(int symbolsReceived, int symbolsExpected);
     void afcOffsetChanged(float hz);
     void messageTransmitted(const QString& text);

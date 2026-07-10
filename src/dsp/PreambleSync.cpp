@@ -75,7 +75,7 @@ bool PreambleSync::pushSample(float sample, PreambleLock& lock)
 
         m_lastScore = bestScore;
 
-        if (bestScore >= SCORE_THRESHOLD) {
+        if (bestScore >= m_threshold) {
             // Track the best point seen anywhere in this above-threshold
             // run — the score curve isn't perfectly monotonic on the way
             // up (small sample-to-sample wobble), so committing on the

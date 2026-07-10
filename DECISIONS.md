@@ -3717,3 +3717,61 @@ weak-signal question is PreambleSync itself: its score threshold (0.45)
 and correlation structure set both the -9 dB AWGN wall and the
 crash-hit-preamble losses. Any future work targets sync sensitivity
 directly and is gated on the bench's lock columns.
+
+## ADR-131 — Adaptive preamble-sync threshold: resting 0.35 with false-lock defense
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision:** PreambleSync's detection threshold drops from a fixed 0.45
+to a resting 0.35, wrapped in the operator-proposed (WD9N) adaptive
+defense: every false-lock symptom — header validation failure,
+implausible nBlocks, or a frame that never completes — raises the live
+threshold one 0.03 step (max 0.48); a CRC-verified decode snaps it back
+to resting; ~10 s idle intervals decay it 0.005 toward resting.
+Adjustments surface in the UI status bar with value and reason.
+
+**Evidence (--bench-sync trade study, 10 trials/point):** locks/decodes
+at -9 dB by threshold: 0.45: 4/4, 0.40: 8/7, 0.35: 10/8, 0.30: 10/6
+(0.30 trades decode quality for marginal-alignment locks — 0.35 is the
+knee). False locks in 300 s of pure noise per threshold: ZERO at every
+threshold tested down to 0.30. Full-bench validation of the shipping
+config vs the ADR-129 baseline: AWGN -9 dB 0/10 -> 8/10 decoded (0/10
+-> 10/10 locked); crashes at -6 dB: 240/min 8/10 -> 10/10, 480/min
+4/10 -> 8/10 (locks 10/10 everywhere — the decoder is now the limiter,
+not sync). Roughly +1.5 dB sensitivity plus doubled survival in the
+heaviest storm scenario, from a threshold constant.
+
+**Caveat driving the adaptivity:** pure Gaussian noise is the easy
+false-lock case; on-air interferers (FT8, CW, PSK31, splatter) correlate
+better than noise and are not modeled in the bench. The adaptive raise
+is the defense for that gap and needs on-air observation.
+
+## ADR-132 — Message length open-ended up to the TX watchdog; RX listening window scales to the header
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision (per WD9N, emcomm/HAVEN-E direction):** message length is
+deliberately open-ended rather than capped at a "typical QSO" size. The
+RX collect timeout is no longer a fixed 20 s — that constant silently
+made any message beyond ~11 LDPC blocks undecodable — but is computed
+from the validated header's nBlocks (frame duration + 3 s), so RX
+listens exactly as long as the message needs and no longer. Before a
+valid header, a 5 s header-arrival window applies (the header's position
+is known exactly from the preamble). The plausibility bound on nBlocks
+derives from the TX PTT watchdog: a compliant station cannot transmit
+past 120 s, giving ~76 blocks / ~900 payload bytes per frame; the RX
+buffer cap scales to 130 s to match. Anything longer (HAVEN-E forms)
+belongs to application-layer multi-frame chunking with per-frame CRC and
+selective resend, not longer single frames.
+
+**Also bounds false-lock exposure:** the rare noise header that passes
+validation (~1/500) can now only hold RX for the duration of the message
+it claimed, and every such event raises the adaptive threshold (ADR-131).
+
+**Context:** HAVEN-E — a contemplated emcomm application profile where
+predefined forms are transmitted as field data only (both stations know
+the form; RX refills it, can render PDF). Rides HAVEN v1's wire format
+unchanged as a payload convention; plain stations still see readable
+delimited text.

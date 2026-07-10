@@ -112,10 +112,14 @@ inline void addCrashes(std::vector<float>& buf, float signalRms,
 // distinguishing sync-bound failures (lock never happened; decoder
 // improvements can't help) from decode-bound ones (locked but LDPC/CRC
 // failed; decoder-side work is in play).
+// syncThreshold 0 (default) = shipping configuration (adaptive threshold
+// at its resting value); >0 pins a fixed threshold with adaptation OFF,
+// for the --bench-sync trade study's stationary test points.
 inline bool runTrial(const std::vector<float>& frameAudio,
                      const std::string& expectedText,
                      const Impairment& imp,
-                     bool* lockedOut = nullptr)
+                     bool* lockedOut = nullptr,
+                     float syncThreshold = 0.0f)
 {
     std::mt19937 rng(imp.seed);
 
@@ -132,6 +136,10 @@ inline bool runTrial(const std::vector<float>& frameAudio,
     addCrashes(full, rms, imp, rng);
 
     MfskModem rx;
+    if (syncThreshold > 0.0f) {
+        rx.setSyncAdaptation(false);
+        rx.setSyncThreshold(syncThreshold);
+    }
     bool decoded = false;
     for (size_t off = 0; off < full.size(); off += AUDIO_CHUNK_SAMPLES) {
         size_t end = std::min(full.size(), off + (size_t)AUDIO_CHUNK_SAMPLES);
@@ -146,7 +154,83 @@ inline bool runTrial(const std::vector<float>& frameAudio,
     return decoded;
 }
 
+// Pure-noise exposure: how many (false) preamble locks fire in `seconds`
+// of Gaussian noise at the given sync threshold. Note a false lock puts
+// the modem in Collecting (real behavior), where further locks are
+// ignored until header rejection/timeout — so this measures operational
+// false-lock impact, not raw correlator statistics.
+inline int noiseOnlyLocks(float syncThreshold, float seconds, uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    std::vector<float> buf((size_t)(seconds * SAMPLE_RATE));
+    for (float& s : buf) s = gauss(rng);
+
+    MfskModem rx;
+    rx.setSyncAdaptation(false);
+    rx.setSyncThreshold(syncThreshold);
+    int locks = 0;
+    for (size_t off = 0; off < buf.size(); off += AUDIO_CHUNK_SAMPLES) {
+        size_t end = std::min(buf.size(), off + (size_t)AUDIO_CHUNK_SAMPLES);
+        std::vector<float> chunk(buf.begin() + off, buf.begin() + end);
+        chunk.resize(AUDIO_CHUNK_SAMPLES, 0.0f);
+        for (const auto& ev : rx.processAudioChunk(chunk))
+            if (ev.preambleDetected) locks++;
+    }
+    return locks;
+}
+
 } // namespace bench
+
+// Sensitivity vs false-lock trade study for PreambleSync's threshold —
+// the input data for the adaptive-threshold design (task: the -9 dB
+// wall; ADR-130 attributes every weak-signal failure to sync).
+// Invoke with:  HavenFSK.exe --bench-sync [trials]
+inline bool runSyncThresholdStudy(int trialsPerPoint = 10) {
+    using namespace bench;
+    using clock = std::chrono::steady_clock;
+    auto t0 = clock::now();
+
+    g_out = fopen("weak_signal_bench.txt", "w");
+    logln("=== HAVEN Sync Threshold Trade Study ===");
+    logln("trials per point: %d", trialsPerPoint);
+
+    MfskModem tx;
+    const std::string msg = "CQ POTA DE WD9N K-1234 K";
+    auto frameAudio = tx.modulateText(msg);
+
+    const float thresholds[] = {0.45f, 0.40f, 0.35f, 0.30f};
+    logln("");
+    logln("threshold | -9 dB locks/dec | -10 dB locks/dec | false locks per 300 s noise");
+    for (float thr : thresholds) {
+        int l9 = 0, d9 = 0, l10 = 0, d10 = 0;
+        for (int t = 0; t < trialsPerPoint; t++) {
+            Impairment imp;
+            imp.snrDb = -9.0f;
+            imp.seed  = 9000u + (uint32_t)t * 7919u;
+            bool locked = false;
+            if (runTrial(frameAudio, msg, imp, &locked, thr)) d9++;
+            if (locked) l9++;
+
+            imp.snrDb = -10.0f;
+            imp.seed  = 9500u + (uint32_t)t * 7919u;
+            locked = false;
+            if (runTrial(frameAudio, msg, imp, &locked, thr)) d10++;
+            if (locked) l10++;
+        }
+        int falseLocks = 0;
+        for (int t = 0; t < 10; t++)
+            falseLocks += noiseOnlyLocks(thr, 30.0f, 7000u + (uint32_t)t * 104729u);
+
+        logln("   %.2f   |     %2d / %2d     |      %2d / %2d     |   %d",
+              thr, l9, d9, l10, d10, falseLocks);
+    }
+
+    double secs = std::chrono::duration<double>(clock::now() - t0).count();
+    logln("");
+    logln("=== Study complete in %.0f s ===", secs);
+    if (g_out) { fclose(g_out); g_out = nullptr; }
+    return true;
+}
 
 inline bool runWeakSignalBench(int trialsPerPoint = 10) {
     using namespace bench;

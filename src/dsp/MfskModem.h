@@ -52,6 +52,28 @@ public:
     // AFC range — beyond this AFC clamps and MainWindow warns operator.
     static constexpr float AFC_MAX_HZ = 200.0f;
 
+    // Sync detection threshold passthrough + adaptation toggle — for the
+    // bench's fixed-threshold trade study (not part of IModem). Setting a
+    // threshold manually does not disable adaptation; the bench disables
+    // it explicitly to hold its test points still.
+    void setSyncThreshold(float t)   { m_sync.setThreshold(t); }
+    void setSyncAdaptation(bool on)  { m_syncAdaptEnabled = on; }
+
+    // ── Adaptive sync threshold (2026-07-10 trade study + WD9N design) ────
+    // Resting threshold 0.35, down from the historical fixed 0.45: the
+    // --bench-sync trade study measured -9 dB locks going 4/10 -> 10/10
+    // with ZERO false locks in 300 s of pure noise per threshold tested
+    // (0.30 traded decode quality for extra locks — marginal alignments —
+    // so 0.35 is the knee). Pure noise is NOT the on-air worst case
+    // (other modes/QRM correlate better than noise), hence the defense:
+    // every false-lock symptom (header reject, absurd nBlocks, collect
+    // timeout) raises the threshold one step toward SYNC_MAX; a genuine
+    // CRC-verified decode snaps it back to resting; idle time decays it
+    // slowly toward resting. Adjustments are surfaced via ModemRxEvent.
+    static constexpr float SYNC_RESTING = 0.35f;
+    static constexpr float SYNC_STEP    = 0.03f;
+    static constexpr float SYNC_MAX     = 0.48f;
+
 private:
     // ── DSP objects ───────────────────────────────────────────────────────
     Modulator   m_modulator;
@@ -93,7 +115,12 @@ private:
     // absolute sample index back into m_preTrigger's current contents.
     long long m_preTriggerDropped = 0;
 
-    static constexpr int MAX_BUFFER_SAMPLES = SAMPLE_RATE * 30;
+    // Sized for the longest message a compliant station can transmit
+    // (TX PTT watchdog: 120 s) plus pretrigger/margin — message length is
+    // deliberately open-ended up to that bound (2026-07-10 emcomm/HAVEN-E
+    // discussion; the old 30 s cap silently limited messages to ~11 LDPC
+    // blocks). ~25 MB transient worst case, only while collecting.
+    static constexpr int MAX_BUFFER_SAMPLES = SAMPLE_RATE * 130;
 
     int m_timingOffset     = 0;
     int m_preambleSymOff   = -1;
@@ -103,8 +130,19 @@ private:
     int m_collectTicks     = 0;
     int m_lastCheckSamples = 0;
 
-    static constexpr int COLLECT_TIMEOUT_CHUNKS =
-        static_cast<int>(SAMPLE_RATE * 20.0 / AUDIO_CHUNK_SAMPLES);
+    // Collect timeout, in chunks. Two regimes: before the header is
+    // decoded it is a short header-arrival window (the header's position
+    // is known exactly from the preamble — if it hasn't validated within
+    // a few seconds the lock was false); once the header is accepted,
+    // tryCompleteFrame() recomputes it to the duration the header's
+    // nBlocks actually needs plus margin. Long messages (emcomm forms)
+    // collect as long as they legitimately need; a false lock never holds
+    // RX longer than the frame it claimed. Replaces a fixed 20 s cap that
+    // silently made messages beyond ~11 blocks undecodable.
+    static constexpr int HEADER_TIMEOUT_CHUNKS =
+        static_cast<int>(SAMPLE_RATE * 5.0 / AUDIO_CHUNK_SAMPLES);
+    int m_collectTimeoutChunks = HEADER_TIMEOUT_CHUNKS;
+
     static constexpr int   PRE_TRIGGER_SAMPLES = SAMPLE_RATE * 3;
 
     // Periodic "still idle, best score seen" diagnostic — throttled so it
@@ -112,6 +150,17 @@ private:
     int m_diagChunkCount = 0;
     static constexpr int DIAG_LOG_INTERVAL_CHUNKS =
         static_cast<int>(SAMPLE_RATE * 1.0 / AUDIO_CHUNK_SAMPLES); // ~1s
+
+    // ── Adaptive sync threshold state (see public constants above) ───────
+    bool m_syncAdaptEnabled = true;
+    int  m_idleDecayTicks   = 0;
+    static constexpr int SYNC_DECAY_INTERVAL_CHUNKS =
+        static_cast<int>(SAMPLE_RATE * 10.0 / AUDIO_CHUNK_SAMPLES); // ~10 s
+    static constexpr float SYNC_DECAY_STEP = 0.005f;
+
+    // Raise one step after a false-lock symptom; fills the event's
+    // adjustment-notice fields so the UI can tell the operator.
+    void raiseSyncThreshold(const char* reason, ModemRxEvent& outEvent);
 
     // ── AFC state ─────────────────────────────────────────────────────────
     float m_afcOffsetHz = 0.0f;
