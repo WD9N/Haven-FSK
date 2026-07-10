@@ -806,6 +806,15 @@ void MainWindow::setupConnections() {
                 m_macroPanel->setTheirCall(call);
             });
 
+    // RS-S field drives <rstSent> the same way — whatever the log entry
+    // shows (typed, auto-computed, clicked, or cleared) is what macros
+    // expand, fixing <rstSent> going stale/empty when the report was
+    // entered manually.
+    connect(m_logPanel, &LogPanel::rsSentChanged,
+            this, [this](const QString& rs) {
+                m_macroPanel->setRsSent(rs);
+            });
+
     // Delete contact → database
     connect(m_logPanel, &LogPanel::contactDeleted,
             this, [this](int dbId) {
@@ -1066,9 +1075,10 @@ void MainWindow::onMessageReceived(const HavenFSK::RxMessage& msg) {
             std::optional<HavenFSK::RxMeasurement> m =
                 m_pipeline->getRxMeasurement(msg.senderCallsign);
             if (m) {
-                QString rs = HavenFSK::DspPipeline::computeRS(*m);
-                if (m_logPanel->maybeSetAutoRsSent(msg.senderCallsign, rs))
-                    m_macroPanel->setRsSent(rs);
+                // MacroPanel syncs via LogPanel::rsSentChanged if applied.
+                m_logPanel->maybeSetAutoRsSent(
+                    msg.senderCallsign,
+                    HavenFSK::DspPipeline::computeRS(*m));
             }
         }
     }
@@ -1249,9 +1259,8 @@ void MainWindow::onElementClicked(const QString& scheme, const QString& value) {
         std::optional<HavenFSK::RxMeasurement> m =
             m_pipeline->getRxMeasurement(value);
         if (m) {
-            QString rs = HavenFSK::DspPipeline::computeRS(*m);
-            m_logPanel->setRsSent(rs);
-            m_macroPanel->setRsSent(rs);
+            // MacroPanel picks this up via LogPanel::rsSentChanged.
+            m_logPanel->setRsSent(HavenFSK::DspPipeline::computeRS(*m));
         }
     }
 }

@@ -137,6 +137,12 @@ void LogPanel::setupEntryStrip() {
     m_rsSent->setPlaceholderText("--");
     m_rsSent->setToolTip("Auto-computed from received signal -- edit to override");
     forceUpper(m_rsSent);
+    // textChanged (not textEdited) for the same reason as m_callEntry
+    // below: covers setRsSent()/maybeSetAutoRsSent()/clear() too, keeping
+    // consumers (MacroPanel's <rstSent>) a faithful mirror of whatever
+    // this field currently shows, however the value got there.
+    connect(m_rsSent, &QLineEdit::textChanged,
+            this, &LogPanel::rsSentChanged);
     row1->addWidget(m_rsSent);
 
     row1->addSpacing(8);

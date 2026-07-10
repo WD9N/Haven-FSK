@@ -79,6 +79,11 @@ signals:
     // not just literal keystrokes.
     void theirCallChanged(const QString& call);
 
+    // Same contract as theirCallChanged, for the RS-S field — fires on
+    // typing, auto-compute, click-populate, and clearing, so MacroPanel's
+    // <rstSent> always mirrors what the log entry currently shows.
+    void rsSentChanged(const QString& rs);
+
 private slots:
     void onLogIt();
     void onClear();

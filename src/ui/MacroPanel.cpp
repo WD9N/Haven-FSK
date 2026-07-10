@@ -78,7 +78,7 @@ void MacroPanel::loadMacros() {
     struct Default { int idx; const char* label; const char* text; };
     static const Default defaults[] = {
         {0,  "CQ POTA",  "<clr>CQ POTA DE <myCall> <myParks> K<TX>"},
-        {1,  "Stn Info", "<clr>DE <myCall> NAME:<myName> QTH:<myQTH> GRID:<myGrid> POTA:<myParks> RS: K<TX>"},
+        {1,  "Stn Info", "<clr>DE <myCall> NAME:<myName> QTH:<myQTH> GRID:<myGrid> POTA:<myParks> RS:<rstSent> K<TX>"},
         {2,  "TU 73",    "<clr>TU 73 SK<TX>"},
         {3,  "QRZ?",     "<clr>QRZ? DE <myCall> K<TX>"},
         {4,  "AGN?",     "<clr>AGN? PSE RPT K<TX>"},
