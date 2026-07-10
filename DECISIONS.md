@@ -3669,3 +3669,51 @@ perturbation on failure), and preamble-sync improvements — the bench's
 lock-vs-decode split (added with this ADR) attributes failures to sync
 or decode so future effort aims at the real bottleneck. Any change is
 gated on moving the -8/-9 dB AWGN rows or the 240/480 crashes/min rows.
+
+## ADR-130 — Failure attribution: preamble sync is the entire weak-signal cliff; noise blanker rejected
+
+**Status:** Decided
+**Date:** July 2026
+
+**Context:** The bench's lock-vs-decode split (added with ADR-129)
+attributes every failure at every tested operating point to PREAMBLE
+SYNC, not the decoder:
+
+    AWGN:    -8 dB: 9/10 locked -> 9/10 decoded
+             -9 dB: 0/10 locked (decoder never ran)
+    Crashes at -6 dB: 120/min 10 locked -> 9 decoded
+             240/min 8 locked -> 8 decoded; 480/min 4 locked -> 4 decoded
+
+Once PreambleSync locks, the LDPC+interleaver payload chain decodes in
+essentially 100% of trials. Consequences drawn:
+
+1. *Retry decoding rejected without implementation* — re-running a
+   decode that succeeds whenever it runs cannot help.
+
+2. *Noise blanker rejected on measurement.* Two variants were built to
+   protect the preamble window from crashes, both A/B'd with same seeds:
+   - Per-sample amplitude threshold (4x robust median, 2 ms hangover):
+     catastrophic. In near-threshold noise, ~0.7% of legitimate samples
+     exceed any usefully low amplitude threshold, and the hangover
+     multiplied that into ~45% of ALL samples blanked — every AWGN row
+     collapsed. Amplitude cannot separate crash from noise at low SNR:
+     at -6 dB (2500 Hz ref) the full-band noise floor puts a
+     25-dB-above-signal stroke peak at only ~2.9 sigma.
+   - 1 ms window-energy threshold (2.5x median of recent window
+     energies, crash-proof baseline): statistically clean — AWGN rows
+     unchanged, fired only on crashes — and exactly NEUTRAL: decodes
+     identical to blanker-off at 120/240/480 crashes/min (one extra
+     lock at 240 that still failed CRC). Removing crash energy from
+     PreambleSync's input does not recover the lost locks. It would
+     also have needed a consecutive-blank cap to avoid erasing strong
+     signals that legitimately exceed a quiet baseline (untestable in
+     the bench's near-threshold scenarios).
+
+**Decision:** No pre-demodulation blanking or post-demodulation symbol
+treatment ships; the 2.5x-RMS clipper remains the only impulse defense,
+now with evidence it is sufficient at realistic storm rates given the
+interleaver and normalization self-erasure (ADR-129). The open, focused
+weak-signal question is PreambleSync itself: its score threshold (0.45)
+and correlation structure set both the -9 dB AWGN wall and the
+crash-hit-preamble losses. Any future work targets sync sensitivity
+directly and is gated on the bench's lock columns.
