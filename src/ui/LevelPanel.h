@@ -7,6 +7,8 @@
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QSettings>
+#include <QTimer>
 #include <QLinearGradient>
 #include <cmath>
 #include <algorithm>
@@ -333,13 +335,20 @@ public:
 
         hl->addWidget(m_rx);
 
-        m_tx->setFaderDb(-6.0f);
+        // Restore persisted fader positions — level settings track the
+        // radio/soundcard hookup, not the session: once set for a rig
+        // they stay put until different hardware is connected (operator
+        // request 2026-07-10). Defaults match the old fixed values.
+        {
+            QSettings s;
+            m_tx->setFaderDb(s.value("levels/txFaderDb", -6.0).toFloat());
+            m_rx->setFaderDb(s.value("levels/rxFaderDb",  0.0).toFloat());
+        }
         m_tx->setToolTip(
             "TX audio output level\n"
             "0dBu = -6dBFS (nominal)\n"
             "Target: watch wattmeter, keep ALC inactive\n"
             "Full scale (+6dBu) = 0dBFS");
-        m_rx->setFaderDb(0.0f);   // 0 dBu = unity gain into demodulator
         m_rx->setToolTip(
             "RX demodulator input gain\n"
             "0dBu = unity gain (no scaling)\n"
@@ -350,6 +359,21 @@ public:
                 this, &LevelPanel::txFaderChanged);
         connect(m_rx, &ChannelStrip::faderChanged,
                 this, &LevelPanel::rxFaderChanged);
+
+        // Debounced persistence — a fader drag (or wheel run) emits many
+        // changes per second; write once, shortly after the last one.
+        m_saveTimer = new QTimer(this);
+        m_saveTimer->setSingleShot(true);
+        m_saveTimer->setInterval(750);
+        connect(m_saveTimer, &QTimer::timeout, this, [this]() {
+            QSettings s;
+            s.setValue("levels/txFaderDb", m_tx->faderDb());
+            s.setValue("levels/rxFaderDb", m_rx->faderDb());
+        });
+        connect(m_tx, &ChannelStrip::faderChanged,
+                this, [this](float) { m_saveTimer->start(); });
+        connect(m_rx, &ChannelStrip::faderChanged,
+                this, [this](float) { m_saveTimer->start(); });
     }
 
     // Update meters (dBFS input → dBu display, 0dBu = -6dBFS)
@@ -371,4 +395,5 @@ signals:
 private:
     ChannelStrip* m_tx {nullptr};
     ChannelStrip* m_rx {nullptr};
+    QTimer*       m_saveTimer {nullptr};
 };

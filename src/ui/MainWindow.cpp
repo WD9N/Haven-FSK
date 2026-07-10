@@ -99,6 +99,11 @@ MainWindow::MainWindow(QWidget* parent)
         m_logPanel->loadContacts(m_logManager->contactsForDate(todayUtc));
     }
 
+    // Apply the RESTORED RX fader position to the pipeline — the change
+    // signal only fires on operator moves, not on constructor restore.
+    // (TX needs no push: its gain is read fresh at each transmit start.)
+    m_pipeline->setRxGain(m_levelPanel->rxFaderGain());
+
     // Restore last-used mode; setting the combo index triggers
     // onModeChanged() -> DspPipeline::setMode(), so this both applies the
     // saved mode and updates the waterfall passband/labels for it.
