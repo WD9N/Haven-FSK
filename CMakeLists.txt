@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(HavenFSK
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "HAVEN-FSK — 16-tone MFSK HF Digital Mode"
     LANGUAGES C CXX
 )

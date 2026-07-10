@@ -2,7 +2,51 @@
 
 ---
 
-## v0.4.0-beta — July 2026 *(current)*
+## v0.5.0-beta — July 2026 *(current)*
+
+**Receiver — weak signal & static crashes**
+- Adaptive preamble sync: detection threshold rests at 0.35 (was fixed
+  0.45) and self-raises on false-sync symptoms, relaxing again on
+  verified decodes / idle time, with status-bar notices. Measured on the
+  new benchmark: decode threshold improves ~1.5 dB (-9 dB SNR: 0/10 ->
+  8/10) and heavy-storm survival doubles (480 crashes/min at -6 dB:
+  4/10 -> 8/10). ADR-131.
+- Long messages actually work: the receive window now scales to the
+  length announced in the frame header (a fixed 20 s cap silently made
+  anything past ~150 characters undecodable). Maximum message is now
+  bounded only by the 120 s TX watchdog (~900 characters). ADR-132.
+- Weak-signal benchmark harness (HavenFSK.exe --bench / --bench-sync)
+  with calibrated noise and HF-realistic lightning crashes; four
+  plausible DSP "improvements" were measured, found not to help, and
+  documented instead of shipped (ADR-129/130).
+
+**Logging**
+- Critical fix: edits and deletes made in the log panel now reach the
+  database (they previously changed only the display; exports carried
+  the original data).
+- Today's contacts reload into the panel on startup.
+- New MHz / Date / Time entry fields (blank = auto): logging is fully
+  functional with no radio connected, past QSOs can be transcribed, and
+  editing a contact no longer silently rewrites its frequency to the
+  current dial.
+- Contacts table gains UTC Date column (time column labeled UTC) and a
+  State column; State is captured, stored, and exported (ADIF STATE).
+- POTA: park-to-park with multi-park stations now exports one record
+  per park (required for full P2P credit); hunters get SIG_INFO too.
+- SOTA: file generated even on combined POTA+SOTA days; per-contact
+  summit references.
+- Field Day: correct ADIF exchange semantics and a Cabrillo (.cab) file
+  for the ARRL submission applet.
+- RS-S fills automatically on a verified decode from your QSO partner;
+  <rstSent> macro tag now always mirrors the RS-S field.
+- Contacts logged without a frequency no longer export an invalid band.
+
+**UI**
+- TX/RX level fader positions persist across sessions.
+
+---
+
+## v0.4.0-beta — July 2026
 
 **Operating**
 - Tune button: transmits a steady 1000 Hz tone through the normal TX
