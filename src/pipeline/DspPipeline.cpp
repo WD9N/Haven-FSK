@@ -179,25 +179,40 @@ QString DspPipeline::computeRS(const RxMeasurement& m) {
 QString DspPipeline::parseSenderCallsign(const QString& text,
                                           const QString& myCallsign)
 {
-    QStringList words = text.toUpper().split(' ', Qt::SkipEmptyParts);
+    // Strip structured tag/value spans before scanning — tag values must
+    // never be candidates for the sender callsign. Grid squares
+    // especially: a 6-char Maidenhead locator (EN52XA) is exactly
+    // callsign-shaped, and "GRID: EN52XA" (space after the colon) or a
+    // bare grid in the text was being picked up as <theirCall>. Tag set
+    // kept in sync with RxDisplay::renderMessage/LogPanel by convention.
+    QString scrubbed = text.toUpper();
+    static QRegularExpression tagValueRe(
+        "RS:\\s*\\S{1,2}"
+        "|(?:NAME|QTH|GRID|POTA|SOTA|FD):\\s*[^\\s].*?"
+        "(?=\\s+(?:NAME:|QTH:|GRID:|RS:|POTA:|SOTA:|FD:)|$)");
+    scrubbed.remove(tagValueRe);
+
+    QStringList words = scrubbed.split(' ', Qt::SkipEmptyParts);
     QString myCall = myCallsign.toUpper();
     static QRegularExpression callRe(
         "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
+    // Bare (untagged) grid squares still look like callsigns — reject
+    // pure Maidenhead shapes. Costs the rare special-event call that
+    // happens to fit (e.g. GB19HQ); mis-logging every grid costs more.
+    static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}[A-X]{2}$");
+    auto isCall = [&](const QString& w) {
+        return callRe.match(w).hasMatch() && w != myCall &&
+               !gridRe.match(w).hasMatch();
+    };
 
     for (int i = 1; i < words.size() - 1; i++) {
         if (words[i] == "DE") {
-            QString before = words[i - 1];
-            QString after  = words[i + 1];
-            if (callRe.match(before).hasMatch() && before != myCall)
-                return before;
-            if (callRe.match(after).hasMatch() && after != myCall)
-                return after;
+            if (isCall(words[i - 1])) return words[i - 1];
+            if (isCall(words[i + 1])) return words[i + 1];
         }
     }
-    for (const QString& word : words) {
-        if (callRe.match(word).hasMatch() && word != myCall)
-            return word;
-    }
+    for (const QString& word : words)
+        if (isCall(word)) return word;
     return QString();
 }
 

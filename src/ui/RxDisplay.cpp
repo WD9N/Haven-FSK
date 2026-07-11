@@ -207,10 +207,14 @@ QString RxDisplay::renderMessage(const QString& text,
     // "W7W" in SOTA:W7W/SE-001) are skipped via the overlap check.
     static QRegularExpression wordRe(
         "\\b([A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z])\\b");
+    // Bare 6-char grid squares are callsign-shaped (EN52XA) — don't link
+    // them as callsigns (mirrors DspPipeline::parseSenderCallsign).
+    static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}[A-X]{2}$");
     const QString senderUpper = senderCallsign.toUpper();
     auto wordIt = wordRe.globalMatch(text.toUpper());
     while (wordIt.hasNext()) {
         auto m = wordIt.next();
+        if (gridRe.match(m.captured(1)).hasMatch()) continue;
         int pos = m.capturedStart(1);
         int len = m.capturedLength(1);
         bool overlaps = false;
