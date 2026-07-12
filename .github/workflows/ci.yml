@@ -1,0 +1,87 @@
+# Cross-platform build + headless DSP self-tests (ROADMAP Phase 5:
+# "cross-platform truth"). Machines verify what machines can: that the
+# code compiles on Linux x86-64, Linux arm64 (Raspberry-Pi-class), and
+# Windows, and that the DSP suite (FEC, Frame, MFSK loopback, PSK31)
+# passes on each. Audio-device behavior still needs a human with
+# hardware — see ROADMAP.md.
+name: CI
+
+on:
+  push:
+    branches: [cpp-rewrite, main]
+  pull_request:
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            name: linux-x64
+            qt_host: linux
+          - runner: ubuntu-24.04-arm
+            name: linux-arm64
+            qt_host: linux_arm64
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.11
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.1'
+          host: ${{ matrix.qt_host }}
+          modules: 'qtmultimedia qtserialport qtwebsockets'
+          cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libpulse-dev \
+            libxkbcommon-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: DSP self-tests (headless)
+        run: QT_QPA_PLATFORM=offscreen ./build/HavenFSK --self-test
+
+  windows:
+    name: windows-x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.11 (MinGW)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.1'
+          arch: 'win64_mingw'
+          modules: 'qtmultimedia qtserialport qtwebsockets'
+          tools: 'tools_ninja tools_mingw1310'
+          cache: true
+
+      - name: Add MinGW and Ninja to PATH
+        shell: pwsh
+        run: |
+          echo "$env:IQTA_TOOLS/mingw1310_64/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          echo "$env:IQTA_TOOLS/Ninja" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --parallel
+
+      - name: DSP self-tests (headless)
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          ./build/HavenFSK.exe --self-test

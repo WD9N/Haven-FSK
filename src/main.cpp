@@ -14,13 +14,13 @@
 #include <cstring>
 #include <cstdlib>
 
-#ifdef QT_DEBUG
+// Self-tests: run automatically in Debug builds, and in ANY build via
+// --self-test (headless CI entry point — see .github/workflows/ci.yml).
 #include "dsp/FecSelfTest.h"
 #include "dsp/FrameSelfTest.h"
 #include "dsp/MfskLoopbackSelfTest.h"
 #include "audio/AudioSelfTest.h"
 #include "dsp/psk/Psk31SelfTest.h"
-#endif
 
 static QFile     g_logFile;
 static QMutex    g_logMutex;
@@ -153,6 +153,21 @@ int main(int argc, char* argv[]) {
     QApplication::setOrganizationDomain("github.com/WD9N");
     QApplication::setApplicationName("HAVEN-FSK");
     QApplication::setApplicationVersion(HavenFSK::APP_VERSION);
+
+    // --self-test: run the DSP suite headlessly and exit — works in any
+    // build config (CI runs Release), no GUI, no audio devices needed.
+    // The audio self-test is deliberately excluded: CI runners have no
+    // audio hardware, and its device-enumeration check is meaningless
+    // there. Debug builds still run the full suite (audio included)
+    // before showing the GUI, as always.
+    const bool selfTestOnly = app.arguments().contains("--self-test");
+    if (selfTestOnly) {
+        bool ok = HavenFSK::runFecSelfTest()
+               && HavenFSK::runFrameSelfTest()
+               && HavenFSK::runMfskLoopbackSelfTest()
+               && HavenFSK::runPsk31SelfTest();
+        return ok ? 0 : 1;
+    }
 
 #ifdef QT_DEBUG
     if (!HavenFSK::runFecSelfTest())            return 1;
