@@ -105,9 +105,13 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     if (!county.isEmpty())
         rec += field("APP_HAVEN_MY_COUNTY", county);
 
+    // Both POTA field pairs: SIG/SIG_INFO is what the POTA uploader
+    // consumes; POTA_REF/MY_POTA_REF (ADIF 3.1.4+) is what newer loggers
+    // and QRZ read first. Emitting both matches POLO/HAMRS practice.
     if (!myPotaRef.isEmpty()) {
-        rec += field("MY_SIG",      "POTA");
-        rec += field("MY_SIG_INFO", myPotaRef);
+        rec += field("MY_SIG",       "POTA");
+        rec += field("MY_SIG_INFO",  myPotaRef);
+        rec += field("MY_POTA_REF",  myPotaRef);
     }
 
     // Their park goes in regardless of whether *I* was at one — a hunter's
@@ -115,6 +119,7 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     if (!theirPotaRef.isEmpty()) {
         rec += field("SIG",      "POTA");
         rec += field("SIG_INFO", theirPotaRef);
+        rec += field("POTA_REF", theirPotaRef);
     }
 
     if (!mySotaRef.isEmpty())
