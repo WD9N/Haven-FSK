@@ -413,8 +413,18 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
         m_callEntry->setText(value.toUpper());
     }
     else if (scheme == "pota") {
+        // Join space-separated prefix/number pairs ("US 1017", as some
+        // stations send or a manual selection captures) into "US-1017"
+        // BEFORE splitting on spaces, which would otherwise shear the
+        // pair into two bogus refs; fixPotaRef then handles per-ref
+        // canonicalization ("us1017" → "US-1017").
+        QString norm = value.toUpper();
+        static QRegularExpression spacedRef(
+            "\\b([A-Z]{2})\\s+([0-9]{3,5})\\b");
+        norm.replace(spacedRef, "\\1-\\2");
+
         QString existing = m_theirParks->text().trimmed();
-        for (const QString& park : value.split(' ', Qt::SkipEmptyParts)) {
+        for (const QString& park : norm.split(' ', Qt::SkipEmptyParts)) {
             QString fixed = fixPotaRef(park);
             if (!existing.contains(fixed))
                 existing += (existing.isEmpty() ? "" : " ") + fixed;

@@ -214,7 +214,9 @@ void RxDisplay::contextMenuEvent(QContextMenuEvent* event) {
         static QRegularExpression callRe(
             "^" + QString::fromStdString(HavenFSK::callsignPattern()) + "$");
         static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}(?:[A-X]{2})?$");
-        static QRegularExpression potaRe("^[A-Z0-9]{1,2}-[0-9]{4,5}$");
+        // Tolerates "US-1017", "US 1017", and "US1017" — the populate
+        // path canonicalizes all three to the hyphenated standard.
+        static QRegularExpression potaRe("^[A-Z]{2}[-\\s]?[0-9]{3,5}$");
         static QRegularExpression sotaRe(
             "^[A-Z0-9]{1,3}/[A-Z]{2}-[0-9]{3}$");
         static QRegularExpression rsRe("^[1-5][1-9][1-9]?$");
