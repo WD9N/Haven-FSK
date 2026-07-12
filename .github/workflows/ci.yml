@@ -51,41 +51,37 @@ jobs:
       - name: DSP self-tests (headless)
         run: QT_QPA_PLATFORM=offscreen ./build/HavenFSK --self-test
 
+  # Windows via MSYS2's packaged Qt6: download.qt.io's 6.11 Windows
+  # layout is not yet supported by aqtinstall (issue #1007), and the
+  # 6.11.1-exact parity build happens on the dev machine anyway — CI's
+  # job is catching "doesn't compile on a clean Windows toolchain".
   windows:
-    name: windows-x64
+    name: windows-x64 (MSYS2)
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Qt 6.11 (MinGW)
-        uses: jurplel/install-qt-action@v4
+      - uses: msys2/setup-msys2@v2
         with:
-          # Qt moved Windows 6.11+ packages into per-arch subdirectories
-          # on download.qt.io (aqtinstall #1007); the action's default
-          # aqtinstall predates the new layout — pin one that knows it.
-          aqtversion: '>=3.3.0'
-          version: '6.11.1'
-          arch: 'win64_mingw'
-          modules: 'qtmultimedia qtserialport qtwebsockets'
-          tools: 'tools_ninja tools_mingw1310'
-          cache: true
-
-      - name: Add MinGW and Ninja to PATH
-        shell: pwsh
-        run: |
-          echo "$env:IQTA_TOOLS/mingw1310_64/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          echo "$env:IQTA_TOOLS/Ninja" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-qt6-multimedia
+            mingw-w64-x86_64-qt6-serialport
+            mingw-w64-x86_64-qt6-websockets
 
       - name: Configure
-        shell: pwsh
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        shell: pwsh
         run: cmake --build build --parallel
 
       - name: DSP self-tests (headless)
-        shell: pwsh
-        run: |
-          $env:QT_QPA_PLATFORM = "offscreen"
-          ./build/HavenFSK.exe --self-test
+        run: QT_QPA_PLATFORM=offscreen ./build/HavenFSK.exe --self-test

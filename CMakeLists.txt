@@ -225,12 +225,19 @@ install(TARGETS HavenFSK
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-# Deploy Qt on Windows
+# Deploy Qt on Windows. MSYS2 names the tool windeployqt6; skip with a
+# notice when neither exists (CI builds don't need a deployable tree).
 if(WIN32)
-    add_custom_command(TARGET HavenFSK POST_BUILD
-        COMMAND "${Qt6_DIR}/../../../bin/windeployqt.exe"
-                "$<TARGET_FILE:HavenFSK>"
-        COMMENT "Running windeployqt"
-        VERBATIM
-    )
+    find_program(HAVEN_WINDEPLOYQT
+        NAMES windeployqt windeployqt6
+        HINTS "${Qt6_DIR}/../../../bin")
+    if(HAVEN_WINDEPLOYQT)
+        add_custom_command(TARGET HavenFSK POST_BUILD
+            COMMAND "${HAVEN_WINDEPLOYQT}" "$<TARGET_FILE:HavenFSK>"
+            COMMENT "Running windeployqt"
+            VERBATIM
+        )
+    else()
+        message(STATUS "windeployqt not found — skipping Qt deploy step")
+    endif()
 endif()
