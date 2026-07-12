@@ -509,11 +509,11 @@ void MainWindow::setupUi() {
 }
 
 void MainWindow::setupConnections() {
-    // Settings (Station Info = tab 0, Audio = tab 1) and export
-    connect(m_settingsAction, &QAction::triggered,
-            this, [this] { onOpenSettings(0); });
-    connect(m_audioAction, &QAction::triggered,
-            this, [this] { onOpenSettings(1); });
+    // Settings (each menu entry opens only its own page) and export
+    connect(m_settingsAction, &QAction::triggered, this,
+            [this] { onOpenSettings(SettingsDialog::Page::StationInfo); });
+    connect(m_audioAction, &QAction::triggered, this,
+            [this] { onOpenSettings(SettingsDialog::Page::Audio); });
     connect(m_exportAction, &QAction::triggered,
             this, &MainWindow::onExport);
 
@@ -957,9 +957,8 @@ void MainWindow::stopRadio() {
 
 // ── Slots ─────────────────────────────────────────────────────────────────
 
-void MainWindow::onOpenSettings(int tab) {
-    SettingsDialog dlg(this);
-    dlg.setCurrentTab(tab);
+void MainWindow::onOpenSettings(SettingsDialog::Page page) {
+    SettingsDialog dlg(page, this);
     connect(&dlg, &SettingsDialog::settingsChanged,
             this, &MainWindow::onSettingsChanged);
     dlg.exec();

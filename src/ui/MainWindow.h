@@ -16,6 +16,7 @@
 #include <vector>
 #include "../radio/PTTManager.h"
 #include "../dsp/IModem.h"
+#include "SettingsDialog.h"   // SettingsDialog::Page in a slot signature
 
 class AudioEngine;
 
@@ -24,7 +25,6 @@ namespace HavenFSK {
     struct RxMessage;
 }
 
-class SettingsDialog;
 class StationInfoWidget;
 class RadioInterface;
 class RxDisplay;
@@ -57,7 +57,7 @@ private slots:
     void onAudioError(const QString& message);
     void onRxLevelChanged(float level);
     void onSettingsChanged();
-    void onOpenSettings(int tab);
+    void onOpenSettings(SettingsDialog::Page page);
     void onRadioConnected();
     void onRadioDisconnected();
     void onRadioConnectFailed(const QString& reason);

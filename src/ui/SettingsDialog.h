@@ -1,6 +1,5 @@
 #pragma once
 #include <QDialog>
-#include <QTabWidget>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QComboBox>
@@ -8,17 +7,19 @@
 #include <QLabel>
 #include <QGroupBox>
 
-// SettingsDialog — Station Information and Audio device settings.
+// SettingsDialog — one settings page per window (operator request: the
+// menu bar's Station Info and Audio entries each open ONLY their own
+// settings). The page is fixed at construction; load/save touch only
+// that page's persisted values, never the other's.
 // Radio control configuration has moved to Radio → Configure... (ADR-055).
 
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit SettingsDialog(QWidget* parent = nullptr);
+    enum class Page { StationInfo, Audio };
 
-    // 0 = Station Info, 1 = Audio — the menu bar's direct entries.
-    void setCurrentTab(int idx) { m_tabs->setCurrentIndex(idx); }
+    explicit SettingsDialog(Page page, QWidget* parent = nullptr);
 
 signals:
     void settingsChanged();
@@ -30,12 +31,12 @@ private slots:
     void onRemovePotaRef();
 
 private:
-    void setupStationTab();
-    void setupAudioTab();
+    QWidget* buildStationPage();
+    QWidget* buildAudioPage();
     void loadSettings();
     void saveSettings();
 
-    QTabWidget* m_tabs {nullptr};
+    Page m_page;
 
     // ── Station Information tab ───────────────────────────────────────────
     QLineEdit*   m_callsign    {nullptr};

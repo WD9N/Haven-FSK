@@ -27,17 +27,17 @@ static QString fixPotaRef(const QString& raw) {
     return s;
 }
 
-SettingsDialog::SettingsDialog(QWidget* parent)
+SettingsDialog::SettingsDialog(Page page, QWidget* parent)
     : QDialog(parent)
+    , m_page(page)
 {
-    setWindowTitle("HAVEN-FSK Settings");
+    const bool station = (page == Page::StationInfo);
+    setWindowTitle(station ? "Station Info" : "Audio Devices");
     setMinimumWidth(500);
-    setMinimumHeight(460);
+    if (station) setMinimumHeight(460);
     setModal(true);
 
-    m_tabs = new QTabWidget(this);
-    setupStationTab();
-    setupAudioTab();
+    QWidget* pageWidget = station ? buildStationPage() : buildAudioPage();
 
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok |
@@ -53,16 +53,16 @@ SettingsDialog::SettingsDialog(QWidget* parent)
             this, &QDialog::reject);
 
     auto* layout = new QVBoxLayout(this);
-    layout->addWidget(m_tabs);
+    layout->addWidget(pageWidget);
     layout->addWidget(buttons);
 
     loadSettings();
 }
 
-// ── Station Information tab ───────────────────────────────────────────────
+// ── Station Information page ──────────────────────────────────────────────
 
-void SettingsDialog::setupStationTab() {
-    auto* widget = new QWidget;
+QWidget* SettingsDialog::buildStationPage() {
+    auto* widget = new QWidget(this);
     auto* layout = new QVBoxLayout(widget);
 
     // Force-uppercase helper for identity fields
@@ -184,8 +184,6 @@ void SettingsDialog::setupStationTab() {
     layout->addWidget(fdGroup);
     layout->addStretch();
 
-    m_tabs->addTab(widget, "Station Info");
-
     // Connections
     connect(m_callsign, &QLineEdit::textChanged,
             this, [this](const QString& t) {
@@ -203,6 +201,8 @@ void SettingsDialog::setupStationTab() {
                 m_potaRemove->setEnabled(
                     !m_potaList->selectedItems().isEmpty());
             });
+
+    return widget;
 }
 
 void SettingsDialog::onAddPotaRef() {
@@ -230,10 +230,10 @@ void SettingsDialog::onRemovePotaRef() {
     m_potaRemove->setEnabled(false);
 }
 
-// ── Audio Devices tab ─────────────────────────────────────────────────────
+// ── Audio Devices page ────────────────────────────────────────────────────
 
-void SettingsDialog::setupAudioTab() {
-    auto* widget = new QWidget;
+QWidget* SettingsDialog::buildAudioPage() {
+    auto* widget = new QWidget(this);
     auto* layout = new QFormLayout(widget);
 
     m_inputDev = new QComboBox;
@@ -252,58 +252,67 @@ void SettingsDialog::setupAudioTab() {
     note->setWordWrap(true);
     layout->addRow("", note);
 
-    m_tabs->addTab(widget, "Audio");
+    return widget;
 }
 
 // ── Load / Save ───────────────────────────────────────────────────────────
 
+// Load/save are gated on m_page: only the constructed page's widgets
+// exist, and only its persisted values may be touched — the Audio
+// window must never rewrite station info from empty widgets, nor the
+// Station Info window the device selection.
+
 void SettingsDialog::loadSettings() {
-    HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
+    if (m_page == Page::StationInfo) {
+        HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
 
-    m_callsign->setText(info.callsign);
-    m_callWarning->setVisible(info.callsign.isEmpty());
-    m_grid->setText(info.grid);
-    m_opName->setText(info.opName);
+        m_callsign->setText(info.callsign);
+        m_callWarning->setVisible(info.callsign.isEmpty());
+        m_grid->setText(info.grid);
+        m_opName->setText(info.opName);
 
-    m_potaList->clear();
-    for (const QString& ref : info.potaRefs)
-        if (!ref.isEmpty())
-            m_potaList->addItem(ref);
+        m_potaList->clear();
+        for (const QString& ref : info.potaRefs)
+            if (!ref.isEmpty())
+                m_potaList->addItem(ref);
 
-    m_state->setText(info.state);
-    m_county->setText(info.county);
-    m_qth->setText(info.qth);
-    m_sotaRef->setText(info.sotaRef);
-    m_fdClass->setText(info.fdClass);
-    m_fdSection->setText(info.fdSection);
-
-    // Audio
-    int idxIn = m_inputDev->findText(HavenFSK::savedInputDevice());
-    if (idxIn >= 0) m_inputDev->setCurrentIndex(idxIn);
-    int idxOut = m_outputDev->findText(HavenFSK::savedOutputDevice());
-    if (idxOut >= 0) m_outputDev->setCurrentIndex(idxOut);
+        m_state->setText(info.state);
+        m_county->setText(info.county);
+        m_qth->setText(info.qth);
+        m_sotaRef->setText(info.sotaRef);
+        m_fdClass->setText(info.fdClass);
+        m_fdSection->setText(info.fdSection);
+    } else {
+        int idxIn = m_inputDev->findText(HavenFSK::savedInputDevice());
+        if (idxIn >= 0) m_inputDev->setCurrentIndex(idxIn);
+        int idxOut = m_outputDev->findText(HavenFSK::savedOutputDevice());
+        if (idxOut >= 0) m_outputDev->setCurrentIndex(idxOut);
+    }
 }
 
 void SettingsDialog::saveSettings() {
-    HavenFSK::StationInfo info;
-    info.callsign  = m_callsign->text().trimmed().toUpper();
-    info.grid      = m_grid->text().trimmed().toUpper();
-    info.opName    = m_opName->text().trimmed();
-    info.state     = m_state->text().trimmed();
-    info.county    = m_county->text().trimmed();
-    info.qth       = m_qth->text().trimmed();
-    info.sotaRef   = m_sotaRef->text().trimmed().toUpper();
-    info.fdClass   = m_fdClass->text().trimmed().toUpper();
-    info.fdSection = m_fdSection->text().trimmed().toUpper();
+    if (m_page == Page::StationInfo) {
+        HavenFSK::StationInfo info;
+        info.callsign  = m_callsign->text().trimmed().toUpper();
+        info.grid      = m_grid->text().trimmed().toUpper();
+        info.opName    = m_opName->text().trimmed();
+        info.state     = m_state->text().trimmed();
+        info.county    = m_county->text().trimmed();
+        info.qth       = m_qth->text().trimmed();
+        info.sotaRef   = m_sotaRef->text().trimmed().toUpper();
+        info.fdClass   = m_fdClass->text().trimmed().toUpper();
+        info.fdSection = m_fdSection->text().trimmed().toUpper();
 
-    for (int i = 0; i < m_potaList->count(); i++) {
-        QString ref = m_potaList->item(i)->text().trimmed().toUpper();
-        if (!ref.isEmpty()) info.potaRefs.append(ref);
+        for (int i = 0; i < m_potaList->count(); i++) {
+            QString ref = m_potaList->item(i)->text().trimmed().toUpper();
+            if (!ref.isEmpty()) info.potaRefs.append(ref);
+        }
+
+        HavenFSK::saveStationInfo(info);
+    } else {
+        HavenFSK::saveInputDevice(m_inputDev->currentText());
+        HavenFSK::saveOutputDevice(m_outputDev->currentText());
     }
-
-    HavenFSK::saveStationInfo(info);
-    HavenFSK::saveInputDevice(m_inputDev->currentText());
-    HavenFSK::saveOutputDevice(m_outputDev->currentText());
 }
 
 void SettingsDialog::onOk() {
