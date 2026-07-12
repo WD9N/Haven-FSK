@@ -183,12 +183,22 @@ void RxDisplay::appendTxMessage(const QString& text,
 }
 
 void RxDisplay::contextMenuEvent(QContextMenuEvent* event) {
-    QMenu* menu = createStandardContextMenu(event->pos());
-
     // QTextCursor::selectedText() uses U+2029 as the paragraph separator.
     QString sel = textCursor().selectedText()
                       .replace(QChar(0x2029), ' ').trimmed();
-    if (!sel.isEmpty()) {
+
+    // No selection: the standard Copy/Select All menu. With a selection
+    // the menu is purely the "Log as" field list (operator request —
+    // Ctrl+C still copies; the menu exists for logging).
+    if (sel.isEmpty()) {
+        QMenu* std = createStandardContextMenu(event->pos());
+        std->exec(event->globalPos());
+        delete std;
+        return;
+    }
+
+    QMenu* menu = new QMenu(this);
+    {
         // Field list in default order; the shape-guessed field is
         // promoted to a direct top-level action.
         struct Field { const char* scheme; const char* label; };
@@ -227,21 +237,20 @@ void RxDisplay::contextMenuEvent(QContextMenuEvent* event) {
             return a;
         };
 
-        QAction* first = menu->actions().isEmpty()
-                             ? nullptr : menu->actions().first();
-        // Direct action for the shape-guessed field, then a submenu with
-        // the full field list for everything else.
-        QMenu* sub = new QMenu(QString("Log \"%1\" as").arg(shown), menu);
+        // Flat list: disabled header, then every field as a direct
+        // action, shape-guessed field first.
+        QAction* header = menu->addAction(
+            QString("Log \"%1\" as:").arg(shown));
+        header->setEnabled(false);
+        menu->addSeparator();
+        if (guess)
+            for (const Field& f : fields)
+                if (QString(f.scheme) == guess)
+                    menu->addAction(makeLogAction(menu, f.label, f.scheme));
         for (const Field& f : fields) {
-            if (guess && QString(f.scheme) == guess)
-                menu->insertAction(first, makeLogAction(menu,
-                    QString("Log \"%1\" as %2").arg(shown, f.label),
-                    f.scheme));
-            else
-                sub->addAction(makeLogAction(sub, f.label, f.scheme));
+            if (guess && QString(f.scheme) == guess) continue;
+            menu->addAction(makeLogAction(menu, f.label, f.scheme));
         }
-        menu->insertMenu(first, sub);
-        menu->insertSeparator(first);
     }
 
     menu->exec(event->globalPos());
