@@ -27,8 +27,7 @@ incorporated into GPL works without conflict.
 **License:** Qt is offered under a tri-license: GPLv3, LGPLv3, and a
 commercial license, depending on module.
 **Components used** (see `CMakeLists.txt`, `target_link_libraries(HavenFSK ...)`):
-Core, Widgets, Network, WebSockets, SerialPort, Multimedia,
-MultimediaWidgets, Sql.
+Core, Widgets, Network, WebSockets, SerialPort, Multimedia, Sql.
 
 All linked Qt6 modules are available under LGPLv3, which is compatible
 with this GPLv3 application. (An earlier revision linked `Qt6::Charts` —

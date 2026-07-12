@@ -29,7 +29,6 @@ find_package(Qt6 REQUIRED COMPONENTS
     WebSockets
     SerialPort
     Multimedia
-    MultimediaWidgets
     Sql
 )
 
@@ -177,7 +176,6 @@ target_link_libraries(HavenFSK PRIVATE
     Qt6::WebSockets
     Qt6::SerialPort
     Qt6::Multimedia
-    Qt6::MultimediaWidgets
     Qt6::Sql
     kissfft
 )
