@@ -3775,3 +3775,104 @@ predefined forms are transmitted as field data only (both stations know
 the form; RX refills it, can render PDF). Rides HAVEN v1's wire format
 unchanged as a payload convention; plain stations still see readable
 delimited text.
+
+## ADR-133 — Inline field markers: invisible in-band tagging of log data in message text
+
+**Status:** Decided
+**Date:** July 2026
+
+**Problem:** auto-logging depended on regex-parsing prose (`NAME:`/
+`GRID:` text tags), which constrained macro wording, cluttered both
+displays, misattributed data (grid-vs-callsign, commit 11840df), and
+could not distinguish who a value was *for* in multi-station traffic.
+WD9N needed one macro set usable across POTA/SOTA/FD/ragchew without
+formatting discipline, and without meaningful TX-time overhead.
+
+**Decision:** tagged values are wrapped inline in the payload with
+ASCII control characters that cannot be typed: `0x1F` + one field-ID
+byte before the value, `0x1E` after it. The value itself remains the
+visible prose — data exists exactly once on the wire. Example (␟ =
+0x1F, ␞ = 0x1E):
+
+    ␟cN8SDR␞ DE ␟dWD9N␞ UR ␟r52␞ INTO ␟pUS-1017␞ K
+
+renders on both screens as `N8SDR DE WD9N UR 52 INTO US-1017 K`.
+
+Field IDs: `d` sender callsign, `c` addressed-to callsign, `r` RS
+report, `g` grid, `p` POTA ref(s, space-separated), `s` SOTA ref,
+`n` name, `q` QTH, `f` FD exchange, `t` state, `y` county. (`f` stays
+the combined "CLASS SECTION" exchange — both ADIF and Cabrillo split
+it themselves; separate class/section IDs were considered and dropped
+as adding spec surface for no logging benefit.) Unknown IDs are skipped on RX
+(forward compatibility). Payload convention only — no wire-format or
+protocol-version change (same category as ADR-132's HAVEN-E framing);
+disclosed in the spec §6.1 for §97.309.
+
+**Markers never exist in the UI.** The TX editor holds clean text;
+tagging lives as a QTextCharFormat property applied to the spans that
+macro tags (`<myCall>`, `<rstSent>`, `<myParks>`, …) expand into, shown
+with a faint background tint. Qt's document machinery keeps spans
+consistent through arbitrary editing (edit "52"→"55" inside the RS span
+and the span now carries 55 — prose and data cannot diverge, there is
+one copy). Markers are serialized around tagged spans only at send
+time, and stripped before any RX/echo display. Insertion resets the
+boundary char format so typing after a span doesn't extend it.
+
+**Why not the alternatives (all analyzed in-session):**
+- *Visible text tags* (status quo): the problem itself. Retained only
+  as an RX fallback for hand-typed exchanges from stations without
+  markers.
+- *Appended invisible data package* (`0x1D` block after the prose):
+  duplicates every value → +1.5 to +4.6 s per over (vs. +0 to +1.5 s
+  inline, usually absorbed by LDPC block padding); needs a
+  "log-authoritative over prose" divergence rule; delivers data the
+  prose never said, a gray zone for SOTA/FD exchange-validity rules.
+  Inline can only tag what was actually transmitted in the open.
+- *Separate structured data frame type*: cleanest separation and the
+  right future mechanism for beacons/spots/telemetry (field grammar
+  here is designed to be lifted unchanged), but costs a second
+  preamble+header, touches the wire format, and is heavy for this need.
+- *Template messages* (FT8-style): kills free-text operation.
+
+**RX population rule set (multi-party; each rule earns its place from
+a specific failure scenario worked in-session):**
+1. CRC-clean frames only (existing rule, unchanged).
+2. Fields are **pair-scoped** (`r` — meaningful only between two
+   stations) or **broadcast-scoped** (`g p s n q f` — facts about the
+   sender, true for all listeners). Pair-scoped fields populate only
+   when `c` = my call. Without this, an activator's exchange with
+   another hunter (`d` matches my entry, `c` doesn't) would put
+   someone else's signal report in my log.
+3. Broadcast fields populate when `c` = my call, or when `c` is absent
+   (CQ/info) and the log entry is empty — a CQ pre-stages every
+   listener's entry but never overwrites one.
+4. A non-empty entry holding a *different* callsign is never replaced
+   automatically. Only operator actions switch contacts: Log It,
+   Clear, or clicking a callsign. (Today's "addressed-to-me steals the
+   entry" takeover was itself the interloper vulnerability.)
+5. Recently-logged suppression: a callsign logged within ~10 minutes
+   does not auto-seed an empty entry — otherwise the just-worked
+   station's "TU 73" refills the entry the activator just cleared and
+   blocks the next caller.
+6. Clicking a message adopts its broadcast fields and sender callsign
+   regardless of rules 3–5 (operator action = consent), but never
+   adopts pair-scoped fields from a message whose `c` isn't my call.
+The text-tag fallback path obeys the same rules 4–6.
+
+**Interloper analysis:** frames are atomic (CRC over the whole frame),
+so a wedged transmission can't mix bytes into another station's frame;
+it can only arrive as its own clean decode, which rules 2–4 make
+inert — it displays, but cannot touch the log without an operator
+click. Callsign spoofing is not addressed: markers are sender-declared
+facts with the same trust model as voice/CW/every amateur digital mode
+(authentication via encryption is not available on amateur bands).
+
+**Constraints:**
+- Marker emission is gated on the active modem being HAVEN MFSK —
+  control characters must never leak into PSK31 varicode toward
+  fldigi users.
+- `0x1E`/`0x1F` are stripped from hand-typed TX text (unrepresentable
+  in the UI anyway, but defense against paste).
+- `DspPipeline::parseSenderCallsign` prefers the `d` marker and falls
+  back to the existing `DE` heuristic, retiring the
+  grid-square-mistaken-for-callsign class of bug at its root.

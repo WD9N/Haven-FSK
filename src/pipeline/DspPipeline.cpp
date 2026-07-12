@@ -1,5 +1,6 @@
 #include "DspPipeline.h"
 #include "../dsp/ModemFactory.h"
+#include "../dsp/FieldMarkers.h"
 #include "../radio/RadioSettings.h"
 #include <QDateTime>
 #include <QRegularExpression>
@@ -179,13 +180,30 @@ QString DspPipeline::computeRS(const RxMeasurement& m) {
 QString DspPipeline::parseSenderCallsign(const QString& text,
                                           const QString& myCallsign)
 {
+    // Inline field markers first (ADR-133): a 'd' field is the sender's
+    // own declaration of identity — no heuristics needed. Shape-check it
+    // anyway so garbage can't ride in as a "callsign".
+    {
+        MarkedMessage marked = parseMarkedText(text.toStdString());
+        QString declared = QString::fromStdString(
+            fieldValue(marked, FieldId::Sender)).toUpper();
+        static QRegularExpression declRe(
+            "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
+        if (!declared.isEmpty() && declRe.match(declared).hasMatch()
+            && declared != myCallsign.toUpper())
+            return declared;
+    }
+
     // Strip structured tag/value spans before scanning — tag values must
     // never be candidates for the sender callsign. Grid squares
     // especially: a 6-char Maidenhead locator (EN52XA) is exactly
     // callsign-shaped, and "GRID: EN52XA" (space after the colon) or a
     // bare grid in the text was being picked up as <theirCall>. Tag set
     // kept in sync with RxDisplay::renderMessage/LogPanel by convention.
-    QString scrubbed = text.toUpper();
+    // Fallback heuristic scans the marker-stripped text — leftover
+    // marker bytes glued to words would defeat the callsign regex.
+    QString scrubbed = QString::fromStdString(
+        stripMarkers(text.toStdString())).toUpper();
     static QRegularExpression tagValueRe(
         "RS:\\s*\\S{1,2}"
         "|(?:NAME|QTH|GRID|POTA|SOTA|FD):\\s*[^\\s].*?"

@@ -124,6 +124,7 @@ set(HEADERS
     src/dsp/DCD.h
     src/dsp/FEC.h
     src/dsp/Frame.h
+    src/dsp/FieldMarkers.h
     src/dsp/DspLog.h
     src/pipeline/DspPipeline.h
     src/audio/AudioEngine.h

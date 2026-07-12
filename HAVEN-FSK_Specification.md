@@ -410,12 +410,55 @@ before carrier drop. The trailing space is stripped on receive.
 
 Primary character set: printable ASCII (0x20 through 0x7E).
 
+### 6.1 Structured Field Markers (optional payload convention)
+
+In addition to printable text, the payload may contain inline field
+markers that identify spans of the visible text as structured log data
+(callsigns, signal reports, location references). Markers are an
+application-layer payload convention; they do not change the frame
+format, and a receiver that ignores them still recovers the full
+message text.
+
+A marked field is encoded as:
+
+    0x1F <id> <value> 0x1E
+
+where `<id>` is one ASCII byte identifying the field and `<value>` is
+the visible text of the field (printable ASCII). The value appears
+exactly once — it is both the displayed text and the datum. Receivers
+that implement this convention strip the `0x1F <id>` prefix and `0x1E`
+suffix before display and may route the value to logging software.
+Unrecognized `<id>` bytes should be treated as unmarked text spans
+(strip the markers, keep the value).
+
+Defined field IDs:
+
+| ID  | Meaning                                    |
+|-----|--------------------------------------------|
+| `d` | Sender (transmitting station) callsign     |
+| `c` | Addressed-to (recipient station) callsign  |
+| `r` | Signal report (RS)                         |
+| `g` | Maidenhead grid locator (4 or 6 char)      |
+| `p` | POTA park reference(s), space-separated    |
+| `s` | SOTA summit reference                      |
+| `n` | Operator name                              |
+| `q` | QTH (free text)                            |
+| `f` | ARRL Field Day exchange (class + section)  |
+| `t` | US state / primary administrative subdivision |
+| `y` | County / secondary administrative subdivision |
+
+The `r` field is scoped to the station pair identified by `d` and `c`;
+all other fields are facts about the sender, valid for any listener.
+Markers carry sender-declared information and imply no authentication;
+the trust model is identical to spoken or hand-keyed exchanges.
+
 ---
 
 ## 7. Version History
 
 | Version     | Date     | Changes                                         |
 |-------------|----------|-------------------------------------------------|
+| 0.2.0-beta  | Jul 2026 (rev. 4) | Added §6.1: optional inline structured field markers (0x1F id … 0x1E) as an application-layer payload convention for log data. No wire-format change; plain receivers still recover full text. |
 | 0.2.0-beta  | Jul 2026 (rev. 3) | Closed two disclosure gaps, no wire-format change: documented CRC-16 wire byte order (§4.3, big-endian) and added the standard test vector; documented that v2 header byte 0 has exactly one valid value (0x21 — FEC always 1, reserved bits always 0, receiver rejects otherwise), so reserved-bit extensions require a VERSION bump (§4.2). |
 | 0.2.0-beta  | Jul 2026 (rev. 2) | Corrected two disclosure errors, no wire-format change: documented Gray-coding of transmitted tone indices (§3.2/§3.3), previously omitted; corrected end-of-frame detection (§4) to header-disclosed message length rather than carrier sensing. |
 | 0.2.0-beta  | Jul 2026 | Protocol v2: header sent 3x with bit-level majority vote (was 2x, "prefer copy 1"); payload interleaving across LDPC blocks added — both are wire-format-breaking changes, gated by the header VERSION field. Modulator confirmed/documented as continuous-phase (CPMFSK). Effective NBLOCKS maximum corrected to 125 (receiver-enforced sanity cap), not the 255 the field width alone would allow. |

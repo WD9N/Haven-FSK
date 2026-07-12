@@ -1,6 +1,8 @@
 #include "MacroPanel.h"
 #include "../radio/RadioSettings.h"
+#include "../dsp/FieldMarkers.h"
 #include <QGridLayout>
+#include <QRegularExpression>
 #include <QVBoxLayout>
 #include <QFont>
 #include <QSettings>
@@ -160,9 +162,9 @@ void MacroPanel::onMacroClicked(int index) {
     raw.remove("<TX>",  Qt::CaseInsensitive);
     raw.remove("<clr>", Qt::CaseInsensitive);
 
-    QString expanded = expandMacro(raw).trimmed();
+    QList<MacroSegment> segments = expandMacro(raw);
 
-    emit macroTriggered(expanded, clearFirst, autoTx);
+    emit macroTriggered(segments, clearFirst, autoTx);
 }
 
 void MacroPanel::onMacroRightClicked(int index) {
@@ -249,23 +251,71 @@ void MacroPanel::onMacroRightClicked(int index) {
     }
 }
 
-QString MacroPanel::expandMacro(const QString& text) const {
+QList<MacroSegment> MacroPanel::expandMacro(const QString& text) const {
     HavenFSK::StationInfo info = HavenFSK::loadStationInfo();
-    QString result = text;
 
-    result.replace("<myCall>",    info.callsign,  Qt::CaseInsensitive);
-    result.replace("<myParks>",   info.myParks(),  Qt::CaseInsensitive);
-    result.replace("<mySOTA>",    info.sotaRef,    Qt::CaseInsensitive);
-    result.replace("<myGrid>",    info.grid,       Qt::CaseInsensitive);
-    result.replace("<myName>",    info.opName,     Qt::CaseInsensitive);
-    result.replace("<myQTH>",     info.qth,        Qt::CaseInsensitive);
-    result.replace("<myFD>",
-        info.fdClass + (info.fdSection.isEmpty() ? "" : " " + info.fdSection),
-        Qt::CaseInsensitive);
-    result.replace("<myState>",   info.state,      Qt::CaseInsensitive);
-    result.replace("<myCounty>",  info.county,     Qt::CaseInsensitive);
-    result.replace("<theirCall>", m_theirCall,     Qt::CaseInsensitive);
-    result.replace("<rstSent>",   m_rsSent,        Qt::CaseInsensitive);
+    // Data tags carry the ADR-133 field ID of the value they insert.
+    // Empty values expand to nothing, tag and all.
+    struct Tag { const char* name; QString value; char fieldId; };
+    const Tag tags[] = {
+        {"myCall",    info.callsign,   HavenFSK::FieldId::Sender},
+        {"myParks",   info.myParks(),  HavenFSK::FieldId::Pota},
+        {"mySOTA",    info.sotaRef,    HavenFSK::FieldId::Sota},
+        {"myGrid",    info.grid,       HavenFSK::FieldId::Grid},
+        {"myName",    info.opName,     HavenFSK::FieldId::Name},
+        {"myQTH",     info.qth,        HavenFSK::FieldId::Qth},
+        {"myFD",      info.fdClass + (info.fdSection.isEmpty()
+                          ? "" : " " + info.fdSection),
+                                       HavenFSK::FieldId::Fd},
+        {"myState",   info.state,      HavenFSK::FieldId::State},
+        {"myCounty",  info.county,     HavenFSK::FieldId::County},
+        {"theirCall", m_theirCall,     HavenFSK::FieldId::Recipient},
+        {"rstSent",   m_rsSent,        HavenFSK::FieldId::Rs},
+    };
 
-    return result;
+    static const QRegularExpression tagRe(
+        "<(myCall|myParks|mySOTA|myGrid|myName|myQTH|myFD"
+        "|myState|myCounty|theirCall|rstSent)>",
+        QRegularExpression::CaseInsensitiveOption);
+
+    QList<MacroSegment> segments;
+    auto addPlain = [&segments](const QString& t) {
+        if (t.isEmpty()) return;
+        if (!segments.isEmpty() && segments.last().fieldId == 0)
+            segments.last().text += t;
+        else
+            segments.append({t, 0});
+    };
+
+    int pos = 0;
+    auto it = tagRe.globalMatch(text);
+    while (it.hasNext()) {
+        auto m = it.next();
+        addPlain(text.mid(pos, m.capturedStart() - pos));
+        pos = m.capturedEnd();
+
+        QString tagName = m.captured(1);
+        for (const Tag& t : tags) {
+            if (tagName.compare(t.name, Qt::CaseInsensitive) != 0) continue;
+            QString value = t.value.trimmed();
+            if (value.isEmpty()) break;   // unset field: expand to nothing
+            if (t.fieldId == 0) addPlain(value);
+            else                segments.append({value, t.fieldId});
+            break;
+        }
+    }
+    addPlain(text.mid(pos));
+
+    // Trim outer whitespace the way the old flat-string .trimmed() did.
+    if (!segments.isEmpty() && segments.first().fieldId == 0) {
+        segments.first().text =
+            segments.first().text.replace(QRegularExpression("^\\s+"), "");
+        if (segments.first().text.isEmpty()) segments.removeFirst();
+    }
+    if (!segments.isEmpty() && segments.last().fieldId == 0) {
+        segments.last().text =
+            segments.last().text.replace(QRegularExpression("\\s+$"), "");
+        if (segments.last().text.isEmpty()) segments.removeLast();
+    }
+    return segments;
 }

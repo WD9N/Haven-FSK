@@ -1,5 +1,6 @@
 #include "LogPanel.h"
 #include "../dsp/Constants.h"
+#include "../dsp/FieldMarkers.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -36,6 +37,44 @@ static QString fixPotaRef(const QString& raw) {
 // build clickable HTML with position info this caller doesn't need, and
 // each panel owning its own small parsing helper avoids a UI-panel-to-
 // UI-panel dependency for one regex.
+// QString-space scan of ADR-133 inline field markers. Same duplication
+// rationale as parseStructuredTags below: each panel owns its own small
+// parsing helper (RxDisplay's copy also tracks display positions this
+// caller doesn't need).
+struct ScannedMarkers {
+    QString display;                       // text with markers removed
+    QList<QPair<char, QString>> fields;    // (field id, value)
+};
+
+static ScannedMarkers scanFieldMarkers(const QString& text) {
+    ScannedMarkers out;
+    out.display.reserve(text.size());
+    const QChar START(HavenFSK::FIELD_START);
+    const QChar END(HavenFSK::FIELD_END);
+
+    int i = 0;
+    while (i < text.size()) {
+        QChar ch = text.at(i);
+        if (ch == END) { i++; continue; }
+        if (ch != START) { out.display += ch; i++; continue; }
+
+        if (i + 1 >= text.size()) break;          // dangling start marker
+        char id = text.at(i + 1).toLatin1();
+        i += 2;
+
+        int valStart = i;
+        while (i < text.size() && text.at(i) != END && text.at(i) != START)
+            i++;
+        QString value = text.mid(valStart, i - valStart);
+        if (i < text.size() && text.at(i) == END) i++;
+
+        if (!value.isEmpty() && HavenFSK::isKnownFieldId(id))
+            out.fields.append({id, value});
+        out.display += value;
+    }
+    return out;
+}
+
 static QList<QPair<QString, QString>> parseStructuredTags(const QString& text) {
     // RS gets its own fixed-2-character branch, not the generic
     // lazy-to-next-tag rule -- the report has no closing tag to bound it
@@ -261,6 +300,15 @@ void LogPanel::setupEntryStrip() {
     forceUpper(m_theirState);
     row2->addWidget(m_theirState);
 
+    m_countyLabel = new QLabel("County:");
+    row2->addWidget(m_countyLabel);
+    m_theirCounty = new QLineEdit;
+    m_theirCounty->setMaximumWidth(100);
+    m_theirCounty->setFont(mono);
+    m_theirCounty->setToolTip("Their county");
+    forceUpper(m_theirCounty);
+    row2->addWidget(m_theirCounty);
+
     row2->addWidget(new QLabel("Notes:"));
     m_notes = new QLineEdit;
     m_notes->setFont(mono);
@@ -338,6 +386,8 @@ void LogPanel::updateFieldVisibility() {
     m_theirQth->setVisible(showGeneral);
     m_stateLabel->setVisible(showGeneral);
     m_theirState->setVisible(showGeneral);
+    m_countyLabel->setVisible(showGeneral);
+    m_theirCounty->setVisible(showGeneral);
     m_fdLabel->setVisible(m_fdMode);
     m_fdExchange->setVisible(m_fdMode);
 }
@@ -372,6 +422,8 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
         m_theirParks->setText(existing);
     }
     else if (scheme == "sota")  m_theirSota->setText(value.toUpper());
+    else if (scheme == "state")  m_theirState->setText(value.toUpper());
+    else if (scheme == "county") m_theirCounty->setText(value.toUpper());
     else if (scheme == "grid")  m_theirGrid->setText(value.toUpper());
     else if (scheme == "rs")    m_rsReceived->setText(value);
     else if (scheme == "name")  m_theirName->setText(value);
@@ -382,53 +434,130 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
 void LogPanel::autoPopulateFromMessage(const QString& senderCallsign,
                                         const QString& text)
 {
-    QString sender  = senderCallsign.trimmed().toUpper();
+    // ADR-133 multi-party rule set. Inline markers are authoritative
+    // where present; the text-tag fallback below obeys the same gates.
+    ScannedMarkers mk = scanFieldMarkers(text);
+
+    QString sender    = senderCallsign.trimmed().toUpper();
+    QString recipient;                    // 'c' marker, if declared
+    for (const auto& f : mk.fields) {
+        if (f.first == HavenFSK::FieldId::Sender)
+            sender = f.second.trimmed().toUpper();
+        else if (f.first == HavenFSK::FieldId::Recipient)
+            recipient = f.second.trimmed().toUpper();
+    }
+
     QString current = m_callEntry->text().trimmed().toUpper();
+    QString myCall  = HavenFSK::loadStationInfo().callsign.trimmed().toUpper();
 
-    bool sameContact = !current.isEmpty() && sender == current;
-
-    QString myCall = HavenFSK::loadStationInfo().callsign.trimmed().toUpper();
+    // Addressed to me: the sender's 'c' declaration when present,
+    // otherwise my callsign appearing in the (marker-stripped) text.
     bool addressedToMe = false;
-    if (!myCall.isEmpty()) {
+    if (!recipient.isEmpty()) {
+        addressedToMe = !myCall.isEmpty() && recipient == myCall;
+    } else if (!myCall.isEmpty()) {
         QRegularExpression re("\\b" + QRegularExpression::escape(myCall) + "\\b");
-        addressedToMe = re.match(text.toUpper()).hasMatch();
+        addressedToMe = re.match(mk.display.toUpper()).hasMatch();
     }
 
-    if (!sameContact) {
-        // A different (or no) station than what's currently entered.
-        // Only take over the entry if this message actually addresses my
-        // own callsign -- an unrelated station's transmission (someone
-        // else's QSO, a general CQ) must never disturb an in-progress
-        // entry, or seed a blank one with traffic that isn't mine.
-        if (!addressedToMe) return;
-        if (!current.isEmpty()) onClear();  // stale/abandoned contact -- start fresh
-    }
+    // Rule 4: a non-empty entry holding a different callsign is never
+    // replaced automatically — even by a message addressed to me (an
+    // interloper calling me mid-QSO must not steal the entry). Only
+    // Log It, Clear, or a click switches contacts.
+    if (!current.isEmpty() && sender != current) return;
 
-    if (!sender.isEmpty())
+    if (current.isEmpty()) {
+        if (sender.isEmpty()) return;
+        // Rule 5: the station I logged minutes ago doesn't re-seed the
+        // entry (their late "TU 73" must not block the next caller).
+        auto it = m_recentlyLogged.constFind(sender);
+        if (it != m_recentlyLogged.constEnd() &&
+            it.value().secsTo(QDateTime::currentDateTimeUtc())
+                < RELOG_SUPPRESS_SECS)
+            return;
+        // Rule 3 seeding: a message for me, or an unaddressed broadcast
+        // (CQ/info — markers make its fields trustworthy). Unaddressed
+        // markerless traffic is someone else's QSO — never seeds.
+        if (!addressedToMe && !(recipient.isEmpty() && !mk.fields.isEmpty()))
+            return;
         m_callEntry->setText(sender);
+    } else if (!addressedToMe && !recipient.isEmpty()) {
+        // My current contact talking to someone else (activator working
+        // another hunter): their exchange is not mine — rule 2's wedge.
+        return;
+    }
 
-    for (const auto& tag : parseStructuredTags(text)) {
+    // ── Field routing ────────────────────────────────────────────────
+    // Fill only empty fields — a manual edit is never clobbered. Rule 2:
+    // pair-scoped RS lands only when the message is addressed to me.
+    auto fillIfEmpty = [](QLineEdit* target, const QString& value) {
+        if (target && target->text().trimmed().isEmpty())
+            target->setText(value.toUpper());
+    };
+
+    for (const auto& f : mk.fields) {
+        const QString& value = f.second;
+        switch (f.first) {
+            case HavenFSK::FieldId::Pota:
+                populateField("pota", value);  // merge-safe, never overwrites
+                break;
+            case HavenFSK::FieldId::Rs:
+                if (addressedToMe) fillIfEmpty(m_rsReceived, value);
+                break;
+            case HavenFSK::FieldId::Grid: fillIfEmpty(m_theirGrid, value); break;
+            case HavenFSK::FieldId::Sota: fillIfEmpty(m_theirSota, value); break;
+            case HavenFSK::FieldId::Name: fillIfEmpty(m_theirName, value); break;
+            case HavenFSK::FieldId::Qth:  fillIfEmpty(m_theirQth,  value); break;
+            case HavenFSK::FieldId::Fd:   fillIfEmpty(m_fdExchange, value); break;
+            case HavenFSK::FieldId::State:
+                fillIfEmpty(m_theirState, value); break;
+            case HavenFSK::FieldId::County:
+                fillIfEmpty(m_theirCounty, value); break;
+            default: break;   // d/c handled above
+        }
+    }
+
+    // Text-tag fallback (hand-typed exchanges, stations without
+    // markers) — same gates, scanning the marker-stripped text.
+    for (const auto& tag : parseStructuredTags(mk.display)) {
         const QString& scheme = tag.first;
         const QString& value  = tag.second;
 
         if (scheme == "pota") {
-            populateField("pota", value);  // already merge-safe, never overwrites
+            populateField("pota", value);
             continue;
         }
-
+        if (scheme == "rs") {
+            if (addressedToMe) fillIfEmpty(m_rsReceived, value);
+            continue;
+        }
         QLineEdit* target = nullptr;
         if      (scheme == "name") target = m_theirName;
         else if (scheme == "qth")  target = m_theirQth;
         else if (scheme == "grid") target = m_theirGrid;
-        else if (scheme == "rs")   target = m_rsReceived;
         else if (scheme == "sota") target = m_theirSota;
         else if (scheme == "fd")   target = m_fdExchange;
-
-        // Only fill fields the operator hasn't already typed into --
-        // auto-populate must never clobber a manual edit mid-QSO.
-        if (target && target->text().trimmed().isEmpty())
-            target->setText(value.toUpper());
+        fillIfEmpty(target, value);
     }
+
+    // Bare-shape fallback: real traffic says "CQ POTA DE N8SDR US-1234
+    // EM79RJ K" with no POTA:/GRID: prefix and no markers. Park refs
+    // and Maidenhead grids are distinctive shapes, and this point is
+    // only reached once the addressing gates above have passed —
+    // they're facts about the station already in (or seeding) the
+    // entry. Mirrors RxDisplay::renderMessage's bare-shape link passes.
+    QString dispUpper = mk.display.toUpper();
+    static QRegularExpression bareRefRe(
+        "\\b([A-Z0-9]{1,2}-[0-9]{4,5})\\b");
+    auto refIt = bareRefRe.globalMatch(dispUpper);
+    while (refIt.hasNext())
+        populateField("pota", refIt.next().captured(1));  // merge-safe
+
+    static QRegularExpression bareGridRe(
+        "\\b([A-R]{2}[0-9]{2}(?:[A-X]{2})?)\\b");
+    auto gridIt = bareGridRe.globalMatch(dispUpper);
+    if (gridIt.hasNext())
+        fillIfEmpty(m_theirGrid, gridIt.next().captured(1));
 }
 
 void LogPanel::loadContacts(const QList<QVariantMap>& contacts) {
@@ -572,6 +701,7 @@ void LogPanel::onLogIt() {
     fields["their_name"]      = m_theirName->text().trimmed();
     fields["their_qth"]       = m_theirQth->text().trimmed();
     fields["their_state"]     = m_theirState->text().trimmed().toUpper();
+    fields["their_county"]    = m_theirCounty->text().trimmed().toUpper();
     fields["their_fd"]        = m_fdExchange->text().trimmed().toUpper();
     fields["notes"]           = m_notes->text().trimmed();
     fields["frequency_hz"]    = QVariant::fromValue(hz);
@@ -612,6 +742,18 @@ void LogPanel::onLogIt() {
                                                 : timeText;
         addContactRow(fields);
         emit contactLogged(fields);
+
+        // ADR-133 rule 5: remember who was just logged so their late
+        // "TU 73" doesn't re-seed the entry cleared for the next caller.
+        QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+        m_recentlyLogged[call] = nowUtc;
+        for (auto it = m_recentlyLogged.begin();
+             it != m_recentlyLogged.end(); ) {
+            if (it.value().secsTo(nowUtc) > RELOG_SUPPRESS_SECS)
+                it = m_recentlyLogged.erase(it);
+            else
+                ++it;
+        }
     }
     onClear();
 }
@@ -627,6 +769,7 @@ void LogPanel::onClear() {
     m_theirName->clear();
     m_theirQth->clear();
     m_theirState->clear();
+    m_theirCounty->clear();
     m_fdExchange->clear();
     m_notes->clear();
     m_dateEntry->clear();
@@ -762,6 +905,7 @@ void LogPanel::onContactRowClicked(int row, int col) {
     m_theirName->setText(fields["their_name"].toString());
     m_theirQth->setText(fields["their_qth"].toString());
     m_theirState->setText(fields["their_state"].toString());
+    m_theirCounty->setText(fields["their_county"].toString());
     m_fdExchange->setText(fields["their_fd"].toString());
     m_notes->setText(fields["notes"].toString());
 }

@@ -1,4 +1,5 @@
 #include "RxDisplay.h"
+#include "../dsp/FieldMarkers.h"
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QFont>
@@ -6,6 +7,45 @@
 #include <QList>
 #include <tuple>
 #include <algorithm>
+
+// QString-space scan of ADR-133 inline field markers: returns the
+// display text (markers stripped, values kept) and each known field's
+// id/position/length within that display text. Mirrors the byte-level
+// FieldMarkers.h parser, but positions here must be QString (UTF-16)
+// offsets for the HTML splice below — the std::string version's byte
+// offsets would drift on any non-ASCII payload.
+struct MarkedSpan { char id; int pos; int len; QString value; };
+struct MarkedLine { QString display; QList<MarkedSpan> spans; };
+
+static MarkedLine scanMarkers(const QString& text) {
+    MarkedLine out;
+    out.display.reserve(text.size());
+    const QChar START(HavenFSK::FIELD_START);
+    const QChar END(HavenFSK::FIELD_END);
+
+    int i = 0;
+    while (i < text.size()) {
+        QChar ch = text.at(i);
+        if (ch == END) { i++; continue; }
+        if (ch != START) { out.display += ch; i++; continue; }
+
+        if (i + 1 >= text.size()) break;          // dangling start marker
+        char id = text.at(i + 1).toLatin1();
+        i += 2;
+
+        int valStart = i;
+        while (i < text.size() && text.at(i) != END && text.at(i) != START)
+            i++;
+        QString value = text.mid(valStart, i - valStart);
+        if (i < text.size() && text.at(i) == END) i++;
+
+        if (!value.isEmpty() && HavenFSK::isKnownFieldId(id))
+            out.spans.append({id, int(out.display.size()),
+                              int(value.size()), value});
+        out.display += value;
+    }
+    return out;
+}
 
 RxDisplay::RxDisplay(QWidget* parent)
     : QTextBrowser(parent)
@@ -40,6 +80,10 @@ void RxDisplay::appendStreamingText(const QString& text) {
     // it gets the same treatment.
     QString plain = text;
     plain.replace('\r', '\n');
+    // Field-marker bytes never belong in a character stream (PSK31);
+    // scrub them in case a noise burst decodes to one.
+    plain.remove(QChar(HavenFSK::FIELD_START));
+    plain.remove(QChar(HavenFSK::FIELD_END));
     c.insertText(plain);
     verticalScrollBar()->setValue(verticalScrollBar()->maximum());
 }
@@ -111,7 +155,10 @@ void RxDisplay::appendTxMessage(const QString& text,
     QString ts     = QDateTime::currentDateTimeUtc().toString("hh:mm:ss");
     QString caller = myCallsign.isEmpty() ? "TX" : myCallsign.toUpper();
 
-    QString displayText = text.toHtmlEscaped().replace('\n', "<br>");
+    // Echoed TX text carries the wire bytes — show it as the other
+    // station will see it, markers stripped.
+    QString displayText = scanMarkers(text).display
+                              .toHtmlEscaped().replace('\n', "<br>");
 
     QString html = QString(
         "<span style='color:gray'>[%1]</span> "
@@ -155,6 +202,41 @@ QString RxDisplay::makeLink(const QString& scheme,
 QString RxDisplay::renderMessage(const QString& text,
                                   const QString& senderCallsign) const
 {
+    // Inline field markers (ADR-133) are authoritative where present:
+    // the sender declared what each span is, so those spans become
+    // links directly. The legacy TAG: regex and the callsign-shaped-
+    // word pass still run afterward on the stripped text — hand-typed
+    // portions and messages from stations without markers keep
+    // working — skipping anything a marker already claimed.
+    const MarkedLine marked = scanMarkers(text);
+    const QString&   disp   = marked.display;
+
+    QList<std::tuple<int,int,QString>> replacements;
+
+    const QString senderUpperEarly = senderCallsign.toUpper();
+    for (const MarkedSpan& span : marked.spans) {
+        QString scheme;
+        switch (span.id) {
+            case HavenFSK::FieldId::Sender:
+            case HavenFSK::FieldId::Recipient: scheme = "callsign"; break;
+            case HavenFSK::FieldId::Rs:        scheme = "rs";       break;
+            case HavenFSK::FieldId::Grid:      scheme = "grid";     break;
+            case HavenFSK::FieldId::Pota:      scheme = "pota";     break;
+            case HavenFSK::FieldId::Sota:      scheme = "sota";     break;
+            case HavenFSK::FieldId::Name:      scheme = "name";     break;
+            case HavenFSK::FieldId::Qth:       scheme = "qth";      break;
+            case HavenFSK::FieldId::Fd:        scheme = "fd";       break;
+            case HavenFSK::FieldId::State:     scheme = "state";    break;
+            case HavenFSK::FieldId::County:    scheme = "county";   break;
+            default: continue;
+        }
+        QString link = makeLink(scheme, span.value, span.value);
+        if (span.id == HavenFSK::FieldId::Sender ||
+            span.value.toUpper() == senderUpperEarly)
+            link = "<b>" + link + "</b>";   // sender highlighted bold
+        replacements.append({span.pos, span.len, link});
+    }
+
     // Regex for structured field tags: TAG:value
     // Most values are "anything, lazily, up to the next tag or end of
     // string" — the lookahead assertion alone correctly bounds the match.
@@ -176,16 +258,24 @@ QString RxDisplay::renderMessage(const QString& text,
         "RS:|POTA:|SOTA:|FD:)|$)",
         QRegularExpression::CaseInsensitiveOption);
 
-    // Build list of tag replacements from the original text
-    QList<std::tuple<int,int,QString>> replacements;
+    auto overlapsExisting = [&replacements](int pos, int len) {
+        for (const auto& rep : replacements) {
+            int rPos = std::get<0>(rep);
+            int rLen = std::get<1>(rep);
+            if (pos < rPos + rLen && rPos < pos + len) return true;
+        }
+        return false;
+    };
 
-    auto tagIt = tagRe.globalMatch(text.toUpper());
+    auto tagIt = tagRe.globalMatch(disp.toUpper());
     while (tagIt.hasNext()) {
         auto match = tagIt.next();
         QString rsVal = match.captured("rsval");
         QString tag   = rsVal.isEmpty() ? match.captured("tag").toLower() : "rs";
         QString val   = rsVal.isEmpty() ? match.captured("val").trimmed() : rsVal;
         if (tag.isEmpty() || val.isEmpty()) continue;
+        if (overlapsExisting(match.capturedStart(), match.capturedLength()))
+            continue;
 
         QString linkHtml = QString(
             "<span style='color:gray'>%1:</span>%2")
@@ -193,6 +283,35 @@ QString RxDisplay::renderMessage(const QString& text,
         replacements.append({match.capturedStart(),
                              match.capturedLength(),
                              linkHtml});
+    }
+
+    // Bare-shape passes: POTA park refs (US-1234, legacy K-1234) and
+    // Maidenhead grids (EM79, EM79RJ) are distinctive enough to link on
+    // pattern alone — real CQs say "CQ POTA DE N8SDR US-1234 EM79RJ K"
+    // with no POTA:/GRID: prefix and no markers, and unclickable park
+    // refs there defeat click-to-populate exactly where hunters need it.
+    static QRegularExpression bareRefRe(
+        "\\b([A-Z0-9]{1,2}-[0-9]{4,5})\\b");
+    auto refIt = bareRefRe.globalMatch(disp.toUpper());
+    while (refIt.hasNext()) {
+        auto m = refIt.next();
+        int pos = m.capturedStart(1);
+        int len = m.capturedLength(1);
+        if (overlapsExisting(pos, len)) continue;
+        replacements.append({pos, len,
+            makeLink("pota", m.captured(1), disp.mid(pos, len))});
+    }
+
+    static QRegularExpression bareGridRe(
+        "\\b([A-R]{2}[0-9]{2}(?:[A-X]{2})?)\\b");
+    auto gridIt = bareGridRe.globalMatch(disp.toUpper());
+    while (gridIt.hasNext()) {
+        auto m = gridIt.next();
+        int pos = m.capturedStart(1);
+        int len = m.capturedLength(1);
+        if (overlapsExisting(pos, len)) continue;
+        replacements.append({pos, len,
+            makeLink("grid", m.captured(1), disp.mid(pos, len))});
     }
 
     // Callsign links are collected the same way — (position, length, html)
@@ -211,22 +330,16 @@ QString RxDisplay::renderMessage(const QString& text,
     // them as callsigns (mirrors DspPipeline::parseSenderCallsign).
     static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}[A-X]{2}$");
     const QString senderUpper = senderCallsign.toUpper();
-    auto wordIt = wordRe.globalMatch(text.toUpper());
+    auto wordIt = wordRe.globalMatch(disp.toUpper());
     while (wordIt.hasNext()) {
         auto m = wordIt.next();
         if (gridRe.match(m.captured(1)).hasMatch()) continue;
         int pos = m.capturedStart(1);
         int len = m.capturedLength(1);
-        bool overlaps = false;
-        for (const auto& rep : replacements) {
-            int rPos = std::get<0>(rep);
-            int rLen = std::get<1>(rep);
-            if (pos < rPos + rLen && rPos < pos + len) { overlaps = true; break; }
-        }
-        if (overlaps) continue;
+        if (overlapsExisting(pos, len)) continue;
 
         QString call = m.captured(1);
-        QString link = makeLink("callsign", call, text.mid(pos, len));
+        QString link = makeLink("callsign", call, disp.mid(pos, len));
         if (call == senderUpper)
             link = "<b>" + link + "</b>";   // sender highlighted bold
         replacements.append({pos, len, link});
@@ -246,11 +359,11 @@ QString RxDisplay::renderMessage(const QString& text,
     int cursor = 0;
     for (const auto& rep : replacements) {
         const auto& [pos, len, html] = rep;
-        processed += text.mid(cursor, pos - cursor).toHtmlEscaped();
+        processed += disp.mid(cursor, pos - cursor).toHtmlEscaped();
         processed += html;
         cursor = pos + len;
     }
-    processed += text.mid(cursor).toHtmlEscaped();
+    processed += disp.mid(cursor).toHtmlEscaped();
 
     return processed;
 }

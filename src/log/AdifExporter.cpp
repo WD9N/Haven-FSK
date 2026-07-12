@@ -86,6 +86,18 @@ QString AdifExporter::makeRecord(const QVariantMap& c,
     rec += field("NAME",             c["their_name"].toString());
     rec += field("QTH",              c["their_qth"].toString());
     rec += field("STATE",            c["their_state"].toString());
+    // ADIF CNTY is the secondary-subdivision enumeration, formatted
+    // "STATE,COUNTY" — only well-formed when the state is also known;
+    // otherwise keep the county in an app field (same dodge as
+    // APP_HAVEN_MY_COUNTY below) rather than emit a malformed CNTY.
+    QString theirCounty = c["their_county"].toString();
+    QString theirState  = c["their_state"].toString();
+    if (!theirCounty.isEmpty()) {
+        if (!theirState.isEmpty())
+            rec += field("CNTY", theirState + "," + theirCounty);
+        else
+            rec += field("APP_HAVEN_THEIR_COUNTY", theirCounty);
+    }
     rec += field("COMMENT",          c["notes"].toString());
     rec += field("MY_GRIDSQUARE",    c["my_grid"].toString());
     rec += field("MY_STATE",         c["my_state"].toString());

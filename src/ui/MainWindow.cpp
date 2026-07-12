@@ -22,6 +22,8 @@
 #include "../radio/HamlibClient.h"
 #include "../pipeline/DspPipeline.h"
 #include "../dsp/Constants.h"
+#include "../dsp/FieldMarkers.h"
+#include <QTextBlock>
 // TODO(Phase 5): BASE_FREQ usages below are MFSK-specific tuning-offset
 // math; should become mode-generic once IModem passband is UI-wired.
 #include "../dsp/MfskConstants.h"
@@ -725,21 +727,36 @@ void MainWindow::setupConnections() {
     connect(m_rxDisplay, &RxDisplay::elementClicked,
             this, &MainWindow::onElementClicked);
 
-    // MacroPanel → TX input
+    // MacroPanel → TX input. Data-tag segments are inserted with a
+    // char-format property carrying their field ID plus a faint tint
+    // (ADR-133); the property — not any character in the text — is what
+    // the send path serializes to inline field markers. The editor
+    // keeps spans consistent through edits because the tagging is
+    // formatting, so prose and data cannot diverge.
     connect(m_macroPanel, &MacroPanel::macroTriggered,
-            this, [this](const QString& text,
+            this, [this](const QList<MacroSegment>& segments,
                          bool clearFirst, bool autoTx) {
-                if (clearFirst) {
-                    m_txInput->setPlainText(text);
-                } else {
-                    QTextCursor cursor = m_txInput->textCursor();
-                    cursor.movePosition(QTextCursor::End);
-                    m_txInput->setTextCursor(cursor);
-                    m_txInput->insertPlainText(text);
-                }
+                if (clearFirst) m_txInput->clear();
+
                 QTextCursor cursor = m_txInput->textCursor();
                 cursor.movePosition(QTextCursor::End);
+
+                const QTextCharFormat plainFmt;
+                for (const MacroSegment& seg : segments) {
+                    if (seg.fieldId == 0) {
+                        cursor.insertText(seg.text, plainFmt);
+                    } else {
+                        QTextCharFormat f;
+                        f.setBackground(QColor(28, 62, 78));  // faint teal on #141414
+                        f.setProperty(QTextFormat::UserProperty,
+                                      int(seg.fieldId));
+                        cursor.insertText(seg.text, f);
+                    }
+                }
                 m_txInput->setTextCursor(cursor);
+                // Boundary reset: typing after the insert must not
+                // extend the last tagged span.
+                m_txInput->setCurrentCharFormat(plainFmt);
                 m_txInput->setFocus();
                 if (autoTx)
                     QTimer::singleShot(50, this, &MainWindow::onTransmit);
@@ -948,6 +965,55 @@ void MainWindow::onSettingsChanged() {
     startAudio();
 }
 
+// Serialize the TX editor's document to wire text (ADR-133). Spans
+// whose char format carries a field-ID property are wrapped in inline
+// field markers; consecutive fragments with the same ID merge into one
+// marked field (rich-text editing can split a value into fragments).
+// Marker emission is gated off for non-HAVEN modems — control
+// characters must never reach PSK31 varicode toward fldigi users.
+static QString serializeTxDocument(const QTextDocument* doc,
+                                   bool emitMarkers)
+{
+    QString out;
+    char pendingId = 0;
+    QString pendingValue;
+
+    auto flush = [&]() {
+        if (pendingId != 0 && !pendingValue.isEmpty()) {
+            out += QChar(HavenFSK::FIELD_START);
+            out += QChar(pendingId);
+            out += pendingValue;
+            out += QChar(HavenFSK::FIELD_END);
+        } else {
+            out += pendingValue;
+        }
+        pendingId = 0;
+        pendingValue.clear();
+    };
+
+    for (QTextBlock block = doc->begin(); block.isValid();
+         block = block.next()) {
+        if (block != doc->begin()) { flush(); out += '\n'; }
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            QTextFragment frag = it.fragment();
+            if (!frag.isValid()) continue;
+            QString t = frag.text();
+            // Defense against pasted control bytes masquerading as markers
+            t.remove(QChar(HavenFSK::FIELD_START));
+            t.remove(QChar(HavenFSK::FIELD_END));
+            char id = emitMarkers
+                ? char(frag.charFormat()
+                           .property(QTextFormat::UserProperty).toInt())
+                : 0;
+            if (id != pendingId) flush();
+            pendingId = id;
+            pendingValue += t;
+        }
+    }
+    flush();
+    return out.trimmed();
+}
+
 void MainWindow::onTransmit() {
     qDebug() << "=== TX START ===";
     qDebug() << "Audio transmitting:" << m_audio->isTransmitting();
@@ -964,8 +1030,10 @@ void MainWindow::onTransmit() {
         return;
     }
 
-    QString text = m_txInput->toPlainText().trimmed();
-    if (text.isEmpty()) return;
+    bool mfskActive = static_cast<HavenFSK::ModemMode>(
+        m_modeCombo->currentData().toInt()) == HavenFSK::ModemMode::Mfsk16;
+    QString text = serializeTxDocument(m_txInput->document(), mfskActive);
+    if (m_txInput->toPlainText().trimmed().isEmpty()) return;
 
     if (m_audio->isTransmitting()) {
         m_statusLabel->setText("TX in progress — please wait");

@@ -10,6 +10,7 @@
 #include <QStringList>
 #include <QVariant>
 #include <QDateTime>
+#include <QHash>
 #include <cstdint>
 #include "../radio/RadioSettings.h"
 
@@ -43,13 +44,17 @@ public:
     void refresh();
 
     // Called on every fully-decoded RX message to reduce manual field
-    // entry. Only fills fields the operator hasn't already typed into
-    // (never clobbers a manual edit mid-QSO). If the message is from a
-    // different station than what's currently entered, it's ignored
-    // unless the message text addresses this operator's own callsign
-    // directly, in which case the stale entry is cleared and repopulated
-    // fresh -- so an abandoned/failed contact never blocks logging the
-    // next one.
+    // entry. Population follows the ADR-133 multi-party rule set:
+    // inline field markers are authoritative where present (text tags
+    // are the fallback); pair-scoped fields (RS) require the message to
+    // be addressed to me; broadcast fields also fill from unaddressed
+    // (CQ/info) messages; a non-empty entry holding a different
+    // callsign is NEVER auto-replaced (only Log It / Clear / a click
+    // switches contacts — auto-takeover was the interloper hole); a
+    // station logged within the last ~10 min doesn't re-seed an empty
+    // entry (their late "TU 73" must not block the next caller). Filled
+    // fields are only ever empty ones — a manual edit is never
+    // clobbered.
     void autoPopulateFromMessage(const QString& senderCallsign,
                                   const QString& text);
 
@@ -109,6 +114,7 @@ private:
     QLineEdit*   m_theirName   {nullptr};
     QLineEdit*   m_theirQth    {nullptr};
     QLineEdit*   m_theirState  {nullptr};
+    QLineEdit*   m_theirCounty {nullptr};
     QLineEdit*   m_fdExchange  {nullptr};
     QLineEdit*   m_notes       {nullptr};
     // Frequency/date/time entry — blank means "auto": live dial frequency
@@ -126,7 +132,8 @@ private:
     QLabel* m_gridLabel  {nullptr};
     QLabel* m_nameLabel  {nullptr};
     QLabel* m_qthLabel   {nullptr};
-    QLabel* m_stateLabel {nullptr};
+    QLabel* m_stateLabel  {nullptr};
+    QLabel* m_countyLabel {nullptr};
     QLabel* m_fdLabel    {nullptr};
 
     // ── Recent contacts table ─────────────────────────────────────────────
@@ -134,6 +141,11 @@ private:
 
     bool     m_fdMode      {false};
     uint64_t m_frequency   {0};
+    // Callsign → UTC time it was last logged; consulted by
+    // autoPopulateFromMessage's recently-logged suppression (ADR-133
+    // rule 5) and pruned opportunistically on each Log It.
+    QHash<QString, QDateTime> m_recentlyLogged;
+    static constexpr int RELOG_SUPPRESS_SECS = 600;
     int      m_editingRow  {-1};
     // True once the operator (or edit mode) has put a value in m_freqEntry —
     // stops setFrequency()'s live radio updates from overwriting it.
