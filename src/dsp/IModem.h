@@ -12,6 +12,37 @@ namespace HavenFSK {
 
 enum class ModemMode { Mfsk16, Psk31 };
 
+// Static per-mode capability declarations (ADR-134 / ROADMAP Phase 2).
+// UI and logging adapt to these instead of special-casing mode names or
+// enum values — a new mode states what it can do and the platform
+// responds; no call site should ever need editing to add a mode.
+struct ModemCapabilities {
+    // Discrete, CRC-checked frames: RX presents one timestamped row per
+    // message with CRC/FEC badges, and per-message parsing (sender ID,
+    // auto-logging) applies. false = continuous character stream (text
+    // flows in place; only shape-heuristic links and manual "Log as"
+    // assignment apply).
+    bool framedMessages = false;
+
+    // Carries ADR-133 inline field markers: the TX editor serializes
+    // tagged spans into 0x1F/0x1E markers, and RX parses them for
+    // auto-logging. Must never be true for a mode whose character set
+    // cannot carry control bytes transparently (e.g. varicode).
+    bool inlineMarkers = false;
+
+    // A sender callsign can be attributed to each decoded message
+    // (marker-declared or heuristic). Requires framedMessages.
+    bool senderIdentification = false;
+};
+
+constexpr ModemCapabilities modemCapabilities(ModemMode mode) {
+    switch (mode) {
+        case ModemMode::Mfsk16: return {true,  true,  true };
+        case ModemMode::Psk31:  return {false, false, false};
+    }
+    return {};
+}
+
 // RX state, mode-agnostic. "Collecting" covers any in-progress decode
 // (MFSK: frame collection after preamble; PSK31: mid-word varicode stream).
 enum class ModemRxState { Idle, Collecting };
@@ -109,6 +140,7 @@ public:
     // ── Identification / UI passband hint ──────────────────────────────
     virtual ModemMode  mode()     const = 0;
     virtual std::string modeName() const = 0;
+    ModemCapabilities capabilities() const { return modemCapabilities(mode()); }
     virtual double passbandLowHz()  const = 0;
     virtual double passbandHighHz() const = 0;
 };

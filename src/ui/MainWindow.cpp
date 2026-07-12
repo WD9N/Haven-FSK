@@ -1030,9 +1030,14 @@ void MainWindow::onTransmit() {
         return;
     }
 
-    bool mfskActive = static_cast<HavenFSK::ModemMode>(
-        m_modeCombo->currentData().toInt()) == HavenFSK::ModemMode::Mfsk16;
-    QString text = serializeTxDocument(m_txInput->document(), mfskActive);
+    // Marker serialization is capability-gated, not mode-name-gated
+    // (ADR-134): only modes declaring inlineMarkers may carry 0x1F/0x1E
+    // field markers on the wire — control bytes must never leak into a
+    // varicode-style character stream (ADR-133 constraint).
+    bool markersActive = HavenFSK::modemCapabilities(
+        static_cast<HavenFSK::ModemMode>(m_modeCombo->currentData().toInt()))
+        .inlineMarkers;
+    QString text = serializeTxDocument(m_txInput->document(), markersActive);
     if (m_txInput->toPlainText().trimmed().isEmpty()) return;
 
     if (m_audio->isTransmitting()) {
