@@ -426,6 +426,7 @@ void LogPanel::populateField(const QString& scheme, const QString& value) {
     else if (scheme == "county") m_theirCounty->setText(value.toUpper());
     else if (scheme == "grid")  m_theirGrid->setText(value.toUpper());
     else if (scheme == "rs")    m_rsReceived->setText(value);
+    else if (scheme == "rss")   m_rsSent->setText(value);
     else if (scheme == "name")  m_theirName->setText(value);
     else if (scheme == "qth")   m_theirQth->setText(value);
     else if (scheme == "fd")    m_fdExchange->setText(value.toUpper());

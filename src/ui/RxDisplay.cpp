@@ -2,6 +2,8 @@
 #include "../dsp/FieldMarkers.h"
 #include "../util/CallsignPattern.h"
 #include <QRegularExpression>
+#include <QMenu>
+#include <QContextMenuEvent>
 #include <QScrollBar>
 #include <QFont>
 #include <QUrl>
@@ -178,6 +180,72 @@ void RxDisplay::appendTxMessage(const QString& text,
 
     if (m_messageCount < MAX_MESSAGES)
         m_messageCount++;
+}
+
+void RxDisplay::contextMenuEvent(QContextMenuEvent* event) {
+    QMenu* menu = createStandardContextMenu(event->pos());
+
+    // QTextCursor::selectedText() uses U+2029 as the paragraph separator.
+    QString sel = textCursor().selectedText()
+                      .replace(QChar(0x2029), ' ').trimmed();
+    if (!sel.isEmpty()) {
+        // Field list in default order; the shape-guessed field is
+        // promoted to a direct top-level action.
+        struct Field { const char* scheme; const char* label; };
+        static const Field fields[] = {
+            {"callsign", "Call"},  {"name", "Name"},   {"qth", "QTH"},
+            {"grid", "Grid"},      {"rs", "RS-R"},     {"rss", "RS-S"},
+            {"pota", "POTA"},      {"sota", "SOTA"},   {"state", "State"},
+            {"county", "County"},  {"fd", "FD Exch"},
+        };
+
+        // Shape guess (mirrors the bare-shape detectors elsewhere).
+        const QString up = sel.toUpper();
+        static QRegularExpression callRe(
+            "^" + QString::fromStdString(HavenFSK::callsignPattern()) + "$");
+        static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}(?:[A-X]{2})?$");
+        static QRegularExpression potaRe("^[A-Z0-9]{1,2}-[0-9]{4,5}$");
+        static QRegularExpression sotaRe(
+            "^[A-Z0-9]{1,3}/[A-Z]{2}-[0-9]{3}$");
+        static QRegularExpression rsRe("^[1-5][1-9][1-9]?$");
+        static QRegularExpression stateRe("^[A-Z]{2}$");
+        const char* guess = nullptr;
+        if      (gridRe.match(up).hasMatch())  guess = "grid";
+        else if (potaRe.match(up).hasMatch())  guess = "pota";
+        else if (sotaRe.match(up).hasMatch())  guess = "sota";
+        else if (rsRe.match(up).hasMatch())    guess = "rs";
+        else if (callRe.match(up).hasMatch())  guess = "callsign";
+        else if (stateRe.match(up).hasMatch()) guess = "state";
+
+        QString shown = sel.length() > 24 ? sel.left(21) + "..." : sel;
+        auto makeLogAction = [this, sel](QObject* parent, const QString& text,
+                                         const QString& scheme) {
+            QAction* a = new QAction(text, parent);
+            connect(a, &QAction::triggered, this, [this, scheme, sel] {
+                emit elementClicked(scheme, sel);
+            });
+            return a;
+        };
+
+        QAction* first = menu->actions().isEmpty()
+                             ? nullptr : menu->actions().first();
+        // Direct action for the shape-guessed field, then a submenu with
+        // the full field list for everything else.
+        QMenu* sub = new QMenu(QString("Log \"%1\" as").arg(shown), menu);
+        for (const Field& f : fields) {
+            if (guess && QString(f.scheme) == guess)
+                menu->insertAction(first, makeLogAction(menu,
+                    QString("Log \"%1\" as %2").arg(shown, f.label),
+                    f.scheme));
+            else
+                sub->addAction(makeLogAction(sub, f.label, f.scheme));
+        }
+        menu->insertMenu(first, sub);
+        menu->insertSeparator(first);
+    }
+
+    menu->exec(event->globalPos());
+    delete menu;
 }
 
 void RxDisplay::onAnchorClicked(const QUrl& url) {

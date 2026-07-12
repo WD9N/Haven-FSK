@@ -43,6 +43,14 @@ signals:
     // scheme: "callsign", "pota", "sota", "grid", "rs", "name", "qth", "fd"
     void elementClicked(const QString& scheme, const QString& value);
 
+protected:
+    // Tier-3 manual logging (ROADMAP Phase 2 / ADR-134): selecting any
+    // RX text and right-clicking offers "Log as <field>" entries that
+    // emit elementClicked() — the same path as clicking a detected
+    // link. Mode-universal (works on streaming PSK31 text that has no
+    // markers) and the correction mechanism for wrong auto-fills.
+    void contextMenuEvent(QContextMenuEvent* event) override;
+
 private slots:
     void onAnchorClicked(const QUrl& url);
 
