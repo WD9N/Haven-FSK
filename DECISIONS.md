@@ -3876,3 +3876,73 @@ facts with the same trust model as voice/CW/every amateur digital mode
 - `DspPipeline::parseSenderCallsign` prefers the `d` marker and falls
   back to the existing `DE` heuristic, retiring the
   grid-square-mistaken-for-callsign class of bug at its root.
+
+## ADR-134 — Identity split: HAVEN-FSK becomes a public protocol; the app becomes an activity-focused platform
+
+**Status:** Decided
+**Date:** July 2026
+
+**Decision (WD9N, 2026-07-12):** the protocol and the application get
+separate identities and separate lifecycles.
+
+- **HAVEN-FSK** is the protocol: a published, versioned wire format
+  that any software (fldigi and others) is invited to implement. The
+  name stays with the protocol.
+- **The application** (renamed at 1.0 — see ADR below on sequencing)
+  becomes a **POTA/SOTA/Field Day-focused digital operating and
+  logging platform**, in which HAVEN-FSK is the native mode among
+  several. Its differentiator is the niche no existing software owns:
+  activity loggers (HAMRS, POLO) have no radio modes; mode suites
+  (fldigi, WSJT-X) have generic afterthought logging. This app is
+  field-activity operating and activity-aware logging in one window.
+
+**Consequences, each binding on future work:**
+
+1. **The spec-scope decision is reopened by this new information.**
+   `HAVEN-FSK_Specification.md` was deliberately scoped to FCC
+   §97.309 technical-characteristics disclosure, not an implementer's
+   guide. Third-party implementation requires implementer grade: tone
+   map and Gray coding, preamble sequence and timing, frame/header
+   layout, CRC parameters, the LDPC(192,96) parity matrix as a
+   machine-readable appendix, and the ADR-133 marker syntax. Markers
+   travel on the air, so their *format* is protocol; what a receiving
+   implementation does with them (auto-logging or nothing) is that
+   implementation's business, explicitly not ours.
+2. **Protocol version and app version formally decouple.** Protocol
+   v1.0 freezes when the implementer spec + golden test vectors are
+   published and outside on-air validation passes; the app stays 0.x
+   until its own UX stabilizes. Wire-format-changing wishlist items
+   (adaptive FEC rate, narrow weak-signal variant) are explicitly
+   protocol v2 material, deferred in the spec rather than left
+   ambiguous. RX-side improvements (PreambleSync sensitivity) never
+   block the freeze — they don't touch the wire.
+3. **Mode inclusion gets a criterion instead of a history:** a mode
+   earns a place by serving field-activity operating. Under this
+   criterion PSK31 is a kept, first-class mode #2 (its loopback
+   self-test is now justified work, not scaffolding polish); Olivia is
+   a candidate; JS8 would mean implementing the mode in-platform, not
+   bridging to the JS8Call application.
+4. **Multi-mode logging follows a three-tier capture model:**
+   (1) sender-declared ADR-133 markers — HAVEN-FSK only, gold
+   standard; (2) mode-agnostic shape heuristics (callsign/grid/park/
+   RST recognition — already mode-independent in RxDisplay);
+   (3) manual select → right-click → assign-to-log-field context menu
+   (fldigi-proven UX). All modes get tiers 2+3; tier 3 doubles as the
+   correction mechanism inside HAVEN-FSK. Streaming character modes
+   (PSK31, Olivia) have no frame/message boundary, so tier 3 — where
+   the operator is the segmenter — is built *before* any
+   streaming-mode heuristics.
+5. **IModem grows a capability model** (framed vs streaming, sender
+   identification, declared-log-data support) so UI and logging adapt
+   to declared capabilities instead of special-casing mode names.
+6. **Rename executes at 1.0, not before** (unchanged from the earlier
+   1.0 framing). Until then the repo, binary, and docs keep their
+   names; only DECISIONS.md and ROADMAP.md speak of the split.
+
+**Sequencing rationale** (full plan in `ROADMAP.md`): the protocol
+freeze leads because third parties cannot start before a spec and
+test vectors exist and that work is nearly code-free; the capability
+model and tier-3 logging precede any new mode because adding Olivia
+first would create a third special case to refactor later; activity
+UX work remains gated on on-air feedback from outside operators, per
+the standing UI hold.
