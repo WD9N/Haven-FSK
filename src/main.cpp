@@ -158,6 +158,7 @@ int main(int argc, char* argv[]) {
     if (!HavenFSK::runFecSelfTest())            return 1;
     if (!HavenFSK::runFrameSelfTest())          return 1;
     if (!HavenFSK::runMfskLoopbackSelfTest())   return 1;
+    if (!HavenFSK::runPsk31SelfTest())          return 1;
     if (!HavenFSK::runAudioSelfTest())          return 1;
 #endif
 

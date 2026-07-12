@@ -73,10 +73,24 @@ std::vector<ModemRxEvent> Psk31Modem::processAudioChunk(
         m_hadSignal = false;
         return events;
     }
+    // DCD rising edge: the chunk where the signal begins passes the RMS
+    // gate with only a sliver of signal in it, so without this the
+    // leading silence of that chunk is fed through the Costas loop and
+    // timing recovery. Cold-start state built on zeros costs real
+    // preamble symbols to undo — enough to lose the first character
+    // (caught by self-test 3, the chunked loopback). Skip sub-threshold
+    // samples so the demodulator's first input is actual signal.
+    size_t begin = 0;
+    if (!m_hadSignal) {
+        const float gate = 3.0f * DCD_RMS_THRESHOLD;
+        while (begin < samples.size()
+               && std::fabs(samples[begin]) < gate)
+            ++begin;
+    }
     m_hadSignal = true;
 
-    for (float sample : samples) {
-        auto symResult = m_demodulator.processSample(sample);
+    for (size_t i = begin; i < samples.size(); ++i) {
+        auto symResult = m_demodulator.processSample(samples[i]);
         if (!symResult.bitReady) continue;
 
         m_qualitySum += symResult.lockQuality;
