@@ -38,18 +38,19 @@ nearly code-free.
 
 Before any new mode is added.
 
-- [ ] IModem capability model: framed vs streaming, sender
-      identification, declared-log-data support. UI/logging read
-      capabilities, never mode names.
-- [ ] Tier-3 manual logging: select RX text → right-click → "Log as
-      Call / Name / QTH / Grid / RS-R / POTA / SOTA / State / County"
-      context menu; shape-guessed field floated to top. Mode-universal
-      and the correction mechanism for HAVEN auto-fills.
-- [ ] Streaming RX path: how a character-stream mode renders, and when
-      shape-detection links run (line break / idle gap). PSK31 is the
-      test case.
-- [ ] PSK31 hardening: loopback self-test (mirroring
-      MfskLoopbackSelfTest); the outstanding fldigi interop re-test.
+- [x] IModem capability model (commit 41324f0): ModemCapabilities
+      (framedMessages, inlineMarkers, senderIdentification) declared
+      per mode; TX marker serialization capability-gated.
+- [x] Tier-3 manual logging (commit b158503): select RX text →
+      right-click → "Log as …" context menu, shape-guessed field
+      promoted to a direct action; rss scheme added for RS-S.
+- [ ] Streaming RX path: basic in-place streaming display exists
+      (RxDisplay::appendStreamingText); still open: when shape-
+      detection links run on streaming text (line break / idle gap).
+- [x] PSK31 self-test (commit b69ae49): chunked modem-level loopback
+      wired into Debug runs; immediately caught and fixed a real
+      first-character loss at DCD rising edge. Still open: the fldigi
+      on-air interop re-test (needs the radio, carried from ce49557).
 
 ## Phase 3 — Activity-first UX
 
