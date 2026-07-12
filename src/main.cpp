@@ -78,6 +78,19 @@ int main(int argc, char* argv[]) {
             return HavenFSK::runSyncThresholdStudy(trials > 0 ? trials : 10)
                        ? 0 : 1;
         }
+        // Headless DSP self-test suite (CI entry point). Pure std:: — runs
+        // before ANY Qt object exists, so no GUI/platform plugin is
+        // involved and a failure exits with a code instead of (on Windows)
+        // blocking on a modal crash/error dialog forever. Audio self-test
+        // is excluded deliberately: it needs Qt audio + a device, neither
+        // present on a CI runner. See .github/workflows/ci.yml.
+        if (std::strcmp(argv[i], "--self-test") == 0) {
+            bool ok = HavenFSK::runFecSelfTest()
+                   && HavenFSK::runFrameSelfTest()
+                   && HavenFSK::runMfskLoopbackSelfTest()
+                   && HavenFSK::runPsk31SelfTest();
+            return ok ? 0 : 1;
+        }
     }
 
     // Select best audio backend per platform BEFORE QApplication.
@@ -153,21 +166,6 @@ int main(int argc, char* argv[]) {
     QApplication::setOrganizationDomain("github.com/WD9N");
     QApplication::setApplicationName("HAVEN-FSK");
     QApplication::setApplicationVersion(HavenFSK::APP_VERSION);
-
-    // --self-test: run the DSP suite headlessly and exit — works in any
-    // build config (CI runs Release), no GUI, no audio devices needed.
-    // The audio self-test is deliberately excluded: CI runners have no
-    // audio hardware, and its device-enumeration check is meaningless
-    // there. Debug builds still run the full suite (audio included)
-    // before showing the GUI, as always.
-    const bool selfTestOnly = app.arguments().contains("--self-test");
-    if (selfTestOnly) {
-        bool ok = HavenFSK::runFecSelfTest()
-               && HavenFSK::runFrameSelfTest()
-               && HavenFSK::runMfskLoopbackSelfTest()
-               && HavenFSK::runPsk31SelfTest();
-        return ok ? 0 : 1;
-    }
 
 #ifdef QT_DEBUG
     if (!HavenFSK::runFecSelfTest())            return 1;
