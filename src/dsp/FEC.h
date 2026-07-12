@@ -71,6 +71,14 @@ public:
         return m_H;
     }
 
+    // Encoder column permutation, for spec-artifact generation (tools/
+    // spec_artifacts): message bit k occupies codeword position
+    // systematicColumnOrder()[k]; entries [LDPC_K..LDPC_N) are the parity
+    // positions. This mapping is wire format — see spec §5.3.
+    const std::vector<int>& systematicColumnOrder() const {
+        return m_colPerm;
+    }
+
 private:
     // Parity check matrix [LDPC_M][LDPC_N] = [96][192]
     std::vector<std::vector<uint8_t>> m_H;

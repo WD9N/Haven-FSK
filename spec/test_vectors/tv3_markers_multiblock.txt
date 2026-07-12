@@ -1,0 +1,40 @@
+HAVEN-FSK protocol v2 test vector: tv3_markers_multiblock
+Inline field markers (spec section 6.1): 0x1F <id> value 0x1E spans inside the visible text; three LDPC blocks.
+Generated from the reference implementation (tools/spec_artifacts).
+All byte values hex, MSB-first bit order within bytes.
+
+TEXT (\xNN = raw byte)     : \x1FcN8SDR\x1E DE \x1FdWD9N\x1E UR \x1Fr52\x1E INTO \x1FpUS-1017\x1E K
+PAYLOAD (text + 1 space)   : 1F634E385344521E204445201F645744394E1E205552201F7235321E20494E544F201F7055532D313031371E204B20
+PAYLOAD LENGTH             : 47 bytes
+NBLOCKS                    : 4
+HEADER (one copy, sent 3x) : 2104
+CRC-16/CCITT-FALSE         : 4289 (wire bytes 4289, big-endian)
+CODEWORD BLOCK 0  (pre-interleave, 192 bits): 43FC083B49ECDE0CDC33B1583F634E385344521E20444520
+CODEWORD BLOCK 1  (pre-interleave, 192 bits): CEFFA96AD69BF6D69F92F5C62F645744394E1E205552201F
+CODEWORD BLOCK 2  (pre-interleave, 192 bits): EFEC28D5441975645EBD3E5BF235321E20494E544F201F70
+CODEWORD BLOCK 3  (pre-interleave, 192 bits): 330F26FC329B73882D3879A375532D313031371E204B2000
+INTERLEAVED PAYLOAD BYTES  : 6E3166FBEEECFF554070E11437DBD3CA4E158658D887F857CF7F8ED356249E40CA1EFF6560BF32CAC5FF362D5E1AA47323FBCDED0DE3069B0C369DE5049BA621087D408C0E116C430A1D67F1024B9B90069426260D24185108522A2A02A64444
+
+TONE SEQUENCE (224 symbols: 16 preamble [raw, not Gray-coded]
++ 12 header + 4 CRC + 192 payload; all non-preamble tones are
+Gray-coded nibbles, high nibble of each byte first):
+0 15 0 15 7 8 7 8 0 15 0 15 7 8 7 8
+3 1 0 6 3 1 0 6 3 1 0 6 6 3 12 13
+5 9 2 1 5 5 8 14 9 9 9 10 8 8 7 7
+6 0 4 0 9 1 1 6 2 4 11 14 11 2 10 15
+6 9 1 7 12 5 7 12 11 12 12 4 8 12 7 4
+10 8 4 8 12 9 11 2 7 5 3 6 13 9 6 0
+10 15 1 9 8 8 5 7 5 0 14 8 2 3 10 15
+10 7 8 8 2 5 3 11 7 9 1 15 15 6 4 2
+3 2 8 14 10 11 9 11 0 11 9 2 0 5 13 14
+0 10 2 5 13 11 9 7 0 6 13 14 15 5 3 1
+0 12 4 11 6 0 12 10 0 9 1 1 5 10 6 2
+0 15 1 11 5 4 8 1 0 3 6 14 13 14 13 0
+0 5 13 6 3 5 3 5 0 11 3 6 1 12 7 1
+0 12 7 3 3 15 3 15 0 3 15 5 6 6 6 6
+
+REFERENCE AUDIO: tv3_markers_multiblock.wav — 48000 Hz mono 16-bit PCM.
+Phase starts at 0 and is continuous across all symbol
+boundaries (CPMFSK); peak-normalized; raised-cosine
+amplitude ramps (~3.2 ms, 153 samples) at the very start
+and end of the whole transmission only.

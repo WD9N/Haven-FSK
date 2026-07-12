@@ -15,18 +15,21 @@ work that builds on them.
 Leads because third-party adoption has lead time and this work is
 nearly code-free.
 
-- [ ] Expand `HAVEN-FSK_Specification.md` to implementer grade: tone
-      map + Gray coding, preamble sequence and timing, frame/header
-      layout, CRC parameters, ADR-133 marker syntax.
-- [ ] Publish the LDPC(192,96) parity matrix as a machine-readable
-      appendix file (not prose).
-- [ ] Golden test vectors generated from this codebase: known payload
-      → symbol sequence → reference audio, plus marker-parsing cases.
-      Doubles as our own regression fixture.
-- [ ] Spec explicitly defers wire-format-changing wishlist items
-      (adaptive FEC rate, narrow weak-signal variant) to protocol v2;
-      reserves an appendix stub for HAVEN-E (payload convention, no
-      wire change — ADR-132).
+- [x] Expand `HAVEN-FSK_Specification.md` to implementer grade (rev. 5):
+      preamble-not-Gray-coded, exact CRC input, MSB-first bit
+      conventions, permuted-systematic codeword bit order,
+      interleaved-bits-to-symbols packing, reference TX envelope/phase.
+- [x] Publish the LDPC(192,96) parity matrix machine-readably:
+      `spec/ldpc_h_192_96.alist` + `spec/ldpc_generator_192_96.txt`
+      (generator mapping — H alone cannot convey the bit placement).
+- [x] Golden test vectors generated from this codebase
+      (`tools/spec_artifacts`, round-trip-verified through the real
+      demodulator): `spec/test_vectors/tv1..tv3` .txt + .wav, covering
+      single-block, interleaved multi-block, and inline markers.
+- [x] Spec §6.2 explicitly defers wire-format-changing wishlist items
+      (adaptive FEC rate, narrow weak-signal variant) to a future
+      VERSION; HAVEN-E noted as a payload convention needing no wire
+      change (ADR-132).
 - [ ] Freeze gate: on-air validation with outside testers.
       (PreambleSync sensitivity work is RX-side only and does NOT
       block the freeze.)

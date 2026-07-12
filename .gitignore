@@ -1,5 +1,7 @@
 # Test/scratch WAV files
 *.wav
+# …except the published spec reference audio (Appendix A artifacts)
+!spec/test_vectors/*.wav
 
 # Miscellaneous archives
 *.zip

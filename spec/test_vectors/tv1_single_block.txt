@@ -1,0 +1,28 @@
+HAVEN-FSK protocol v2 test vector: tv1_single_block
+Minimal case: payload fits one LDPC block; interleaver is a no-op.
+Generated from the reference implementation (tools/spec_artifacts).
+All byte values hex, MSB-first bit order within bytes.
+
+TEXT (\xNN = raw byte)     : HELLO
+PAYLOAD (text + 1 space)   : 48454C4C4F20
+PAYLOAD LENGTH             : 6 bytes
+NBLOCKS                    : 1
+HEADER (one copy, sent 3x) : 2101
+CRC-16/CCITT-FALSE         : 907B (wire bytes 907B, big-endian)
+CODEWORD BLOCK 0  (pre-interleave, 192 bits): F8DAF30E01D9BADA034E4A6D18454C4C4F20000000000000
+INTERLEAVED PAYLOAD BYTES  : F8DAF30E01D9BADA034E4A6D18454C4C4F20000000000000
+
+TONE SEQUENCE (80 symbols: 16 preamble [raw, not Gray-coded]
++ 12 header + 4 CRC + 48 payload; all non-preamble tones are
+Gray-coded nibbles, high nibble of each byte first):
+0 15 0 15 7 8 7 8 0 15 0 15 7 8 7 8
+3 1 0 1 3 1 0 1 3 1 0 1 13 0 4 14
+8 12 11 15 8 2 0 9 0 1 11 13 14 15 11 15
+0 2 6 9 6 15 5 11 1 12 6 7 6 10 6 10
+6 8 3 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+REFERENCE AUDIO: tv1_single_block.wav — 48000 Hz mono 16-bit PCM.
+Phase starts at 0 and is continuous across all symbol
+boundaries (CPMFSK); peak-normalized; raised-cosine
+amplitude ramps (~3.2 ms, 153 samples) at the very start
+and end of the whole transmission only.
