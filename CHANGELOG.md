@@ -2,7 +2,45 @@
 
 ---
 
-## v0.5.0-beta — July 2026 *(current)*
+## v0.5.1-beta — July 2026 *(current)*
+
+**Auto-logging — inline field markers (ADR-133, spec §6.1)**
+- Macro data tags (`<myCall>` `<theirCall>` `<rstSent>` `<myGrid>`
+  `<myParks>` `<mySOTA>` `<myName>` `<myQTH>` `<myFD>` `<myState>`
+  `<myCounty>`) now wrap their visible values in invisible field
+  markers on the air: the receiving station's log entry fills itself
+  from sender-declared data instead of parsing prose by pattern. The
+  message reads exactly the same on both screens; airtime cost is
+  0–1.5 s per over; no wire-format change (payload convention,
+  protocol stays v2, disclosed in spec §6.1).
+- Values inserted by macro tags show a faint tint in the TX input.
+  Editing inside a tinted span edits the transmitted data with it —
+  prose and log data cannot disagree.
+- Received tagged values are clickable, including state and county.
+- Multi-party population rules (worked from activator, hunter, and
+  interloper perspectives — ADR-133): signal reports only land when
+  the message is addressed to you; broadcast facts (grid, parks,
+  summit, name, QTH, FD, state, county) fill only empty fields; a
+  different station can never auto-replace an in-progress entry (the
+  old "steals the entry" takeover is gone — only Log It, Clear, or a
+  click switches contacts); a station logged in the last 10 minutes
+  doesn't re-seed the cleared entry with its parting "TU 73".
+- Sender callsign is taken from the sender's own marker declaration
+  when present (DE-scan fallback retained for plain-text stations).
+- Bare park references (US-1234) and grid squares in plain untagged
+  text are now clickable too — CQs from stations without markers
+  still click-populate.
+- New County log-entry field: captured, stored (automatic database
+  migration), editable, and exported to ADIF (proper `CNTY`
+  STATE,COUNTY form when the state is known).
+- Field Day: `<myFD>` confirmed correct as the single combined
+  exchange — ADIF and Cabrillo exports split class/section
+  themselves; no separate tags needed.
+- PSK31 is unaffected: markers are never emitted outside HAVEN MFSK.
+
+---
+
+## v0.5.0-beta — July 2026
 
 **Receiver — weak signal & static crashes**
 - Adaptive preamble sync: detection threshold rests at 0.35 (was fixed
