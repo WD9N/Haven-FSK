@@ -32,6 +32,7 @@
 #include <QGroupBox>
 #include <QMenuBar>
 #include <QMenu>
+#include <QActionGroup>
 #include <QMessageBox>
 #include <QDateTime>
 #include <QTimer>
@@ -174,42 +175,33 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::setupMenu() {
-    // File menu
+    // Flat menu bar (operator request): the frequently-used entries are
+    // top-level direct actions, no click-through. File keeps only Quit.
+    // (The old View Log item — a contact-count message box — is gone;
+    // the Log dock shows the real thing.)
     QMenu* fileMenu  = menuBar()->addMenu("&File");
-    m_settingsAction = new QAction("&Settings...", this);
-    m_settingsAction->setShortcut(Qt::CTRL | Qt::Key_Comma);
-    fileMenu->addAction(m_settingsAction);
-    m_exportAction = new QAction("&Export Log...", this);
-    m_exportAction->setShortcut(Qt::CTRL | Qt::Key_E);
-    fileMenu->addAction(m_exportAction);
-
-    // Fix 12E: View Log menu item
-    auto* viewLogAction = new QAction("&View Log...", this);
-    viewLogAction->setShortcut(Qt::CTRL | Qt::Key_L);
-    connect(viewLogAction, &QAction::triggered, this, [this]() {
-        if (m_logManager && m_logManager->isOpen()) {
-            QString today = QDateTime::currentDateTimeUtc()
-                                .toString("yyyyMMdd");
-            auto contacts = m_logManager->contactsForDate(today);
-            QMessageBox::information(this, "Log",
-                QString("%1 contacts logged today (UTC).\n"
-                        "Use File → Export Log to export.")
-                .arg(contacts.size()));
-        }
-    });
-    fileMenu->addAction(viewLogAction);
-
-    fileMenu->addSeparator();
     auto* quitAction = new QAction("&Quit", this);
     quitAction->setShortcut(Qt::CTRL | Qt::Key_Q);
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
     fileMenu->addAction(quitAction);
+
+    // Station Info / Audio — the two Settings tabs, promoted to direct
+    // top-level actions that open the Settings dialog on the right tab.
+    m_settingsAction = new QAction("Station Info", this);
+    m_settingsAction->setShortcut(Qt::CTRL | Qt::Key_Comma);
+    menuBar()->addAction(m_settingsAction);
+    m_audioAction = new QAction("Audio", this);
+    menuBar()->addAction(m_audioAction);
 
     // Radio — single click opens config dialog directly (RADIO_FIX)
     auto* radioAction = new QAction("Radio", this);
     menuBar()->addAction(radioAction);
     connect(radioAction, &QAction::triggered,
             this, &MainWindow::onOpenRadioConfig);
+
+    // Mode — populated in setupConnections() once the mode combo
+    // exists (setupMenu runs first); stays in sync with it both ways.
+    m_modeMenu = menuBar()->addMenu("&Mode");
 
     // Operating menu
     QMenu* opMenu  = menuBar()->addMenu("&Operating");
@@ -238,6 +230,11 @@ void MainWindow::setupMenu() {
     opMenu->addAction(m_recordRxAction);
     connect(m_recordRxAction, &QAction::toggled,
             this, &MainWindow::onRecordRxToggled);
+
+    // Export Log — top-level direct action
+    m_exportAction = new QAction("Export Log", this);
+    m_exportAction->setShortcut(Qt::CTRL | Qt::Key_E);
+    menuBar()->addAction(m_exportAction);
 
     // Help menu
     QMenu* helpMenu   = menuBar()->addMenu("&Help");
@@ -512,11 +509,34 @@ void MainWindow::setupUi() {
 }
 
 void MainWindow::setupConnections() {
-    // Settings and export
+    // Settings (Station Info = tab 0, Audio = tab 1) and export
     connect(m_settingsAction, &QAction::triggered,
-            this, &MainWindow::onOpenSettings);
+            this, [this] { onOpenSettings(0); });
+    connect(m_audioAction, &QAction::triggered,
+            this, [this] { onOpenSettings(1); });
     connect(m_exportAction, &QAction::triggered,
             this, &MainWindow::onExport);
+
+    // Mode menu ↔ mode combo, kept in sync both directions. The menu is
+    // built from the combo's entries so adding a mode is one place.
+    {
+        auto* group = new QActionGroup(this);
+        group->setExclusive(true);
+        for (int i = 0; i < m_modeCombo->count(); ++i) {
+            QAction* a = m_modeMenu->addAction(m_modeCombo->itemText(i));
+            a->setCheckable(true);
+            a->setChecked(i == m_modeCombo->currentIndex());
+            group->addAction(a);
+            connect(a, &QAction::triggered, this, [this, i] {
+                m_modeCombo->setCurrentIndex(i);
+            });
+        }
+        connect(m_modeCombo, &QComboBox::currentIndexChanged,
+                this, [this](int idx) {
+            auto acts = m_modeMenu->actions();
+            if (idx >= 0 && idx < acts.size()) acts[idx]->setChecked(true);
+        });
+    }
 
     // TX
     connect(m_txButton, &QPushButton::clicked,
@@ -937,8 +957,9 @@ void MainWindow::stopRadio() {
 
 // ── Slots ─────────────────────────────────────────────────────────────────
 
-void MainWindow::onOpenSettings() {
+void MainWindow::onOpenSettings(int tab) {
     SettingsDialog dlg(this);
+    dlg.setCurrentTab(tab);
     connect(&dlg, &SettingsDialog::settingsChanged,
             this, &MainWindow::onSettingsChanged);
     dlg.exec();

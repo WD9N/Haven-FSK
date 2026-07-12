@@ -57,7 +57,7 @@ private slots:
     void onAudioError(const QString& message);
     void onRxLevelChanged(float level);
     void onSettingsChanged();
-    void onOpenSettings();
+    void onOpenSettings(int tab);
     void onRadioConnected();
     void onRadioDisconnected();
     void onRadioConnectFailed(const QString& reason);
@@ -130,8 +130,10 @@ private:
     QString            m_currentModeName {"Haven MFSK"};
 
     // ── Menu actions ──────────────────────────────────────────────────────
-    QAction* m_settingsAction {nullptr};
+    QAction* m_settingsAction {nullptr};  // "Station Info" (Settings tab 0)
+    QAction* m_audioAction    {nullptr};  // "Audio" (Settings tab 1)
     QAction* m_exportAction   {nullptr};
+    QMenu*   m_modeMenu       {nullptr};  // synced with m_modeCombo
     QAction* m_fdModeAction   {nullptr};
     QAction* m_recordRxAction {nullptr};
 

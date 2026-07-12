@@ -17,6 +17,9 @@ class SettingsDialog : public QDialog
 public:
     explicit SettingsDialog(QWidget* parent = nullptr);
 
+    // 0 = Station Info, 1 = Audio — the menu bar's direct entries.
+    void setCurrentTab(int idx) { m_tabs->setCurrentIndex(idx); }
+
 signals:
     void settingsChanged();
 
