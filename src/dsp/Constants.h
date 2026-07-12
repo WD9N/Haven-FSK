@@ -19,7 +19,7 @@ constexpr int    PTT_WATCHDOG_SEC    = 120;   // max TX time
 
 // ── Application ────────────────────────────────────────────────
 constexpr const char* APP_NAME       = "HAVEN-FSK";
-constexpr const char* APP_VERSION    = "0.5.1-beta";
+constexpr const char* APP_VERSION    = "0.6.0-beta";
 // MFSK-16's emission designator. Currently unreferenced elsewhere in the
 // codebase; if ADIF export or similar later needs a per-mode designator
 // (PSK31's would differ), source it from IModem rather than this constant.

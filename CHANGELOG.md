@@ -2,7 +2,51 @@
 
 ---
 
-## v0.5.1-beta — July 2026 *(current)*
+## v0.6.0-beta — July 2026 *(current)*
+
+**Protocol is now independently implementable (ADR-134)**
+- HAVEN-FSK is being published as an open protocol other software can
+  implement; the application will take its own identity at 1.0. See
+  `ROADMAP.md` for the full plan.
+- Specification expanded to implementer grade (rev. 5): documents the
+  facts an outside implementer cannot infer — the preamble is not
+  Gray-coded, exact CRC input, MSB-first bit conventions, the
+  permuted-systematic codeword bit order, and interleaved-bits-to-
+  symbol packing.
+- New published artifacts in `spec/`, generated from the reference
+  code and round-trip-verified (never hand-transcribed): the LDPC
+  parity matrix (`ldpc_h_192_96.alist`), the encoder bit mapping
+  (`ldpc_generator_192_96.txt`), and three golden test vectors with
+  48 kHz reference audio. Reference audio confirmed decodable over RF.
+
+**Logging**
+- Manual field capture: select any text in the Received pane,
+  right-click, and log it as Call / Name / QTH / Grid / RS-R / RS-S /
+  POTA / SOTA / State / County / FD. The likely field is offered
+  first. Works in any mode, and corrects a wrong auto-fill.
+- POTA references are normalized to the `XX-NNNN` standard on every
+  path into the log (US 1017, us1017, and US-1017 all become US-1017).
+- ADIF export now emits `POTA_REF`/`MY_POTA_REF` alongside
+  `SIG`/`SIG_INFO`, matching modern loggers (POLO, HAMRS).
+
+**Interface**
+- Flattened menu bar: Station Info, Audio, Radio, Mode, and Export Log
+  are direct top-level entries. Station Info and Audio each open their
+  own focused window.
+- Callsigns with operating modifiers (WD9N/P, K1ABC/7, EA8/WD9N) are
+  now recognized in untagged text.
+
+**Under the hood**
+- PSK31 gained a loopback self-test, which caught and fixed a bug that
+  clipped the first character of every received PSK31 transmission.
+- Cross-platform continuous integration: every push now builds on
+  Linux (x86-64 and ARM/Raspberry-Pi-class) and Windows, running the
+  DSP self-tests on each.
+- Dropped an unused Qt module; the release download is slightly smaller.
+
+---
+
+## v0.5.1-beta — July 2026
 
 **Auto-logging — inline field markers (ADR-133, spec §6.1)**
 - Macro data tags (`<myCall>` `<theirCall>` `<rstSent>` `<myGrid>`
