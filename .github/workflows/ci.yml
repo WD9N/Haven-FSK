@@ -60,6 +60,10 @@ jobs:
       - name: Install Qt 6.11 (MinGW)
         uses: jurplel/install-qt-action@v4
         with:
+          # Qt moved Windows 6.11+ packages into per-arch subdirectories
+          # on download.qt.io (aqtinstall #1007); the action's default
+          # aqtinstall predates the new layout — pin one that knows it.
+          aqtversion: '>=3.3.0'
           version: '6.11.1'
           arch: 'win64_mingw'
           modules: 'qtmultimedia qtserialport qtwebsockets'
