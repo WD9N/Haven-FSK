@@ -1,5 +1,6 @@
 #include "RxDisplay.h"
 #include "../dsp/FieldMarkers.h"
+#include "../util/CallsignPattern.h"
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QFont>
@@ -325,7 +326,8 @@ QString RxDisplay::renderMessage(const QString& text,
     // Callsign-shaped words inside an already-linked tag value (e.g. the
     // "W7W" in SOTA:W7W/SE-001) are skipped via the overlap check.
     static QRegularExpression wordRe(
-        "\\b([A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z])\\b");
+        "\\b(" + QString::fromStdString(HavenFSK::callsignPattern())
+        + ")\\b");
     // Bare 6-char grid squares are callsign-shaped (EN52XA) — don't link
     // them as callsigns (mirrors DspPipeline::parseSenderCallsign).
     static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}[A-X]{2}$");
@@ -370,6 +372,6 @@ QString RxDisplay::renderMessage(const QString& text,
 
 bool RxDisplay::isCallsign(const QString& word) const {
     static QRegularExpression re(
-        "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
+        "^" + QString::fromStdString(HavenFSK::callsignPattern()) + "$");
     return re.match(word.toUpper()).hasMatch();
 }

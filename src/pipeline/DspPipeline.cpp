@@ -2,6 +2,7 @@
 #include "../dsp/ModemFactory.h"
 #include "../dsp/FieldMarkers.h"
 #include "../radio/RadioSettings.h"
+#include "../util/CallsignPattern.h"
 #include <QDateTime>
 #include <QRegularExpression>
 #include <QDebug>
@@ -187,10 +188,16 @@ QString DspPipeline::parseSenderCallsign(const QString& text,
         MarkedMessage marked = parseMarkedText(text.toStdString());
         QString declared = QString::fromStdString(
             fieldValue(marked, FieldId::Sender)).toUpper();
+        // Core captured so my own portable call ("WD9N/P") can't ride in
+        // as the sender when I hear my own transmission back.
         static QRegularExpression declRe(
-            "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
-        if (!declared.isEmpty() && declRe.match(declared).hasMatch()
-            && declared != myCallsign.toUpper())
+            "^" + QString(HavenFSK::CALLSIGN_PREFIX_OPT)
+            + "(" + HavenFSK::CALLSIGN_CORE + ")"
+            + HavenFSK::CALLSIGN_SUFFIX_OPT + "$");
+        auto dm = declRe.match(declared);
+        if (!declared.isEmpty() && dm.hasMatch()
+            && declared != myCallsign.toUpper()
+            && dm.captured(1) != myCallsign.toUpper())
             return declared;
     }
 
@@ -212,14 +219,19 @@ QString DspPipeline::parseSenderCallsign(const QString& text,
 
     QStringList words = scrubbed.split(' ', Qt::SkipEmptyParts);
     QString myCall = myCallsign.toUpper();
+    // Core captured as group 1 so the my-call guard below can compare the
+    // base call: "WD9N/P DE N8SDR" must not pick my own portable call.
     static QRegularExpression callRe(
-        "^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$");
+        "^" + QString(HavenFSK::CALLSIGN_PREFIX_OPT)
+        + "(" + HavenFSK::CALLSIGN_CORE + ")"
+        + HavenFSK::CALLSIGN_SUFFIX_OPT + "$");
     // Bare (untagged) grid squares still look like callsigns — reject
     // pure Maidenhead shapes. Costs the rare special-event call that
     // happens to fit (e.g. GB19HQ); mis-logging every grid costs more.
     static QRegularExpression gridRe("^[A-R]{2}[0-9]{2}[A-X]{2}$");
     auto isCall = [&](const QString& w) {
-        return callRe.match(w).hasMatch() && w != myCall &&
+        auto m = callRe.match(w);
+        return m.hasMatch() && w != myCall && m.captured(1) != myCall &&
                !gridRe.match(w).hasMatch();
     };
 
