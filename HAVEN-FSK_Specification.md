@@ -553,6 +553,13 @@ payload bytes as modulated, and the complete transmitted tone-index
 sequence. Each `.wav` is the corresponding reference transmission:
 48000 Hz, mono, 16-bit PCM.
 
+Beyond the in-process round-trip, the reference audio has been
+verified over RF (July 2026): the `.wav` files played as transmit
+audio through an SSB transceiver into a dummy load, received on a
+second transceiver, decoded correctly by the reference application —
+including the §6.1 marker fields — across two independent radios'
+oscillator offsets.
+
 **Suggested implementation order** for an independent decoder: verify
 the CRC routine against §4.3's test vector; load H from the alist and
 the bit mapping from the generator file; decode the tone sequence of
