@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include "IModem.h"
 #include "Modulator.h"
 #include "Demodulator.h"
@@ -39,6 +41,19 @@ public:
     void  setAfcEnabled(bool enabled) override { m_afcEnabled = enabled; }
     bool  afcEnabled()  const override { return m_afcEnabled; }
     float afcOffsetHz() const override { return m_afcOffsetHz; }
+
+    // AFC-follows-dial: the rig dial just moved by -deltaHz to center the
+    // station, so the offset measured at the last preamble lock is stale
+    // by deltaHz. The next frame's preamble search re-measures from
+    // scratch (±219 Hz), so decode needs no help — this keeps the offset
+    // readout, waterfall AFC lines, and the persisted demod bin offset
+    // describing the world as it now is.
+    void  nudgeCarrierHz(float deltaHz) override {
+        m_afcOffsetHz = std::max(-AFC_MAX_HZ,
+                                 std::min(AFC_MAX_HZ, m_afcOffsetHz + deltaHz));
+        m_demodBinOffset = static_cast<int>(
+            std::round(m_afcOffsetHz * FFT_SIZE / SAMPLE_RATE));
+    }
 
     std::vector<float> generateTuneAudio() const override;
 

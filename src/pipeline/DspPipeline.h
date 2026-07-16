@@ -81,6 +81,9 @@ public:
     void  setAfcEnabled(bool enabled) { m_modem->setAfcEnabled(enabled); }
     bool  afcEnabled()      const     { return m_modem->afcEnabled(); }
     float afcOffsetHz()     const     { return m_modem->afcOffsetHz(); }
+    // AFC-follows-dial (PSK31): pre-shift the modem's carrier tracking by
+    // deltaHz right before the rig dial moves by the opposite amount.
+    void  nudgeCarrierHz(float deltaHz) { m_modem->nudgeCarrierHz(deltaHz); }
 
     // ── Squelch (mode-specific meaning; 0.0 = off) ─────────────────────────
     void  setSquelchThreshold(float threshold) { m_modem->setSquelchThreshold(threshold); }
