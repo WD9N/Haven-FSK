@@ -2,6 +2,37 @@
 #include <QDebug>
 #include <QUrl>
 
+// RadioInterface's mode contract is Hamlib rigctld tokens ("PKTUSB",
+// "USB", ...), but TCI servers speak their own lowercase modulation
+// names ("digu", "usb", ...). Translate at this boundary in both
+// directions — sending "PKTUSB" raw is silently ignored by the server,
+// which is exactly how the rig-mode combo ended up unable to change or
+// track the radio's mode over TCI.
+static QString hamlibToTci(const QString& mode) {
+    const QString m = mode.toUpper();
+    if (m == "PKTUSB" || m == "DIGU")  return "digu";
+    if (m == "PKTLSB" || m == "DIGL")  return "digl";
+    if (m == "USB")                    return "usb";
+    if (m == "LSB")                    return "lsb";
+    if (m == "CW" || m == "CWR")       return "cw";
+    if (m == "AM")                     return "am";
+    if (m == "FM" || m == "NFM")       return "nfm";
+    if (m == "WFM")                    return "wfm";
+    return mode.toLower();
+}
+
+static QString tciToHamlib(const QString& modulation) {
+    const QString m = modulation.toLower();
+    if (m == "digu")               return "PKTUSB";
+    if (m == "digl")               return "PKTLSB";
+    if (m == "usb")                return "USB";
+    if (m == "lsb")                return "LSB";
+    if (m == "cw")                 return "CW";
+    if (m == "am" || m == "sam")   return "AM";
+    if (m == "nfm" || m == "wfm")  return "FM";
+    return modulation.toUpper();
+}
+
 TCIClient::TCIClient(const QString& host,
                       uint16_t port,
                       QObject* parent)
@@ -139,6 +170,10 @@ void TCIClient::parseTCIMessage(const QString& msg) {
             // current values now that we're ready to process them.
             // TCI 2.0: "vfo:0,0;" requests current VFO A frequency
             m_socket->sendTextMessage("vfo:0,0;");
+            // ...and "modulation:0;" requests the current mode, so
+            // getMode()/modeChanged() reflect the radio without waiting
+            // for the operator to touch the mode knob.
+            m_socket->sendTextMessage("modulation:0;");
         } else if (msg.startsWith("vfo:")) {
             // Frequency push during init block — process it now
             // Thetis sends current state during handshake; capture it
@@ -153,10 +188,10 @@ void TCIClient::parseTCIMessage(const QString& msg) {
                 }
             }
         } else if (msg.startsWith("modulation:")) {
-            // Mode push during init block — capture it
+            // Mode push during init block — capture it (as Hamlib token)
             QStringList parts = msg.mid(11).split(',');
             if (parts.size() >= 2 && parts[0] == "0")
-                m_mode = parts[1];
+                m_mode = tciToHamlib(parts[1].trimmed());
         }
         return;
     }
@@ -177,11 +212,12 @@ void TCIClient::parseTCIMessage(const QString& msg) {
         return;
     }
 
-    // Mode: modulation:0,USB
+    // Mode: modulation:0,digu — stored/emitted as the Hamlib token per
+    // the RadioInterface contract
     if (msg.startsWith("modulation:")) {
         QStringList parts = msg.mid(11).split(',');
         if (parts.size() >= 2 && parts[0] == "0") {
-            m_mode = parts[1];
+            m_mode = tciToHamlib(parts[1].trimmed());
             emit modeChanged(m_mode);
         }
         return;
@@ -251,7 +287,7 @@ bool TCIClient::setFrequency(uint64_t hz) {
 
 bool TCIClient::setMode(const QString& mode) {
     if (!m_connected) return false;
-    sendTCI(QString("modulation:0,%1;").arg(mode));
+    sendTCI(QString("modulation:0,%1;").arg(hamlibToTci(mode)));
     return true;
 }
 
