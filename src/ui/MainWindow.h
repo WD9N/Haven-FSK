@@ -24,7 +24,6 @@ class AudioEngine;
 namespace HavenFSK {
     class DspPipeline;
     struct RxMessage;
-    struct BandPlanEntry;
 }
 
 class StationInfoWidget;
@@ -71,7 +70,8 @@ private slots:
     void onFieldDayToggled(bool enabled);
     void onExport();
     void onWaterfallTune(float audioHz);
-    void onBandSelected(const HavenFSK::BandPlanEntry& entry);
+    void onBandSelected(int i);
+    void onBandEdit(int i);
     void onEditBandPlan();
     void syncRigModeCombo(const QString& mode);
     void onOpenRadioConfig();
@@ -129,7 +129,7 @@ private:
     QComboBox*         m_modeCombo    {nullptr};  // HAVEN mode (hidden; Mode menu drives it)
     QComboBox*         m_rigModeCombo {nullptr};  // rig mode (USB/DIG-U/...) via CAT
     QList<QPushButton*> m_bandButtons;            // Transmit-panel band grid
-    void refreshBandButtonTooltips();
+    void refreshBandButtons();                    // labels + tooltips
     QDoubleSpinBox*    m_squelchSpin  {nullptr};
     QCheckBox*         m_txLockCheck  {nullptr};  // vetoes AFC dial moves
 

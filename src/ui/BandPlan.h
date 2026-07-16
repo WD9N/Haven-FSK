@@ -7,9 +7,11 @@
 // Dial frequencies for the band buttons in the Transmit panel, sourced
 // from BAND_PLAN.md at the repo root — that document is the authority
 // for the DEFAULTS below; keep this table in sync with it, not the
-// other way around. The operator can override any value via
-// Operating > Band Frequencies... (stored in QSettings under
-// "bandplan/", cleared when set back to the default).
+// other way around. The operator can override any frequency or button
+// label — right-click a band button (macro-style) or use
+// Operating > Band Frequencies... Overrides live in QSettings under
+// "bandplan/<index>/" and are removed when set back to the default, so
+// future BAND_PLAN.md revisions flow through to unmodified entries.
 //
 // HAVEN MFSK column: the suggested HAVEN-FSK frequencies from
 // BAND_PLAN.md's summary table (20 m / 14.090 is the recommended
@@ -28,7 +30,7 @@
 namespace HavenFSK {
 
 struct BandPlanEntry {
-    const char* label;      // button text, e.g. "40"
+    const char* label;      // default button text (sans "m"), e.g. "40"
     uint64_t    psk31Hz;    // PSK31 activity dial (BAND_PLAN.md listings)
     uint64_t    mfskHz;     // HAVEN-FSK suggested dial (BAND_PLAN.md summary)
 };
@@ -47,33 +49,71 @@ inline constexpr BandPlanEntry BAND_PLAN[] = {
     { "6",     50290000,     50323000 },
 };
 
-inline uint64_t defaultDialHz(const BandPlanEntry& e, ModemMode mode) {
-    return (mode == ModemMode::Psk31) ? e.psk31Hz : e.mfskHz;
+inline constexpr int BAND_PLAN_COUNT =
+    static_cast<int>(sizeof(BAND_PLAN) / sizeof(BAND_PLAN[0]));
+
+inline QString bandPlanKey(int i, const char* field) {
+    return QString("bandplan/%1/%2").arg(i).arg(QLatin1String(field));
 }
 
-inline QString bandPlanKey(const BandPlanEntry& e, ModemMode mode) {
-    return QString("bandplan/%1/%2")
-        .arg(QLatin1String(e.label),
-             mode == ModemMode::Psk31 ? QLatin1String("psk31")
-                                      : QLatin1String("mfsk"));
+inline const char* bandModeField(ModemMode mode) {
+    return (mode == ModemMode::Psk31) ? "psk31" : "mfsk";
+}
+
+inline uint64_t defaultDialHz(int i, ModemMode mode) {
+    return (mode == ModemMode::Psk31) ? BAND_PLAN[i].psk31Hz
+                                      : BAND_PLAN[i].mfskHz;
+}
+
+inline QString defaultBandLabel(int i) {
+    return QString(QLatin1String(BAND_PLAN[i].label)) + QLatin1String("m");
 }
 
 // Effective dial for a band button: operator override if one is stored,
-// else the BAND_PLAN.md default.
-inline uint64_t suggestedDialHz(const BandPlanEntry& e, ModemMode mode) {
+// else the BAND_PLAN.md default. Also reads the pre-2026-07-16
+// label-keyed override ("bandplan/<label>/<mode>") so overrides saved
+// by the first release of the editor keep working.
+inline uint64_t suggestedDialHz(int i, ModemMode mode) {
     QSettings s;
-    return s.value(bandPlanKey(e, mode),
-                   static_cast<qulonglong>(defaultDialHz(e, mode)))
+    QString key = bandPlanKey(i, bandModeField(mode));
+    if (s.contains(key)) return s.value(key).toULongLong();
+    QString legacy = QString("bandplan/%1/%2")
+        .arg(QLatin1String(BAND_PLAN[i].label),
+             QLatin1String(bandModeField(mode)));
+    return s.value(legacy,
+                   static_cast<qulonglong>(defaultDialHz(i, mode)))
         .toULongLong();
 }
 
 // Store an override; setting a value back to the default removes the
-// key so future default changes (BAND_PLAN.md revisions) take effect.
-inline void setSuggestedDialHz(const BandPlanEntry& e, ModemMode mode,
-                               uint64_t hz) {
+// keys (current and legacy) so future default changes take effect.
+inline void setSuggestedDialHz(int i, ModemMode mode, uint64_t hz) {
     QSettings s;
-    if (hz == defaultDialHz(e, mode)) s.remove(bandPlanKey(e, mode));
-    else s.setValue(bandPlanKey(e, mode), static_cast<qulonglong>(hz));
+    QString legacy = QString("bandplan/%1/%2")
+        .arg(QLatin1String(BAND_PLAN[i].label),
+             QLatin1String(bandModeField(mode)));
+    if (hz == defaultDialHz(i, mode)) {
+        s.remove(bandPlanKey(i, bandModeField(mode)));
+        s.remove(legacy);
+    } else {
+        s.setValue(bandPlanKey(i, bandModeField(mode)),
+                   static_cast<qulonglong>(hz));
+        s.remove(legacy);
+    }
+}
+
+inline QString bandLabel(int i) {
+    QSettings s;
+    return s.value(bandPlanKey(i, "label"), defaultBandLabel(i)).toString();
+}
+
+inline void setBandLabel(int i, const QString& label) {
+    QSettings s;
+    QString trimmed = label.trimmed();
+    if (trimmed.isEmpty() || trimmed == defaultBandLabel(i))
+        s.remove(bandPlanKey(i, "label"));
+    else
+        s.setValue(bandPlanKey(i, "label"), trimmed);
 }
 
 } // namespace HavenFSK

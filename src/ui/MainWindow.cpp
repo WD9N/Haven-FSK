@@ -16,6 +16,8 @@
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QDialogButtonBox>
+#include <QLineEdit>
+#include <QFormLayout>
 #include "../log/LogManager.h"
 #include "../audio/AudioEngine.h"
 #include "../audio/AudioSettings.h"
@@ -453,17 +455,18 @@ void MainWindow::setupUi() {
         bandGrid->setContentsMargins(0, 0, 0, 0);
         bandGrid->setSpacing(2);
         const int perRow = 5;
-        int i = 0;
-        for (const auto& entry : HavenFSK::BAND_PLAN) {
-            auto* b = new QPushButton(QString(entry.label) + "m", txContainer);
+        for (int i = 0; i < HavenFSK::BAND_PLAN_COUNT; ++i) {
+            auto* b = new QPushButton(txContainer);
             b->setFixedWidth(44);
+            b->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(b, &QPushButton::clicked, this,
-                    [this, entry]() { onBandSelected(entry); });
+                    [this, i]() { onBandSelected(i); });
+            connect(b, &QPushButton::customContextMenuRequested, this,
+                    [this, i](const QPoint&) { onBandEdit(i); });
             m_bandButtons.append(b);
             bandGrid->addWidget(b, i / perRow, i % perRow);
-            ++i;
         }
-        refreshBandButtonTooltips();
+        refreshBandButtons();
         macroRow->addLayout(bandGrid, 0);
     }
     txOuterLayout->addLayout(macroRow, 0);
@@ -1546,22 +1549,22 @@ void MainWindow::onModeChanged(int index) {
     if (!(m_pttManager && m_pttManager->isTransmitting())) {
         uint64_t dialHz = (m_radio && m_radio->isConnected())
             ? m_radio->getFrequency() : m_freqControl->frequency();
-        for (const auto& entry : HavenFSK::BAND_PLAN) {
+        for (int i = 0; i < HavenFSK::BAND_PLAN_COUNT; ++i) {
             bool onThisBand =
                 dialHz == HavenFSK::suggestedDialHz(
-                              entry, HavenFSK::ModemMode::Mfsk16) ||
+                              i, HavenFSK::ModemMode::Mfsk16) ||
                 dialHz == HavenFSK::suggestedDialHz(
-                              entry, HavenFSK::ModemMode::Psk31);
+                              i, HavenFSK::ModemMode::Psk31);
             if (!onThisBand) continue;
-            uint64_t newHz = HavenFSK::suggestedDialHz(entry, mode);
+            uint64_t newHz = HavenFSK::suggestedDialHz(i, mode);
             if (newHz != dialHz) {
                 m_freqControl->setFrequency(newHz);
                 if (m_logPanel) m_logPanel->setFrequency(newHz);
                 if (m_radio && m_radio->isConnected())
                     m_radio->setFrequency(newHz);
                 m_statusLabel->setText(
-                    QString("%1 m — %2 MHz")
-                    .arg(entry.label)
+                    QString("%1 — %2 MHz")
+                    .arg(HavenFSK::bandLabel(i))
                     .arg(newHz / 1.0e6, 0, 'f', 6));
             }
             break;
@@ -1678,17 +1681,69 @@ void MainWindow::onTuneAudioReady(const std::vector<float>& audio) {
     }
 }
 
-void MainWindow::refreshBandButtonTooltips() {
+void MainWindow::refreshBandButtons() {
     for (int i = 0; i < m_bandButtons.size()
-                 && i < static_cast<int>(std::size(HavenFSK::BAND_PLAN)); ++i) {
-        const auto& entry = HavenFSK::BAND_PLAN[i];
+                 && i < HavenFSK::BAND_PLAN_COUNT; ++i) {
+        m_bandButtons[i]->setText(HavenFSK::bandLabel(i));
         m_bandButtons[i]->setToolTip(QString(
-            "%1 MHz (PSK31 %2) + DIG-U.\n"
-            "Edit in Operating > Band Frequencies.")
-            .arg(HavenFSK::suggestedDialHz(entry, HavenFSK::ModemMode::Mfsk16)
+            "%1 MHz (PSK31 %2) + DIG-U.\nRight-click to edit.")
+            .arg(HavenFSK::suggestedDialHz(i, HavenFSK::ModemMode::Mfsk16)
                  / 1.0e6, 0, 'f', 3)
-            .arg(HavenFSK::suggestedDialHz(entry, HavenFSK::ModemMode::Psk31)
+            .arg(HavenFSK::suggestedDialHz(i, HavenFSK::ModemMode::Psk31)
                  / 1.0e6, 0, 'f', 3));
+    }
+}
+
+void MainWindow::onBandEdit(int i) {
+    if (i < 0 || i >= HavenFSK::BAND_PLAN_COUNT) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QString("Edit Band %1").arg(HavenFSK::bandLabel(i)));
+    dlg.setMinimumWidth(300);
+
+    auto* form      = new QFormLayout;
+    auto* labelEdit = new QLineEdit(HavenFSK::bandLabel(i), &dlg);
+    auto makeSpin = [&dlg](uint64_t hz) {
+        auto* sp = new QDoubleSpinBox(&dlg);
+        sp->setRange(1.8, 54.0);
+        sp->setDecimals(6);
+        sp->setSingleStep(0.001);
+        sp->setSuffix(" MHz");
+        sp->setValue(hz / 1.0e6);
+        return sp;
+    };
+    auto* mfskSpin = makeSpin(
+        HavenFSK::suggestedDialHz(i, HavenFSK::ModemMode::Mfsk16));
+    auto* pskSpin  = makeSpin(
+        HavenFSK::suggestedDialHz(i, HavenFSK::ModemMode::Psk31));
+    form->addRow("Button Label:", labelEdit);
+    form->addRow("HAVEN MFSK:",   mfskSpin);
+    form->addRow("PSK31:",        pskSpin);
+
+    auto* layout  = new QVBoxLayout(&dlg);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+        QDialogButtonBox::RestoreDefaults, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttons->button(QDialogButtonBox::RestoreDefaults),
+            &QPushButton::clicked, &dlg, [&]() {
+        labelEdit->setText(HavenFSK::defaultBandLabel(i));
+        mfskSpin->setValue(
+            HavenFSK::defaultDialHz(i, HavenFSK::ModemMode::Mfsk16) / 1.0e6);
+        pskSpin->setValue(
+            HavenFSK::defaultDialHz(i, HavenFSK::ModemMode::Psk31) / 1.0e6);
+    });
+    layout->addWidget(buttons);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        HavenFSK::setBandLabel(i, labelEdit->text());
+        HavenFSK::setSuggestedDialHz(i, HavenFSK::ModemMode::Mfsk16,
+            static_cast<uint64_t>(std::llround(mfskSpin->value() * 1e6)));
+        HavenFSK::setSuggestedDialHz(i, HavenFSK::ModemMode::Psk31,
+            static_cast<uint64_t>(std::llround(pskSpin->value() * 1e6)));
+        refreshBandButtons();
     }
 }
 
@@ -1703,11 +1758,12 @@ void MainWindow::onEditBandPlan() {
     note->setWordWrap(true);
     layout->addWidget(note);
 
-    constexpr int nBands = static_cast<int>(std::size(HavenFSK::BAND_PLAN));
-    auto* table = new QTableWidget(nBands, 2, &dlg);
-    table->setHorizontalHeaderLabels({"HAVEN MFSK (MHz)", "PSK31 (MHz)"});
+    constexpr int nBands = HavenFSK::BAND_PLAN_COUNT;
+    auto* table = new QTableWidget(nBands, 3, &dlg);
+    table->setHorizontalHeaderLabels({"Label", "HAVEN MFSK (MHz)", "PSK31 (MHz)"});
     table->verticalHeader()->setDefaultSectionSize(24);
 
+    auto* labelEdits = new QLineEdit*[nBands];
     auto* mfskSpins  = new QDoubleSpinBox*[nBands];
     auto* psk31Spins = new QDoubleSpinBox*[nBands];
     auto makeSpin = [&table, &dlg](int row, int col, uint64_t hz) {
@@ -1720,13 +1776,14 @@ void MainWindow::onEditBandPlan() {
         return sp;
     };
     for (int i = 0; i < nBands; ++i) {
-        const auto& e = HavenFSK::BAND_PLAN[i];
         table->setVerticalHeaderItem(i,
-            new QTableWidgetItem(QString(e.label) + " m"));
-        mfskSpins[i]  = makeSpin(i, 0,
-            HavenFSK::suggestedDialHz(e, HavenFSK::ModemMode::Mfsk16));
-        psk31Spins[i] = makeSpin(i, 1,
-            HavenFSK::suggestedDialHz(e, HavenFSK::ModemMode::Psk31));
+            new QTableWidgetItem(HavenFSK::defaultBandLabel(i)));
+        labelEdits[i] = new QLineEdit(HavenFSK::bandLabel(i), &dlg);
+        table->setCellWidget(i, 0, labelEdits[i]);
+        mfskSpins[i]  = makeSpin(i, 1,
+            HavenFSK::suggestedDialHz(i, HavenFSK::ModemMode::Mfsk16));
+        psk31Spins[i] = makeSpin(i, 2,
+            HavenFSK::suggestedDialHz(i, HavenFSK::ModemMode::Psk31));
     }
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     layout->addWidget(table);
@@ -1739,26 +1796,27 @@ void MainWindow::onEditBandPlan() {
     connect(buttons->button(QDialogButtonBox::RestoreDefaults),
             &QPushButton::clicked, &dlg, [&]() {
         for (int i = 0; i < nBands; ++i) {
-            const auto& e = HavenFSK::BAND_PLAN[i];
+            labelEdits[i]->setText(HavenFSK::defaultBandLabel(i));
             mfskSpins[i]->setValue(
-                HavenFSK::defaultDialHz(e, HavenFSK::ModemMode::Mfsk16) / 1.0e6);
+                HavenFSK::defaultDialHz(i, HavenFSK::ModemMode::Mfsk16) / 1.0e6);
             psk31Spins[i]->setValue(
-                HavenFSK::defaultDialHz(e, HavenFSK::ModemMode::Psk31) / 1.0e6);
+                HavenFSK::defaultDialHz(i, HavenFSK::ModemMode::Psk31) / 1.0e6);
         }
     });
     layout->addWidget(buttons);
-    dlg.resize(360, 420);
+    dlg.resize(440, 420);
 
     if (dlg.exec() == QDialog::Accepted) {
         for (int i = 0; i < nBands; ++i) {
-            const auto& e = HavenFSK::BAND_PLAN[i];
-            HavenFSK::setSuggestedDialHz(e, HavenFSK::ModemMode::Mfsk16,
+            HavenFSK::setBandLabel(i, labelEdits[i]->text());
+            HavenFSK::setSuggestedDialHz(i, HavenFSK::ModemMode::Mfsk16,
                 static_cast<uint64_t>(std::llround(mfskSpins[i]->value() * 1e6)));
-            HavenFSK::setSuggestedDialHz(e, HavenFSK::ModemMode::Psk31,
+            HavenFSK::setSuggestedDialHz(i, HavenFSK::ModemMode::Psk31,
                 static_cast<uint64_t>(std::llround(psk31Spins[i]->value() * 1e6)));
         }
-        refreshBandButtonTooltips();
+        refreshBandButtons();
     }
+    delete[] labelEdits;
     delete[] mfskSpins;
     delete[] psk31Spins;
 }
@@ -1769,14 +1827,15 @@ void MainWindow::syncRigModeCombo(const QString& mode) {
     if (idx >= 0) m_rigModeCombo->setCurrentIndex(idx);
 }
 
-void MainWindow::onBandSelected(const HavenFSK::BandPlanEntry& entry) {
+void MainWindow::onBandSelected(int i) {
+    if (i < 0 || i >= HavenFSK::BAND_PLAN_COUNT) return;
     if (m_pttManager && m_pttManager->isTransmitting()) {
         m_statusLabel->setText("Band change ignored — transmitting");
         return;
     }
     auto mode = static_cast<HavenFSK::ModemMode>(
         m_modeCombo->currentData().toInt());
-    uint64_t dialHz = HavenFSK::suggestedDialHz(entry, mode);
+    uint64_t dialHz = HavenFSK::suggestedDialHz(i, mode);
 
     // Update the app's own idea of frequency regardless of rig state so
     // logging is right even when running without CAT.
@@ -1789,13 +1848,13 @@ void MainWindow::onBandSelected(const HavenFSK::BandPlanEntry& entry) {
         int digU = m_rigModeCombo->findData("PKTUSB");
         if (digU >= 0) m_rigModeCombo->setCurrentIndex(digU);
         m_statusLabel->setText(
-            QString("%1 m — %2 MHz, DIG-U")
-            .arg(entry.label)
+            QString("%1 — %2 MHz, DIG-U")
+            .arg(HavenFSK::bandLabel(i))
             .arg(dialHz / 1.0e6, 0, 'f', 6));
     } else {
         m_statusLabel->setText(
-            QString("%1 m — %2 MHz set (no rig control connected)")
-            .arg(entry.label)
+            QString("%1 — %2 MHz set (no rig control connected)")
+            .arg(HavenFSK::bandLabel(i))
             .arg(dialHz / 1.0e6, 0, 'f', 6));
     }
 }
