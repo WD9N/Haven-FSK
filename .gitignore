@@ -27,6 +27,13 @@ dist/
 # Qt generated files
 **/*_autogen/
 
+# Bench outputs (written to the working directory by --bench-* runs)
+psk31_bench*.txt
+weak_signal_bench*.txt
+
+# CI tooling log
+aqtinstall.log
+
 # OS artifacts
 Thumbs.db
 .DS_Store

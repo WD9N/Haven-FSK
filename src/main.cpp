@@ -10,6 +10,7 @@
 #include "dsp/Constants.h"
 #include "dsp/DspLog.h"
 #include "dsp/WeakSignalBench.h"
+#include "dsp/psk/Psk31Bench.h"
 #include "ui/MainWindow.h"
 #include <cstring>
 #include <cstdlib>
@@ -71,6 +72,11 @@ int main(int argc, char* argv[]) {
         if (std::strcmp(argv[i], "--bench") == 0) {
             int trials = (i + 1 < argc) ? std::atoi(argv[i + 1]) : 0;
             return HavenFSK::runWeakSignalBench(trials > 0 ? trials : 10)
+                       ? 0 : 1;
+        }
+        if (std::strcmp(argv[i], "--bench-psk31") == 0) {
+            int trials = (i + 1 < argc) ? std::atoi(argv[i + 1]) : 0;
+            return HavenFSK::runPsk31Bench(trials > 0 ? trials : 10)
                        ? 0 : 1;
         }
         if (std::strcmp(argv[i], "--bench-sync") == 0) {

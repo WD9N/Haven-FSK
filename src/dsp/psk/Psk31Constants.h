@@ -20,11 +20,21 @@ constexpr double PSK31_DEFAULT_BAUD = PSK31_BAUD_31;
 constexpr double PSK31_CARRIER_HZ = 1000.0;
 
 // ── Costas loop (carrier phase/frequency tracking) ────────────────
-// Decision-directed BPSK Costas loop gains. Conservative (slow) loop —
-// PSK31's narrow bandwidth and low baud rate tolerate a slow loop well,
-// and a slow loop is less prone to false-locking on noise than a fast one.
-constexpr double PSK31_COSTAS_ALPHA = 0.002;   // phase correction gain
-constexpr double PSK31_COSTAS_BETA  = 0.00002; // frequency correction gain
+// Decision-directed BPSK Costas loop gains, applied once per SYMBOL to
+// a magnitude-normalized error (~sin of the phase error, level-
+// independent — see Psk31Demodulator::applyCostasCorrection). Still a
+// deliberately slow loop by classic-PLL standards — PSK31's narrow
+// bandwidth tolerates it and a slow loop resists false-locking on
+// noise — but fast enough to converge within the 32-symbol preamble
+// (the old unnormalized 0.002/0.00002 moved microradians per symbol at
+// real signal levels: effectively frozen).
+// BETA acts on the NCO's per-SAMPLE increment once per symbol, so its
+// scale is alpha^2/4 (critically damped, per-symbol units) divided by
+// samples-per-symbol: (0.05^2/4)/1536 ≈ 4e-7. Rounded up a little for
+// livelier drift tracking; each unit here is ~7.6 kHz/symbol of slew,
+// so 1e-6 ≈ 8 mHz/symbol ≈ 0.24 Hz/s — ample for HF oscillator drift.
+constexpr double PSK31_COSTAS_ALPHA = 0.05;   // phase gain, rad/symbol per unit error
+constexpr double PSK31_COSTAS_BETA  = 1e-6;   // frequency gain, rad/sample per symbol
 
 // ── Symbol timing recovery ─────────────────────────────────────
 // Gardner timing-error-detector loop gain.
@@ -65,17 +75,17 @@ constexpr int psk31PreambleSymbols(double baud) {
 // ── Squelch ────────────────────────────────────────────────────
 // Runtime-adjustable, not a fixed constant here — see
 // Psk31Modem::setSquelchThreshold() / IModem::setSquelchThreshold().
-// A decoded character is only surfaced to the UI if the average Costas-
-// loop lock quality (Psk31Demodulator::Result::lockQuality, 0..1) across
-// the bits that made it up meets the configured threshold. Defaults to
-// 0.0 (off): a fixed compile-time default of 0.7 was tried first and
-// silently suppressed real over-the-air decodes entirely (confirmed —
-// fldigi decoded the same signal fine, HAVEN's RX showed nothing) since
-// real-world frequency drift/phase noise/timing jitter legitimately
-// lowers lock quality even on correctly decoded characters, more than a
-// noiseless loopback test revealed. lockQuality on pure noise isn't
-// reliably near 0 either (it's |cos(random phase)| in expectation), so
-// DCD gating — not lockQuality alone — is the primary noise defense;
-// the lock-quality threshold is a secondary, operator-tuned refinement.
+// A decoded character is only surfaced to the UI if the average lock
+// quality (Psk31Demodulator::Result::lockQuality, 0..1) across the bits
+// that made it up meets the configured threshold. The metric is the
+// smoothed doubled-differential-phase coherence: near 1.0 on a locked
+// signal regardless of level, random-walking near ~0.2 on noise, so
+// 0.5 (the default) separates them with margin on both sides. History:
+// the original per-bit |dI|/mag metric sat at ~0.64 in expectation on
+// pure noise — no threshold could pass real drifting signals while
+// rejecting noise, which is why the default was once 0.0 (off) and an
+// early 0.7 default silently suppressed real over-the-air decodes that
+// fldigi handled fine. The narrowband DCD remains the primary noise
+// defense; this is the per-character refinement behind it.
 
 } // namespace HavenFSK

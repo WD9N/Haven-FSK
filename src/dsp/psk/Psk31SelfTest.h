@@ -50,14 +50,30 @@ inline bool runPsk31SelfTest() {
     {
         std::string msg = "HAVEN PSK31 TEST 123";
 
+        // The demodulator spends its first ACQ_SYMBOLS (12) periods on
+        // envelope-based timing acquisition and emits no bits, and the
+        // matched filter finalizes each symbol one period late (its
+        // pulse spans two periods) — so a bare bitstream needs a leading
+        // phase-reversal preamble to acquire on and one trailing symbol
+        // period to flush the last symbol. Real TX always provides both
+        // (see Psk31Modem::modulateText); mirror that here and require
+        // containment rather than exact equality.
         Psk31Modulator mod;
-        auto audio = mod.modulateText(msg);
+        std::vector<bool> bits(16, false);          // reversal preamble
+        auto textBits = Varicode::encode(msg);
+        bits.insert(bits.end(), textBits.begin(), textBits.end());
+        auto audio = mod.modulateBits(bits);
         if (audio.empty()) {
             printf("FAIL: Psk31Modulator produced no audio\n");
             return false;
         }
         printf("  modulated %d samples for \"%s\"\n",
                (int)audio.size(), msg.c_str());
+        // Silence flush: the matched filter finalizes one period late,
+        // and the timing snap can sit a few samples past TX boundaries —
+        // give it a few periods (the real path's postamble provides 32).
+        audio.resize(audio.size()
+                     + 4 * (size_t)(SAMPLE_RATE / PSK31_DEFAULT_BAUD), 0.0f);
 
         Psk31Demodulator demod;
         Varicode decoder;
@@ -69,8 +85,9 @@ inline bool runPsk31SelfTest() {
             if (ch.has_value()) decoded.push_back(*ch);
         }
 
-        if (decoded == msg) {
-            printf("PASS: full audio loopback (\"%s\")\n", msg.c_str());
+        if (decoded.find(msg) != std::string::npos) {
+            printf("PASS: full audio loopback (\"%s\" within \"%s\")\n",
+                   msg.c_str(), decoded.c_str());
         } else {
             printf("FAIL: full audio loopback — sent \"%s\" got \"%s\"\n",
                    msg.c_str(), decoded.c_str());

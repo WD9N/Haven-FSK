@@ -20,6 +20,13 @@ std::vector<bool> Varicode::encode(const std::string& text) {
 
 std::optional<char> Varicode::decodeBit(bool bit) {
     if (!bit) {
+        // Codewords always begin with '1' — a '0' with nothing
+        // accumulated is idle/preamble, not codeword content. Without
+        // this, an odd-length run of preamble zeros (parity depends on
+        // where DCD opened mid-preamble) left a stray leading '0' glued
+        // onto the first real codeword, silently dropping the first
+        // character of a transmission.
+        if (m_accum.empty()) return std::nullopt;
         if (!m_accum.empty() && m_accum.back() == '0') {
             // "00" terminator seen. The codeword is everything before
             // the single trailing '0' already in the accumulator (that

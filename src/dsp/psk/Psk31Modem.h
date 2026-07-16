@@ -24,7 +24,10 @@ public:
 
     ModemRxState rxState()  const override { return m_rxState; }
     bool         dcdActive() const override { return m_dcdActive; }
-    float        lastSnrDb() const override { return 0.0f; }  // not implemented yet
+    // In-band vs adjacent-band ratio from the narrowband DCD. Not the
+    // 2500 Hz-referenced SNR convention MFSK reports — useful as a
+    // relative signal-quality indicator, not comparable across modes.
+    float        lastSnrDb() const override { return m_dcdSnrDb; }
 
     // AFC: PSK31 tracks carrier drift continuously via the Costas loop
     // rather than a discrete per-frame frequency search, so "AFC enabled"
@@ -32,15 +35,20 @@ public:
     void  setAfcEnabled(bool) override {}
     bool  afcEnabled()  const override { return true; }
     float afcOffsetHz() const override { return m_lastCarrierOffsetHz; }
+    void  nudgeCarrierHz(float deltaHz) override {
+        m_demodulator.nudgeCarrierHz(deltaHz);
+        m_lastCarrierOffsetHz = m_demodulator.carrierOffsetHz();
+    }
 
-    // Squelch: minimum average Costas-loop lock quality (0.0-1.0) a
-    // decoded character's bits must meet to be surfaced to the UI.
-    // Default 0.0 = off (every DCD-gated decode passes through) — real
-    // over-the-air signals have frequency drift/phase noise/timing
-    // jitter that legitimately lowers lock quality even on correctly
-    // decoded characters, and an aggressive default silently broke RX
-    // entirely on a real signal fldigi decoded fine. Off-by-default
-    // until the operator has a working baseline to tune up from.
+    // Squelch: minimum average lock quality (0.0-1.0) a decoded
+    // character's bits must meet to be surfaced to the UI. The metric is
+    // the doubled-differential-phase coherence (see Psk31Demodulator):
+    // ~1.0 on a locked signal — even a weak one — and random-walking
+    // near ~0.2 on noise, so unlike the earlier per-bit |dI|/mag metric
+    // (which sat at ~0.64 on pure noise) a real threshold exists.
+    // Default 0.5: passes locked signals with margin while gating the
+    // stray bits emitted right after timing acquisition and during the
+    // DCD hang tail, where coherence is genuinely low.
     void  setSquelchThreshold(float threshold) override {
         m_squelchThreshold = threshold;
     }
@@ -63,7 +71,6 @@ private:
 
     ModemRxState m_rxState   = ModemRxState::Idle;
     bool         m_dcdActive = false;
-    bool         m_hadSignal = false;  // m_dcdActive on the previous chunk
     float        m_lastCarrierOffsetHz = 0.0f;
 
     // Squelch: running lock-quality average across the bits composing
@@ -71,13 +78,34 @@ private:
     // character boundary is reached — see processAudioChunk()).
     float m_qualitySum   = 0.0f;
     int   m_qualityCount = 0;
-    float m_squelchThreshold = 0.0f;  // 0.0 = off; see setSquelchThreshold() doc
+    float m_squelchThreshold = 0.5f;  // see setSquelchThreshold() doc
 
-    // Simple RMS-threshold DCD — PSK31 has no preamble/sync-tone concept
-    // to key off, unlike MFSK's carrier-detect band. Placeholder until
-    // real-world tuning; see Psk31Demodulator::Result::lockQuality for a
-    // more meaningful signal-present indicator once validated.
-    static constexpr float DCD_RMS_THRESHOLD = 0.01f;
+    // ── Narrowband DCD ──────────────────────────────────────────────
+    // In-band power (carrier +- 1.5x baud, via Goertzel bins) against
+    // two adjacent noise-reference bands, smoothed across chunks, with
+    // hysteresis and a hang time. Replaces the original broadband-RMS
+    // placeholder, which keyed open on band noise alone (a constant
+    // ~145 garbage chars/min on pure noise in the 2026-07-13 baseline
+    // bench) and flapped on weak signals, resetting decode state
+    // mid-transmission. Ratio thresholds are audio-level independent —
+    // both bands scale together with RX gain.
+    //
+    // Threshold math: in-band spans ~3x baud ≈ 94 Hz for PSK31. Noise
+    // alone puts the ratio near 0 dB; a signal at -10 dB SNR (2500 Hz
+    // ref) concentrates its full power into that 94 Hz, lifting the
+    // ratio to ~+5.6 dB, and -5 dB SNR gives ~+9.7 dB. ON at +5 dB
+    // therefore admits signals down to roughly the -10 dB mark while
+    // sitting ~5 sigma-smoothed dB above the noise-only resting point.
+    bool  updateDcd(const std::vector<float>& samples);
+    static double goertzelPower(const std::vector<float>& x, double freqHz);
+
+    float m_dcdSnrDb    = 0.0f;  // smoothed in-band/out-band ratio, dB
+    int   m_dcdHangLeft = 0;     // chunks remaining before drop takes effect
+
+    static constexpr float DCD_ON_DB       = 5.0f;
+    static constexpr float DCD_OFF_DB      = 2.5f;
+    static constexpr float DCD_SMOOTH_ALPHA = 0.3f;  // per-chunk IIR
+    static constexpr int   DCD_HANG_CHUNKS = 5;      // ~213 ms at 2048/48k
 };
 
 } // namespace HavenFSK

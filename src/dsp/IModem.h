@@ -126,6 +126,13 @@ public:
     virtual bool  afcEnabled()  const = 0;
     virtual float afcOffsetHz() const = 0;
 
+    // The UI is about to shift the RIG dial by -deltaHz to center the
+    // station (AFC-follows-dial): pre-shift the mode's carrier tracking
+    // by deltaHz so decode continues through the retune instead of
+    // having to re-acquire. Default no-op for modes whose AFC is purely
+    // DSP-side (MFSK corrects in the demodulator, the dial never moves).
+    virtual void  nudgeCarrierHz(float /*deltaHz*/) {}
+
     // ── Squelch — optional, default no-op/0 for modes without a concept
     //    of a confidence-based decode squelch (e.g. MFSK relies on its
     //    own CRC/FEC convergence instead). Meaning of the 0.0-1.0 range

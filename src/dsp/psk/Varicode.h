@@ -23,6 +23,13 @@ public:
 
     void reset();
 
+    // True when no codeword is partially accumulated — i.e. the decoder
+    // is at a codeword boundary (idle, just emitted, just discarded an
+    // invalid/oversized accumulation, or freshly reset). Lets the caller
+    // scope per-character quality metrics to exactly the bits of the
+    // codeword candidate in progress.
+    bool atBoundary() const { return m_accum.empty(); }
+
 private:
     std::string m_accum;  // '0'/'1' bits accumulated since last terminator
 
