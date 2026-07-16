@@ -1539,6 +1539,35 @@ void MainWindow::onModeChanged(int index) {
     QSettings s;
     s.setValue("mode/current", static_cast<int>(mode));
 
+    // If we're parked on a band-plan frequency (i.e. a band button or an
+    // earlier mode switch put us there), follow the mode change to that
+    // band's frequency for the NEW mode. A dial that matches no table
+    // entry is a manual QSY — leave it alone.
+    if (!(m_pttManager && m_pttManager->isTransmitting())) {
+        uint64_t dialHz = (m_radio && m_radio->isConnected())
+            ? m_radio->getFrequency() : m_freqControl->frequency();
+        for (const auto& entry : HavenFSK::BAND_PLAN) {
+            bool onThisBand =
+                dialHz == HavenFSK::suggestedDialHz(
+                              entry, HavenFSK::ModemMode::Mfsk16) ||
+                dialHz == HavenFSK::suggestedDialHz(
+                              entry, HavenFSK::ModemMode::Psk31);
+            if (!onThisBand) continue;
+            uint64_t newHz = HavenFSK::suggestedDialHz(entry, mode);
+            if (newHz != dialHz) {
+                m_freqControl->setFrequency(newHz);
+                if (m_logPanel) m_logPanel->setFrequency(newHz);
+                if (m_radio && m_radio->isConnected())
+                    m_radio->setFrequency(newHz);
+                m_statusLabel->setText(
+                    QString("%1 m — %2 MHz")
+                    .arg(entry.label)
+                    .arg(newHz / 1.0e6, 0, 'f', 6));
+            }
+            break;
+        }
+    }
+
     // Waterfall passband/squelch/status-label updates happen in
     // onModeReady(), connected to DspPipeline::modeReady — not read back
     // synchronously here via passbandLowHz()/passbandHighHz()/modeName()
