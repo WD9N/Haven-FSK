@@ -21,12 +21,19 @@
 
 ### 160 Meters (1.8 – 2.0 MHz)
 ```
-1.800 – 1.830   CW only
+1.800 – 1.810   ARRL digital segment
+1.800 – 1.830   CW only (traditional)
 1.838           FT8 (primary)
 1.840           JS8Call
 1.843           Olivia 8/250 calling
 1.845           PSK31
 ```
+
+**HAVEN-FSK 160m suggestion: 1.808 MHz**
+Inside the ARRL 160m digital segment (1.800–1.810), well clear of the
+FT8/JS8Call/Olivia/PSK31 cluster at 1.838–1.845. Signal sits just below
+the 1.810 segment edge. Winter/nighttime band — high noise, exactly
+HAVEN-FSK territory.
 
 ---
 
@@ -209,6 +216,7 @@ Above JS8Call, below SSB territory at 50.330. Active during Es openings.
 
 | Band  | Dial Freq    | Notes                                    | Priority    |
 |-------|-------------|------------------------------------------|-------------|
+| 160m  | 1.808 MHz   | ARRL digital segment, clear of 1.838-1.845 cluster | Low  |
 | 80m   | **3.585 MHz** | Near Olivia calling — MFSK neighborhood, 5 kHz from RTTY DX | Medium      |
 | 40m   | 7.065 MHz   | Between JS8Call and PSK31 upper          | Medium      |
 | 30m   | 10.142 MHz  | Digital only band, narrow                | Medium      |

@@ -110,12 +110,14 @@ See `CLAUDE.md` and `DECISIONS.md` for build notes.
 
 | Band | Frequency   | Notes                                        |
 |------|-------------|----------------------------------------------|
+| 160m | 1.808 MHz   | ARRL digital segment, clear of 1.838 cluster |
 | 80m  | 3.585 MHz   | Near Olivia calling — MFSK neighborhood      |
 | 40m  | 7.065 MHz   | Gap between JS8Call and PSK31 upper cluster  |
 | 30m  | 10.142 MHz  | Digital-only band, clear gap                 |
 | 20m  | 14.090 MHz  | Primary recommended frequency — clear gap    |
-| 17m  | 18.108 MHz  | Above JS8Call, avoids FT8 at 18.104          |
+| 17m  | 18.110 MHz  | Above JS8Call (18.108), top of the sub-band  |
 | 15m  | 21.090 MHz  | Clear gap between RTTY and WSPR              |
+| 12m  | 24.927 MHz  | Above WSPR, solar maximum only               |
 | 10m  | 28.130 MHz  | Above WSPR/JS8Call cluster, wide sub-band    |
 | 6m   | 50.323 MHz  | Above JS8Call, Es openings only              |
 

@@ -9,9 +9,13 @@
 #include "RadioConfigDialog.h"
 #include "WaterfallWidget.h"
 #include "FrequencyControl.h"
+#include "BandPlan.h"
 #include "LevelPanel.h"
 #include <QTextEdit>
 #include <QShortcut>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QDialogButtonBox>
 #include "../log/LogManager.h"
 #include "../audio/AudioEngine.h"
 #include "../audio/AudioSettings.h"
@@ -22,6 +26,7 @@
 #include "../radio/HamlibClient.h"
 #include "../pipeline/DspPipeline.h"
 #include "../dsp/Constants.h"
+#include "../dsp/psk/Psk31Constants.h"
 #include "../dsp/FieldMarkers.h"
 #include <QTextBlock>
 // TODO(Phase 5): BASE_FREQ usages below are MFSK-specific tuning-offset
@@ -119,7 +124,10 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Restore squelch before onModeChanged() below, which re-applies
         // whatever m_squelchSpin currently holds to the fresh modem.
-        m_squelchSpin->setValue(s.value("mode/squelch", 0.0).toDouble());
+        // Default 0.5 matches Psk31Modem's doubled-phase coherence
+        // metric (2026-07-13): locked signals sit near 1.0, noise near
+        // 0.2. The old metric had no usable threshold (default was 0.0).
+        m_squelchSpin->setValue(s.value("mode/squelch", 0.5).toDouble());
 
         // setCurrentIndex() is a no-op (no signal fired) when the target
         // index equals the combo's default (0) — call explicitly so the
@@ -218,11 +226,17 @@ void MainWindow::setupMenu() {
     afcAction->setChecked(true);
     opMenu->addAction(afcAction);
     connect(afcAction, &QAction::toggled, this, [this](bool on) {
+        m_afcUiEnabled = on;   // gates AFC-follows-dial in PSK31
         QMetaObject::invokeMethod(m_pipeline, &HavenFSK::DspPipeline::setAfcEnabled,
                                    Qt::AutoConnection, on);
         if (!on)
             m_waterfall->setAfcOffset(0.0f);
     });
+
+    auto* bandPlanAction = new QAction("Band Frequencies…", this);
+    opMenu->addAction(bandPlanAction);
+    connect(bandPlanAction, &QAction::triggered,
+            this, &MainWindow::onEditBandPlan);
 
     opMenu->addSeparator();
     m_recordRxAction = new QAction("Record RX Audio to WAV (debug)", this);
@@ -279,11 +293,39 @@ void MainWindow::setupUi() {
     m_freqControl = new FrequencyControl(m_topBar);
     m_topBar->addWidget(m_freqControl);
 
-    m_modeCombo = new QComboBox(m_topBar);
+    // Rig mode (USB/DIG-U/...) — replaces the HAVEN mode combo in this
+    // spot per operator request; HAVEN mode is selected from the Mode
+    // menu instead. Item data = Hamlib rigctld mode token.
+    m_rigModeCombo = new QComboBox(m_topBar);
+    m_rigModeCombo->addItem("DIG-U", "PKTUSB");
+    m_rigModeCombo->addItem("DIG-L", "PKTLSB");
+    m_rigModeCombo->addItem("USB",   "USB");
+    m_rigModeCombo->addItem("LSB",   "LSB");
+    m_rigModeCombo->addItem("CW",    "CW");
+    m_rigModeCombo->addItem("AM",    "AM");
+    m_rigModeCombo->addItem("FM",    "FM");
+    m_rigModeCombo->setToolTip(
+        "Radio mode (sent to the rig via CAT).\n"
+        "DIG-U is the normal choice for HAVEN and PSK31.");
+    m_topBar->addWidget(m_rigModeCombo);
+    // `activated` fires only on operator picks — programmatic syncs from
+    // the rig's own mode reports won't echo a command back at it.
+    connect(m_rigModeCombo, &QComboBox::activated, this, [this](int idx) {
+        if (!m_radio || !m_radio->isConnected()) {
+            m_statusLabel->setText("Connect rig control to set the radio mode");
+            return;
+        }
+        m_radio->setMode(m_rigModeCombo->itemData(idx).toString());
+    });
+
+    // HAVEN mode combo — no longer shown (the Mode menu is the visible
+    // selector, synced two-way in setupConnections()); kept alive hidden
+    // because it is the single source of truth the menu, QSettings
+    // restore, and onModeChanged() all drive.
+    m_modeCombo = new QComboBox(this);
     m_modeCombo->addItem("Haven MFSK", static_cast<int>(HavenFSK::ModemMode::Mfsk16));
     m_modeCombo->addItem("PSK31",   static_cast<int>(HavenFSK::ModemMode::Psk31));
-    m_modeCombo->setToolTip("Operating mode");
-    m_topBar->addWidget(m_modeCombo);
+    m_modeCombo->hide();
 
     m_topBar->addWidget(new QLabel("Squelch:", m_topBar));
     m_squelchSpin = new QDoubleSpinBox(m_topBar);
@@ -297,6 +339,23 @@ void MainWindow::setupUi() {
         "Raise this if noise is decoding as garbage text; lower it "
         "(or set to 0) if real signal isn't showing up.");
     m_topBar->addWidget(m_squelchSpin);
+
+    m_txLockCheck = new QCheckBox("TX Lock", m_topBar);
+    m_txLockCheck->setToolTip(
+        "Lock the dial frequency: AFC keeps decoding off-frequency "
+        "stations (DSP-side, MFSK ~±200 Hz / PSK31 ~±47 Hz) but never "
+        "moves the rig to follow them.\n"
+        "Check this when running a net or calling CQ so callers who are "
+        "off frequency don't pull you off yours.");
+    {
+        QSettings s;
+        m_txLockCheck->setChecked(s.value("afc/txLock", false).toBool());
+    }
+    connect(m_txLockCheck, &QCheckBox::toggled, this, [](bool on) {
+        QSettings s;
+        s.setValue("afc/txLock", on);
+    });
+    m_topBar->addWidget(m_txLockCheck);
 
     m_rigLabel = new QLabel("No rig", m_topBar);
     m_rigLabel->setStyleSheet("color: gray;");
@@ -381,7 +440,33 @@ void MainWindow::setupUi() {
     m_macroPanel = new MacroPanel(txContainer);
     m_macroPanel->setSizePolicy(
         QSizePolicy::Expanding, QSizePolicy::Preferred);
-    txOuterLayout->addWidget(m_macroPanel, 0);
+
+    // Band buttons — right of the macros. Each sets the rig to the
+    // suggested dial for the active HAVEN mode (see BandPlan.h) and
+    // switches it to DIG-U.
+    auto* macroRow = new QHBoxLayout;
+    macroRow->setContentsMargins(0, 0, 0, 0);
+    macroRow->setSpacing(6);
+    macroRow->addWidget(m_macroPanel, 1);
+    {
+        auto* bandGrid = new QGridLayout;
+        bandGrid->setContentsMargins(0, 0, 0, 0);
+        bandGrid->setSpacing(2);
+        const int perRow = 5;
+        int i = 0;
+        for (const auto& entry : HavenFSK::BAND_PLAN) {
+            auto* b = new QPushButton(QString(entry.label) + "m", txContainer);
+            b->setFixedWidth(44);
+            connect(b, &QPushButton::clicked, this,
+                    [this, entry]() { onBandSelected(entry); });
+            m_bandButtons.append(b);
+            bandGrid->addWidget(b, i / perRow, i % perRow);
+            ++i;
+        }
+        refreshBandButtonTooltips();
+        macroRow->addLayout(bandGrid, 0);
+    }
+    txOuterLayout->addLayout(macroRow, 0);
 
     auto* txLayout = new QVBoxLayout;
     txLayout->setContentsMargins(0, 0, 0, 0);
@@ -613,7 +698,7 @@ void MainWindow::setupConnections() {
                 uint64_t dial = m_radio->getFrequency();
                 if (dial == 0) return;
                 int64_t  offset = static_cast<int64_t>(hz)
-                                - static_cast<int64_t>(HavenFSK::BASE_FREQ);
+                                - static_cast<int64_t>(tuneAnchorHz());
                 uint64_t newHz  = static_cast<uint64_t>(
                     static_cast<int64_t>(dial) + offset);
                 m_statusLabel->setText(
@@ -638,6 +723,11 @@ void MainWindow::setupConnections() {
                         "AFC limit ⚠ — please retune closer to signal");
                 }
             });
+
+    // AFC-follows-dial (PSK31): pull the rig onto the measured carrier
+    connect(m_pipeline,
+            &HavenFSK::DspPipeline::afcOffsetChanged,
+            this, &MainWindow::maybeFollowDial);
 
     // FrequencyControl — update display and log panel; send to radio if connected
     connect(m_freqControl, &FrequencyControl::frequencyRequested,
@@ -718,6 +808,7 @@ void MainWindow::setupConnections() {
     // line rather than running on from the last.
     connect(m_pipeline, &HavenFSK::DspPipeline::dcdChanged,
             this, [this](bool active) {
+                m_dcdActive = active;   // gates AFC-follows-dial
                 if (!active) m_rxDisplay->endStreamingLine();
             });
 
@@ -730,8 +821,17 @@ void MainWindow::setupConnections() {
 
     connect(m_pipeline, &HavenFSK::DspPipeline::rxStateChanged,
             this, [this](HavenFSK::RxState state) {
+                bool collecting = (state == HavenFSK::RxState::Collecting);
+                bool frameEnded = m_rxCollecting && !collecting;
+                m_rxCollecting  = collecting;
                 if (state == HavenFSK::RxState::Idle)
                     m_statusLabel->setText("Listening...");
+                // MFSK AFC-follows-dial happens at frame end — the offset
+                // was measured at preamble lock, and moving the dial while
+                // a frame is still being collected would corrupt it. (The
+                // PSK31 path is driven by afcOffsetChanged instead.)
+                if (frameEnded && m_currentModeName != "PSK31")
+                    maybeFollowDial(m_pipeline->afcOffsetHz());
             });
 
     // Adaptive sync threshold — keep the operator informed when the
@@ -916,6 +1016,7 @@ void MainWindow::startRadio() {
                     QString mode = HavenFSK::connectModeString();
                     if (!mode.isEmpty()) m_radio->setMode(mode);
                 }
+                syncRigModeCombo(m_radio->getMode());
                 // Recreate PTTManager now that we have a connected radio
                 if (m_pttManager) m_pttManager->deleteLater();
                 m_pttManager = new PTTManager(m_radio, this);
@@ -934,6 +1035,10 @@ void MainWindow::startRadio() {
             this, &MainWindow::onFrequencyChanged);
     connect(m_radio, &RadioInterface::frequencyChanged,
             m_logPanel, &LogPanel::setFrequency);
+    // Keep the rig-mode combo showing what the radio reports. Programmatic
+    // setCurrentIndex doesn't fire `activated`, so no command echoes back.
+    connect(m_radio, &RadioInterface::modeChanged,
+            this, &MainWindow::syncRigModeCombo);
     connect(m_radio, &RadioInterface::rigError,
             this, [this](const QString& msg) {
                 m_statusLabel->setText("Rig: " + msg);
@@ -1544,6 +1649,184 @@ void MainWindow::onTuneAudioReady(const std::vector<float>& audio) {
     }
 }
 
+void MainWindow::refreshBandButtonTooltips() {
+    for (int i = 0; i < m_bandButtons.size()
+                 && i < static_cast<int>(std::size(HavenFSK::BAND_PLAN)); ++i) {
+        const auto& entry = HavenFSK::BAND_PLAN[i];
+        m_bandButtons[i]->setToolTip(QString(
+            "%1 MHz (PSK31 %2) + DIG-U.\n"
+            "Edit in Operating > Band Frequencies.")
+            .arg(HavenFSK::suggestedDialHz(entry, HavenFSK::ModemMode::Mfsk16)
+                 / 1.0e6, 0, 'f', 3)
+            .arg(HavenFSK::suggestedDialHz(entry, HavenFSK::ModemMode::Psk31)
+                 / 1.0e6, 0, 'f', 3));
+    }
+}
+
+void MainWindow::onEditBandPlan() {
+    QDialog dlg(this);
+    dlg.setWindowTitle("Band Frequencies");
+
+    auto* layout = new QVBoxLayout(&dlg);
+    auto* note = new QLabel(
+        "Dial frequencies the band buttons send to the radio, per HAVEN "
+        "mode. Defaults come from BAND_PLAN.md.", &dlg);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+
+    constexpr int nBands = static_cast<int>(std::size(HavenFSK::BAND_PLAN));
+    auto* table = new QTableWidget(nBands, 2, &dlg);
+    table->setHorizontalHeaderLabels({"HAVEN MFSK (MHz)", "PSK31 (MHz)"});
+    table->verticalHeader()->setDefaultSectionSize(24);
+
+    auto* mfskSpins  = new QDoubleSpinBox*[nBands];
+    auto* psk31Spins = new QDoubleSpinBox*[nBands];
+    auto makeSpin = [&table, &dlg](int row, int col, uint64_t hz) {
+        auto* sp = new QDoubleSpinBox(&dlg);
+        sp->setRange(1.8, 54.0);
+        sp->setDecimals(6);
+        sp->setSingleStep(0.001);
+        sp->setValue(hz / 1.0e6);
+        table->setCellWidget(row, col, sp);
+        return sp;
+    };
+    for (int i = 0; i < nBands; ++i) {
+        const auto& e = HavenFSK::BAND_PLAN[i];
+        table->setVerticalHeaderItem(i,
+            new QTableWidgetItem(QString(e.label) + " m"));
+        mfskSpins[i]  = makeSpin(i, 0,
+            HavenFSK::suggestedDialHz(e, HavenFSK::ModemMode::Mfsk16));
+        psk31Spins[i] = makeSpin(i, 1,
+            HavenFSK::suggestedDialHz(e, HavenFSK::ModemMode::Psk31));
+    }
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    layout->addWidget(table);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+        QDialogButtonBox::RestoreDefaults, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttons->button(QDialogButtonBox::RestoreDefaults),
+            &QPushButton::clicked, &dlg, [&]() {
+        for (int i = 0; i < nBands; ++i) {
+            const auto& e = HavenFSK::BAND_PLAN[i];
+            mfskSpins[i]->setValue(
+                HavenFSK::defaultDialHz(e, HavenFSK::ModemMode::Mfsk16) / 1.0e6);
+            psk31Spins[i]->setValue(
+                HavenFSK::defaultDialHz(e, HavenFSK::ModemMode::Psk31) / 1.0e6);
+        }
+    });
+    layout->addWidget(buttons);
+    dlg.resize(360, 420);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        for (int i = 0; i < nBands; ++i) {
+            const auto& e = HavenFSK::BAND_PLAN[i];
+            HavenFSK::setSuggestedDialHz(e, HavenFSK::ModemMode::Mfsk16,
+                static_cast<uint64_t>(std::llround(mfskSpins[i]->value() * 1e6)));
+            HavenFSK::setSuggestedDialHz(e, HavenFSK::ModemMode::Psk31,
+                static_cast<uint64_t>(std::llround(psk31Spins[i]->value() * 1e6)));
+        }
+        refreshBandButtonTooltips();
+    }
+    delete[] mfskSpins;
+    delete[] psk31Spins;
+}
+
+void MainWindow::syncRigModeCombo(const QString& mode) {
+    if (mode.isEmpty()) return;
+    int idx = m_rigModeCombo->findData(mode.toUpper());
+    if (idx >= 0) m_rigModeCombo->setCurrentIndex(idx);
+}
+
+void MainWindow::onBandSelected(const HavenFSK::BandPlanEntry& entry) {
+    if (m_pttManager && m_pttManager->isTransmitting()) {
+        m_statusLabel->setText("Band change ignored — transmitting");
+        return;
+    }
+    auto mode = static_cast<HavenFSK::ModemMode>(
+        m_modeCombo->currentData().toInt());
+    uint64_t dialHz = HavenFSK::suggestedDialHz(entry, mode);
+
+    // Update the app's own idea of frequency regardless of rig state so
+    // logging is right even when running without CAT.
+    m_freqControl->setFrequency(dialHz);
+    if (m_logPanel) m_logPanel->setFrequency(dialHz);
+
+    if (m_radio && m_radio->isConnected()) {
+        m_radio->setMode("PKTUSB");
+        m_radio->setFrequency(dialHz);
+        int digU = m_rigModeCombo->findData("PKTUSB");
+        if (digU >= 0) m_rigModeCombo->setCurrentIndex(digU);
+        m_statusLabel->setText(
+            QString("%1 m — %2 MHz, DIG-U")
+            .arg(entry.label)
+            .arg(dialHz / 1.0e6, 0, 'f', 6));
+    } else {
+        m_statusLabel->setText(
+            QString("%1 m — %2 MHz set (no rig control connected)")
+            .arg(entry.label)
+            .arg(dialHz / 1.0e6, 0, 'f', 6));
+    }
+}
+
+double MainWindow::tuneAnchorHz() const {
+    return (m_currentModeName == "PSK31")
+        ? HavenFSK::PSK31_CARRIER_HZ
+        : static_cast<double>(HavenFSK::BASE_FREQ);
+}
+
+void MainWindow::maybeFollowDial(float afcHz) {
+    // TX Lock: net control / CQ station holds frequency. Decode still
+    // rides the DSP-side AFC; only the automatic dial moves are vetoed.
+    if (m_txLockCheck && m_txLockCheck->isChecked()) return;
+    if (!m_afcUiEnabled) return;
+    if (!m_radio || !m_radio->isConnected()) return;
+    if (m_pttManager && m_pttManager->isTransmitting()) return;
+
+    if (m_currentModeName == "PSK31") {
+        // Continuous-carrier mode: nudge any time we're locked on signal.
+        if (!m_dcdActive) return;
+        if (std::abs(afcHz) < 1.5f) return;     // below jitter, already "on"
+    } else {
+        // MFSK: only ever called at frame end (see rxStateChanged), but
+        // guard anyway — never move the dial while a frame is collecting.
+        // Netting the dial also moves our TX tones onto the other station.
+        if (m_rxCollecting) return;
+        if (std::abs(afcHz) < 4.0f) return;
+    }
+
+    // Rate-limit: one nudge per 3 s. The offset re-measures within ~0.5 s
+    // of the dial settling, so a wrong or partial move self-corrects on
+    // the next pass instead of oscillating.
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastDialNudgeMs < 3000) return;
+
+    uint64_t dialHz = m_radio->getFrequency();
+    if (dialHz == 0) return;
+    m_lastDialNudgeMs = now;
+
+    // USB: audio = RF - dial, so a station high in audio by afcHz is
+    // centered by raising the dial by the same amount.
+    int64_t  delta = static_cast<int64_t>(std::llround(afcHz));
+    uint64_t newHz = static_cast<uint64_t>(static_cast<int64_t>(dialHz) + delta);
+
+    // Pre-shift the demodulator's carrier tracking so decode rides
+    // through the retune instead of re-acquiring.
+    QMetaObject::invokeMethod(m_pipeline, [pipeline = m_pipeline, afcHz]() {
+        pipeline->nudgeCarrierHz(-afcHz);
+    }, Qt::AutoConnection);
+
+    m_radio->setFrequency(newHz);
+    m_freqControl->setFrequency(newHz);
+    if (m_logPanel) m_logPanel->setFrequency(newHz);
+    m_statusLabel->setText(
+        QString("AFC: dial %1%2 Hz onto signal — %3 MHz")
+        .arg(delta >= 0 ? "+" : "").arg(delta)
+        .arg(static_cast<double>(newHz) / 1.0e6, 0, 'f', 6));
+}
+
 void MainWindow::onWaterfallTune(float audioHz) {
     if (!m_radio || !m_radio->isConnected()) {
         m_statusLabel->setText(
@@ -1556,10 +1839,11 @@ void MainWindow::onWaterfallTune(float audioHz) {
         return;
     }
 
-    // Place lowest HAVEN-FSK tone (BASE_FREQ) at the clicked audio position.
-    // newDial = currentDial + (clickedAudioHz - BASE_FREQ)
+    // Place the mode's anchor (MFSK: lowest tone at BASE_FREQ; PSK31: the
+    // 1000 Hz carrier) at the clicked audio position.
+    // newDial = currentDial + (clickedAudioHz - anchor)
     int64_t  offset = static_cast<int64_t>(audioHz)
-                    - static_cast<int64_t>(HavenFSK::BASE_FREQ);
+                    - static_cast<int64_t>(tuneAnchorHz());
     uint64_t newHz  = static_cast<uint64_t>(
         static_cast<int64_t>(dialHz) + offset);
 

@@ -4,6 +4,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QProgressBar>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QAction>
@@ -23,6 +24,7 @@ class AudioEngine;
 namespace HavenFSK {
     class DspPipeline;
     struct RxMessage;
+    struct BandPlanEntry;
 }
 
 class StationInfoWidget;
@@ -69,6 +71,9 @@ private slots:
     void onFieldDayToggled(bool enabled);
     void onExport();
     void onWaterfallTune(float audioHz);
+    void onBandSelected(const HavenFSK::BandPlanEntry& entry);
+    void onEditBandPlan();
+    void syncRigModeCombo(const QString& mode);
     void onOpenRadioConfig();
     void onTuneToggled(bool on);
     void onTuneAudioReady(const std::vector<float>& audio);
@@ -121,13 +126,38 @@ private:
     FrequencyControl*  m_freqControl  {nullptr};
     QLabel*            m_rigLabel     {nullptr};
     QProgressBar*      m_rxLevel      {nullptr};
-    QComboBox*         m_modeCombo    {nullptr};
+    QComboBox*         m_modeCombo    {nullptr};  // HAVEN mode (hidden; Mode menu drives it)
+    QComboBox*         m_rigModeCombo {nullptr};  // rig mode (USB/DIG-U/...) via CAT
+    QList<QPushButton*> m_bandButtons;            // Transmit-panel band grid
+    void refreshBandButtonTooltips();
     QDoubleSpinBox*    m_squelchSpin  {nullptr};
+    QCheckBox*         m_txLockCheck  {nullptr};  // vetoes AFC dial moves
 
     // Active modem's name (IModem::modeName() via DspPipeline::modeReady)
     // — stamped into each logged contact so mode/submode reflect the mode
     // the QSO was actually made in, not a hardcoded HAVEN-FSK.
     QString            m_currentModeName {"Haven MFSK"};
+
+    // Audio frequency the current mode wants a clicked signal placed on:
+    // PSK31 demodulates at its fixed carrier (1000 Hz); MFSK anchors its
+    // lowest tone at BASE_FREQ. Used by waterfall click-to-tune.
+    double tuneAnchorHz() const;
+
+    // ── AFC-follows-dial ──────────────────────────────────────────────────
+    // The AFC measures where the station sits relative to the mode's
+    // nominal position (PSK31: the fixed 1000 Hz carrier; MFSK: BASE_FREQ
+    // tones); with the Operating > AFC toggle on, the rig dial is nudged
+    // so the station lands exactly on it — which also nets our own TX
+    // onto the other station. PSK31 nudges continuously while locked;
+    // MFSK only at frame end (mid-frame dial moves corrupt the frame).
+    // Gated on RX (never during PTT), rig connected, and rate-limited.
+    // Assumes USB (universal digital-mode practice) — on LSB the
+    // correction sign would be inverted.
+    void maybeFollowDial(float afcHz);
+    bool   m_dcdActive         {false};
+    bool   m_rxCollecting      {false};  // pipeline rxState == Collecting
+    bool   m_afcUiEnabled      {true};   // Operating > AFC action state
+    qint64 m_lastDialNudgeMs   {0};
 
     // ── Menu actions ──────────────────────────────────────────────────────
     QAction* m_settingsAction {nullptr};  // "Station Info" (Settings tab 0)
