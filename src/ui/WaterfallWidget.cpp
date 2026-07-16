@@ -163,7 +163,10 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
     ll->setStyleSheet("color: #888; font-size: 9pt;");
     tl->addWidget(ll);
     m_levelSpinBox = new QSpinBox(m_toolbar);
-    m_levelSpinBox->setRange(-140, 0);
+    // +dB headroom: with a hot RX chain (or gain ahead of the FFT) the
+    // noise floor itself can sit above 0 dBFS-per-bin, so the floor
+    // must be able to follow it up to keep the display readable.
+    m_levelSpinBox->setRange(-140, 20);
     m_levelSpinBox->setValue(-60);
     m_levelSpinBox->setSuffix(" dB");
     m_levelSpinBox->setSingleStep(5);
@@ -175,6 +178,7 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
         "Lower = more sensitive\n"
         "Higher = less clutter\n"
         "Does not affect decoding");
+    m_levelSpinBox->installEventFilter(this);  // inverted wheel, see eventFilter()
     tl->addWidget(m_levelSpinBox);
 
     m_afcLabel = new QLabel("AFC: --", m_toolbar);
@@ -211,7 +215,7 @@ WaterfallWidget::WaterfallWidget(QWidget* parent)
     m_rangeCombo->setCurrentIndex(std::clamp(ri, 0, 5));
     m_speedSlider->setValue(std::clamp(si, 0, 3));
     m_paletteCombo->setCurrentIndex(std::clamp(pi, 0, 3));
-    m_levelSpinBox->setValue(std::clamp(li, -140, 0));
+    m_levelSpinBox->setValue(std::clamp(li, -140, 20));
     onRangeChanged(m_rangeCombo->currentIndex());
     onSpeedChanged(m_speedSlider->value());
     onPaletteChanged(m_paletteCombo->currentIndex());
@@ -474,6 +478,17 @@ void WaterfallWidget::drawOverlays(QPainter& p, int w, int h) const {
 }
 
 bool WaterfallWidget::eventFilter(QObject* obj, QEvent* event) {
+    // Floor-level spinbox: invert the wheel. Qt's default (wheel up =
+    // value up = higher floor = darker display) reads backwards for a
+    // sensitivity control — operators expect scrolling up to brighten
+    // the display (lower the floor), per WD9N.
+    if (obj == m_levelSpinBox && event->type() == QEvent::Wheel) {
+        auto* we = static_cast<QWheelEvent*>(event);
+        int steps = we->angleDelta().y() / 120;
+        if (steps != 0) m_levelSpinBox->stepBy(-steps);
+        return true;
+    }
+
     if (obj != m_displayArea) return false;
 
     if (event->type() == QEvent::Paint) {
